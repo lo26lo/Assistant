@@ -1,0 +1,19 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <!-- Icons -->
+        <file alias="icons/app.png">icons/app.png</file>
+        <file alias="icons/camera.png">icons/camera.png</file>
+        <file alias="icons/screenshot.png">icons/screenshot.png</file>
+        <file alias="icons/calibrate.png">icons/calibrate.png</file>
+        <file alias="icons/inspect.png">icons/inspect.png</file>
+        <file alias="icons/export.png">icons/export.png</file>
+        <file alias="icons/settings.png">icons/settings.png</file>
+        <file alias="icons/fullscreen.png">icons/fullscreen.png</file>
+        <file alias="icons/open.png">icons/open.png</file>
+
+        <!-- Stylesheets -->
+        <!-- <file alias="styles/dark.qss">styles/dark.qss</file> -->
+        <!-- <file alias="styles/light.qss">styles/light.qss</file> -->
+    </qresource>
+</RCC>

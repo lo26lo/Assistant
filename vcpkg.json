@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "microscope-ibom",
+  "version": "0.1.0",
+  "description": "Microscope camera with iBOM AI overlay for PCB inspection",
+  "homepage": "",
+  "dependencies": [
+    {
+      "name": "opencv4",
+      "features": ["core", "dnn", "highgui", "imgproc", "videoio", "calib3d", "features2d"]
+    },
+    "nlohmann-json",
+    "spdlog",
+    "catch2",
+    {
+      "name": "onnxruntime-gpu",
+      "platform": "x64"
+    },
+    "cpr",
+    "zxing-cpp",
+    "libharu"
+  ],
+  "builtin-baseline": "2024.09.30"
+}
