@@ -4,6 +4,7 @@
 #include <QString>
 #include <vector>
 #include <string>
+#include "../ibom/IBomData.h"
 
 namespace ibom {
 struct Component;
@@ -24,7 +25,7 @@ public:
         std::string reference;
         std::string value;
         std::string footprint;
-        int         layer = 0;
+        Layer       layer = Layer::Front;
         bool        placed = false;
         int         order  = 0;
     };

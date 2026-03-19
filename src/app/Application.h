@@ -1,12 +1,17 @@
 #pragma once
 
 #include <QApplication>
+#include <QTimer>
+#include <opencv2/core.hpp>
 #include <memory>
 #include <string>
+#include <atomic>
 
 namespace ibom {
 
 class Config;
+struct IBomProject;
+class IBomParser;
 
 namespace gui {
 class MainWindow;
@@ -14,11 +19,17 @@ class MainWindow;
 
 namespace camera {
 class CameraCapture;
+class CameraCalibration;
 }
 
 namespace ai {
 class InferenceEngine;
 class ModelManager;
+}
+
+namespace overlay {
+class OverlayRenderer;
+class Homography;
 }
 
 /**
@@ -31,7 +42,7 @@ class Application : public QObject {
     Q_OBJECT
 
 public:
-    explicit Application(int& argc, char** argv);
+    explicit Application(QApplication& qapp);
     ~Application() override;
 
     Application(const Application&) = delete;
@@ -39,9 +50,6 @@ public:
 
     /// Initialize all subsystems, returns false on failure.
     bool initialize();
-
-    /// Run the application event loop.
-    int exec();
 
     /// Access the global config.
     Config& config();
@@ -56,15 +64,38 @@ private:
     void createSubsystems();
     void connectSignals();
 
-    std::unique_ptr<QApplication>              m_qapp;
+    void loadIBomFile(const QString& path);
+    void runCalibration();
+    void takeScreenshot();
+
+    QApplication&                               m_qapp;
     std::unique_ptr<Config>                    m_config;
     std::unique_ptr<gui::MainWindow>           m_mainWindow;
     std::unique_ptr<camera::CameraCapture>     m_camera;
     std::unique_ptr<ai::InferenceEngine>       m_inferenceEngine;
     std::unique_ptr<ai::ModelManager>          m_modelManager;
 
-    int    m_argc;
-    char** m_argv;
+    // iBOM data pipeline
+    std::unique_ptr<IBomParser>                m_ibomParser;
+    std::shared_ptr<IBomProject>               m_ibomProject;
+
+    // Overlay rendering
+    std::unique_ptr<overlay::OverlayRenderer>  m_overlayRenderer;
+    std::unique_ptr<overlay::Homography>       m_homography;
+
+    // Camera calibration
+    std::unique_ptr<camera::CameraCalibration> m_calibration;
+
+    // FPS tracking
+    QTimer* m_fpsTimer = nullptr;
+    std::atomic<int> m_frameCount{0};
+
+    // Calibration image collection
+    std::vector<cv::Mat> m_calibImages;
+    bool m_collectingCalibImages = false;
+
+    // Selected component ref for overlay highlight
+    std::string m_selectedRef;
 };
 
 } // namespace ibom

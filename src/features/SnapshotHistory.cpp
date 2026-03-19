@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <spdlog/spdlog.h>
 #include <algorithm>
 

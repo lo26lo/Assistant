@@ -79,7 +79,7 @@ void BomPanel::loadBomData(const std::vector<BomGroup>& groups,
         row.reference  = comp.reference;
         row.value      = comp.value;
         row.footprint  = comp.footprint;
-        row.layer      = comp.layer == 0 ? "F" : "B";
+        row.layer      = comp.layer == Layer::Front ? "F" : "B";
         row.state      = "pending";
         row.checked    = false;
         m_rows.push_back(std::move(row));

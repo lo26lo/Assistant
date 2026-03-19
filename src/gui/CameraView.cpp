@@ -22,6 +22,7 @@ void CameraView::updateFrame(const QImage& frame)
         std::lock_guard lock(m_frameMutex);
         m_frame = frame;
     }
+    updateTransform();
     update();
 }
 
@@ -96,9 +97,37 @@ void CameraView::paintEvent(QPaintEvent* /*event*/)
     std::lock_guard lock(m_frameMutex);
 
     if (m_frame.isNull()) {
-        painter.setPen(QColor(120, 120, 120));
-        painter.setFont(QFont("Segoe UI", 14));
-        painter.drawText(rect(), Qt::AlignCenter, tr("No camera feed\nPress C to start"));
+        // Draw centered placeholder with subtle gradient background
+        QLinearGradient grad(0, 0, 0, height());
+        grad.setColorAt(0,   QColor(14, 14, 20));
+        grad.setColorAt(0.5, QColor(18, 18, 28));
+        grad.setColorAt(1,   QColor(14, 14, 20));
+        painter.fillRect(rect(), grad);
+
+        // Camera icon (simple geometric)
+        int cx = width() / 2;
+        int cy = height() / 2 - 20;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(30, 30, 50));
+        painter.drawRoundedRect(cx - 32, cy - 22, 64, 44, 8, 8);
+        painter.setBrush(QColor(45, 45, 70));
+        painter.drawEllipse(QPoint(cx, cy), 14, 14);
+        painter.setBrush(QColor(60, 68, 100));
+        painter.drawEllipse(QPoint(cx, cy), 8, 8);
+
+        // Text
+        QColor textCol(120, 130, 160);
+        QColor subtextCol(70, 78, 110);
+
+        painter.setPen(textCol);
+        painter.setFont(QFont("Segoe UI", 15, QFont::DemiBold));
+        QRect textRect(0, cy + 36, width(), 30);
+        painter.drawText(textRect, Qt::AlignHCenter | Qt::AlignTop, tr("No camera feed"));
+
+        painter.setPen(subtextCol);
+        painter.setFont(QFont("Segoe UI", 11));
+        QRect subRect(0, cy + 62, width(), 24);
+        painter.drawText(subRect, Qt::AlignHCenter | Qt::AlignTop, tr("Press C or click Start Camera"));
         return;
     }
 

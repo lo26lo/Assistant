@@ -1,5 +1,6 @@
 #include "BarcodeScanner.h"
 
+#include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
 #include <algorithm>
 

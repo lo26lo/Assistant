@@ -9,6 +9,8 @@
 
 # Common install paths
 set(_TRT_SEARCH_PATHS
+    "$ENV{TENSORRT_HOME}"
+    "C:/TensorRT/TensorRT-10.15.1.29"
     "C:/Tools/TensorRT"
     "C:/Program Files/NVIDIA GPU Computing Toolkit/TensorRT"
     "/usr/lib/x86_64-linux-gnu"
@@ -24,21 +26,21 @@ find_path(TensorRT_INCLUDE_DIR
     PATH_SUFFIXES include
 )
 
-# Find libraries
+# Find libraries (TensorRT 10.x uses versioned names like nvinfer_10)
 find_library(TensorRT_nvinfer
-    NAMES nvinfer
+    NAMES nvinfer nvinfer_10
     PATHS ${_TRT_SEARCH_PATHS}
     PATH_SUFFIXES lib lib64 lib/x64
 )
 
 find_library(TensorRT_nvinfer_plugin
-    NAMES nvinfer_plugin
+    NAMES nvinfer_plugin nvinfer_plugin_10
     PATHS ${_TRT_SEARCH_PATHS}
     PATH_SUFFIXES lib lib64 lib/x64
 )
 
 find_library(TensorRT_nvonnxparser
-    NAMES nvonnxparser
+    NAMES nvonnxparser nvonnxparser_10
     PATHS ${_TRT_SEARCH_PATHS}
     PATH_SUFFIXES lib lib64 lib/x64
 )

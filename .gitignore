@@ -1,0 +1,59 @@
+# Build output
+build/
+out/
+
+# IDE / Editor
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln.docstates
+
+# Qt generated
+*_autogen/
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# Compiled objects
+*.obj
+*.o
+*.lib
+*.a
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Logs
+*.log
+logs/
+build_log*.txt
+ort_build.txt
+
+# Qt install log
+aqtinstall.log
+
+# Test script
+test_configure.bat
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Models (too large for git)
+models/*.onnx
+models/*.engine
+models/*.trt
+
+# vcpkg installed packages (recreated by build)
+build/vcpkg_installed/
+
+# CMake cache
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile

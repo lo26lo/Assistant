@@ -125,7 +125,7 @@ if %errorLevel% equ 0 (
     for /f "tokens=3" %%v in ('git --version 2^>nul') do set "GIT_VER=%%v"
     echo %GREEN%  [OK] Git !GIT_VER!%RESET%
 ) else (
-    echo %RED%  [!!] Git non trouve%RESET%
+    echo %RED%  [XX] Git non trouve%RESET%
     set "MISSING_CRITICAL=1"
     if "%SKIP_INSTALL%"=="0" (
         echo       Installation de Git via Chocolatey...
@@ -140,7 +140,7 @@ if %errorLevel% equ 0 (
     for /f "tokens=3" %%v in ('cmake --version 2^>nul ^| findstr /I "version"') do set "CMAKE_VER=%%v"
     echo %GREEN%  [OK] CMake !CMAKE_VER!%RESET%
 ) else (
-    echo %RED%  [!!] CMake non trouve%RESET%
+    echo %RED%  [XX] CMake non trouve%RESET%
     set "MISSING_CRITICAL=1"
     if "%SKIP_INSTALL%"=="0" (
         echo       Installation de CMake via Chocolatey...
@@ -155,7 +155,7 @@ if %errorLevel% equ 0 (
     for /f "tokens=1" %%v in ('ninja --version 2^>nul') do set "NINJA_VER=%%v"
     echo %GREEN%  [OK] Ninja !NINJA_VER!%RESET%
 ) else (
-    echo %YELLOW%  [!!] Ninja non trouve%RESET%
+    echo %YELLOW%  [XX] Ninja non trouve%RESET%
     if "%SKIP_INSTALL%"=="0" (
         echo       Installation de Ninja via Chocolatey...
         choco install ninja -y --no-progress >nul 2>&1
@@ -181,7 +181,7 @@ for %%P in (
 if "%VS_FOUND%"=="1" (
     echo %GREEN%  [OK] Visual Studio 2022 / Build Tools%RESET%
 ) else (
-    echo %RED%  [!!] Visual Studio 2022 non trouve%RESET%
+    echo %RED%  [XX] Visual Studio 2022 non trouve%RESET%
     set "MISSING_CRITICAL=1"
     if "%SKIP_INSTALL%"=="0" (
         echo       Installation de VS Build Tools 2022 via Chocolatey...
@@ -192,17 +192,17 @@ if "%VS_FOUND%"=="1" (
 
 REM --- vcpkg ---
 if exist "%VCPKG_DIR%\vcpkg.exe" (
-    echo %GREEN%  [OK] vcpkg (%VCPKG_DIR%)%RESET%
+    echo %GREEN%  [OK] vcpkg ^(%VCPKG_DIR%^)%RESET%
 ) else if defined VCPKG_ROOT (
     if exist "%VCPKG_ROOT%\vcpkg.exe" (
         set "VCPKG_DIR=%VCPKG_ROOT%"
-        echo %GREEN%  [OK] vcpkg (%VCPKG_ROOT%)%RESET%
+        echo %GREEN%  [OK] vcpkg ^(%VCPKG_ROOT%^)%RESET%
     ) else (
-        echo %RED%  [!!] vcpkg non trouve%RESET%
+        echo %RED%  [XX] vcpkg non trouve%RESET%
         set "MISSING_CRITICAL=1"
     )
 ) else (
-    echo %RED%  [!!] vcpkg non trouve%RESET%
+    echo %RED%  [XX] vcpkg non trouve%RESET%
     set "MISSING_CRITICAL=1"
     if "%SKIP_INSTALL%"=="0" (
         echo       Installation de vcpkg dans %VCPKG_DIR%...
@@ -223,7 +223,7 @@ if %errorLevel% equ 0 (
     for /f "tokens=5 delims= " %%v in ('nvcc --version 2^>nul ^| findstr /I "release"') do set "CUDA_VER=%%v"
     echo %GREEN%  [OK] CUDA Toolkit !CUDA_VER!%RESET%
 ) else (
-    echo %YELLOW%  [--] CUDA Toolkit non trouve (optionnel, requis pour GPU)%RESET%
+    echo %YELLOW%  [--] CUDA Toolkit non trouve ^(optionnel, requis pour GPU^)%RESET%
     set "MISSING_OPTIONAL=1"
 )
 
@@ -256,9 +256,9 @@ if "%QT_FOUND%"=="0" (
 )
 
 if "%QT_FOUND%"=="1" (
-    echo %GREEN%  [OK] Qt6 (%QT_DIR%)%RESET%
+    echo %GREEN%  [OK] Qt6 ^(%QT_DIR%^)%RESET%
 ) else (
-    echo %RED%  [!!] Qt6 non trouve%RESET%
+    echo %RED%  [XX] Qt6 non trouve%RESET%
     echo %RED%       Installez Qt6 via: https://www.qt.io/download%RESET%
     echo %RED%       Puis definissez: set Qt6_DIR=C:\Qt\6.x.x\msvc2022_64\lib\cmake\Qt6%RESET%
     set "MISSING_CRITICAL=1"
@@ -268,9 +268,9 @@ REM --- Python (optionnel, pour training) ---
 where python >nul 2>&1
 if %errorLevel% equ 0 (
     for /f "tokens=2" %%v in ('python --version 2^>nul') do set "PY_VER=%%v"
-    echo %GREEN%  [OK] Python !PY_VER! (optionnel, pour training)%RESET%
+    echo %GREEN%  [OK] Python !PY_VER! ^(optionnel, pour training^)%RESET%
 ) else (
-    echo %YELLOW%  [--] Python non trouve (optionnel, pour training IA)%RESET%
+    echo %YELLOW%  [--] Python non trouve ^(optionnel, pour training IA^)%RESET%
 )
 
 echo.
@@ -302,7 +302,7 @@ if "%MISSING_CRITICAL%"=="1" (
     if "!STILL_MISSING!"=="1" (
         echo %RED%============================================================================%RESET%
         echo %RED%  ERREUR: Prerequis critiques manquants.%RESET%
-        echo %RED%  Executez d'abord: scripts\install_prerequisites.bat (en admin)%RESET%
+        echo %RED%  Executez d'abord: scripts\install_prerequisites.bat ^(en admin^)%RESET%
         echo %RED%  Puis relancez: build_windows.bat --skip-install%RESET%
         echo %RED%============================================================================%RESET%
         echo.
@@ -334,7 +334,7 @@ if "%SKIP_VCPKG%"=="0" (
 
     REM Use manifest mode if vcpkg.json exists
     if exist "%PROJECT_ROOT%\vcpkg.json" (
-        echo   %CYAN%Mode manifest detecte (vcpkg.json)%RESET%
+        echo   %CYAN%Mode manifest detecte ^(vcpkg.json^)%RESET%
         echo   Les dependances seront installees automatiquement par CMake.
         echo.
     ) else (
@@ -361,7 +361,7 @@ if "%SKIP_VCPKG%"=="0" (
         echo.
     )
 ) else (
-    echo   %YELLOW%Skip (--skip-vcpkg)%RESET%
+    echo   %YELLOW%Skip ^(--skip-vcpkg^)%RESET%
 )
 echo.
 
@@ -374,18 +374,18 @@ echo.
 REM Setup MSVC environment if not already set
 if not defined VSCMD_VER (
     if defined VCVARS_PATH (
-        echo   Chargement de vcvarsall.bat (x64)...
+        echo   Chargement de vcvarsall.bat ^(x64^)...
         call "%VCVARS_PATH%" x64 >nul 2>&1
         if !errorLevel! equ 0 (
             echo %GREEN%  [OK] Environnement MSVC x64 charge%RESET%
         ) else (
-            echo %RED%  [!!] Echec chargement vcvarsall.bat%RESET%
+            echo %RED%  [XX] Echec chargement vcvarsall.bat%RESET%
             pause
             exit /b 1
         )
     )
 ) else (
-    echo %GREEN%  [OK] Environnement MSVC deja charge (v%VSCMD_VER%)%RESET%
+    echo %GREEN%  [OK] Environnement MSVC deja charge ^(v%VSCMD_VER%^)%RESET%
 )
 echo.
 
@@ -407,10 +407,17 @@ if "%CLEAN_BUILD%"=="1" (
 REM Create build directory
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 
-REM Determine generator
+REM Determine generator — find Ninja full path (vcvarsall may have changed PATH)
 set "CMAKE_GENERATOR=Ninja"
-where ninja >nul 2>&1
-if %errorLevel% neq 0 (
+set "NINJA_PATH="
+for /f "delims=" %%N in ('where ninja 2^>nul') do set "NINJA_PATH=%%N"
+if not defined NINJA_PATH (
+    REM Try common winget install location
+    for /f "delims=" %%N in ('dir /s /b "%LOCALAPPDATA%\Microsoft\WinGet\Packages\ninja.exe" 2^>nul') do set "NINJA_PATH=%%N"
+)
+if defined NINJA_PATH (
+    echo %GREEN%  [OK] Ninja: !NINJA_PATH!%RESET%
+) else (
     echo %YELLOW%  [WARN] Ninja non trouve, utilisation de MSBuild%RESET%
     set "CMAKE_GENERATOR=Visual Studio 17 2022"
 )
@@ -438,6 +445,9 @@ echo.
 echo   %CYAN%Execution de CMake configure...%RESET%
 echo.
 
+set "NINJA_ARG="
+if defined NINJA_PATH set "NINJA_ARG=-DCMAKE_MAKE_PROGRAM="!NINJA_PATH!""
+
 cmake -B "%BUILD_DIR%" -S "%PROJECT_ROOT%" ^
     -G "%CMAKE_GENERATOR%" ^
     -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
@@ -446,7 +456,7 @@ cmake -B "%BUILD_DIR%" -S "%PROJECT_ROOT%" ^
     -DIBOM_ENABLE_TENSORRT=%ENABLE_TENSORRT% ^
     -DIBOM_ENABLE_TESTS=ON ^
     -DIBOM_ENABLE_REMOTE=ON ^
-    2>&1 | tee -a "%LOG_FILE%" 2>nul
+    %NINJA_ARG%
 
 if %errorLevel% neq 0 (
     echo.

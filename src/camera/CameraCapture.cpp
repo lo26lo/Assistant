@@ -2,6 +2,7 @@
 #include "FrameBuffer.h"
 
 #include <opencv2/videoio.hpp>
+#include <opencv2/videoio/registry.hpp>
 #include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
 
@@ -87,11 +88,10 @@ std::vector<std::string> CameraCapture::listDevices()
 {
     std::vector<std::string> devices;
 
-    // Probe first 10 camera indices
     for (int i = 0; i < 10; ++i) {
         cv::VideoCapture cap;
 #ifdef IBOM_PLATFORM_WINDOWS
-        cap.open(i, cv::CAP_DSHOW);
+        cap.open(i, cv::CAP_MSMF);
 #else
         cap.open(i, cv::CAP_V4L2);
 #endif
@@ -108,26 +108,57 @@ void CameraCapture::captureLoop()
 {
     cv::VideoCapture cap;
 
-    // Open camera with platform-specific backend
+    // Try multiple backends on Windows for maximum compatibility
 #ifdef IBOM_PLATFORM_WINDOWS
-    int backend = cv::CAP_DSHOW; // DirectShow for lowest latency on Windows
+    std::vector<std::pair<int, const char*>> backends = {
+        {cv::CAP_MSMF,  "Media Foundation"},
+        {cv::CAP_DSHOW, "DirectShow"},
+        {cv::CAP_ANY,   "Auto"}
+    };
 #else
-    int backend = cv::CAP_V4L2;  // V4L2 for Linux
+    std::vector<std::pair<int, const char*>> backends = {
+        {cv::CAP_V4L2, "V4L2"},
+        {cv::CAP_ANY,  "Auto"}
+    };
 #endif
 
-    if (!cap.open(m_deviceIndex, backend)) {
-        spdlog::error("Failed to open camera device {}", m_deviceIndex);
+    // Log available OpenCV videoio backends
+    auto availBackends = cv::videoio_registry::getBackends();
+    spdlog::info("OpenCV videoio backends available ({}):", availBackends.size());
+    for (auto b : availBackends) {
+        spdlog::info("  - {} (id={})", cv::videoio_registry::getBackendName(b), static_cast<int>(b));
+    }
+    auto camBackends = cv::videoio_registry::getCameraBackends();
+    spdlog::info("OpenCV camera backends ({}):", camBackends.size());
+    for (auto b : camBackends) {
+        spdlog::info("  - {} (id={})", cv::videoio_registry::getBackendName(b), static_cast<int>(b));
+    }
+
+    bool opened = false;
+    for (auto& [backend, name] : backends) {
+        spdlog::info("Trying camera {} with {} backend (id={})...", m_deviceIndex, name, backend);
+        bool result = cap.open(m_deviceIndex, backend);
+        spdlog::info("  cap.open result: {}, isOpened: {}", result, cap.isOpened());
+        if (result && cap.isOpened()) {
+            spdlog::info("Camera opened with {} backend", name);
+            opened = true;
+            break;
+        }
+    }
+
+    if (!opened) {
+        spdlog::error("Failed to open camera device {} with any backend", m_deviceIndex);
         emit captureError(QString("Failed to open camera device %1").arg(m_deviceIndex));
         m_capturing.store(false);
         emit captureStateChanged(false);
         return;
     }
 
-    // Configure capture properties
+    // Configure capture properties (best-effort, camera may not support requested res)
     cap.set(cv::CAP_PROP_FRAME_WIDTH, m_width);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, m_height);
     cap.set(cv::CAP_PROP_FPS, m_fps);
-    cap.set(cv::CAP_PROP_BUFFERSIZE, 1); // Minimize internal buffering for low latency
+    cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
 
     spdlog::info("Camera opened: {}x{} @ {} fps",
         static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH)),

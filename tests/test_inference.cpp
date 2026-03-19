@@ -8,31 +8,35 @@ using namespace ibom::ai;
 
 TEST_CASE("InferenceEngine — construction", "[ai][inference]")
 {
-    InferenceEngine engine;
-    REQUIRE_FALSE(engine.isModelLoaded());
+    ModelManager manager("nonexistent_models_dir");
+    InferenceEngine engine(manager);
+    REQUIRE_FALSE(engine.isReady());
 }
 
-TEST_CASE("InferenceEngine — initialization", "[ai][inference]")
+TEST_CASE("InferenceEngine — initialization CPU", "[ai][inference]")
 {
-    InferenceEngine engine;
-    bool ok = engine.initialize(false, false); // CPU only
+    ModelManager manager("nonexistent_models_dir");
+    InferenceEngine engine(manager);
+    bool ok = engine.initialize(false, 0); // CPU only
     REQUIRE(ok);
 }
 
 TEST_CASE("InferenceEngine — load nonexistent model", "[ai][inference]")
 {
-    InferenceEngine engine;
-    engine.initialize(false, false);
+    ModelManager manager("nonexistent_models_dir");
+    InferenceEngine engine(manager);
+    engine.initialize(false, 0);
 
     bool loaded = engine.loadModel("nonexistent_model.onnx");
     REQUIRE_FALSE(loaded);
-    REQUIRE_FALSE(engine.isModelLoaded());
+    REQUIRE_FALSE(engine.isReady());
 }
 
 TEST_CASE("InferenceEngine — detect on empty image", "[ai][inference]")
 {
-    InferenceEngine engine;
-    engine.initialize(false, false);
+    ModelManager manager("nonexistent_models_dir");
+    InferenceEngine engine(manager);
+    engine.initialize(false, 0);
 
     cv::Mat empty;
     auto results = engine.detect(empty);
@@ -41,18 +45,17 @@ TEST_CASE("InferenceEngine — detect on empty image", "[ai][inference]")
 
 TEST_CASE("ModelManager — empty models directory", "[ai][models]")
 {
-    ModelManager manager;
-    manager.setModelsDirectory("nonexistent_models_dir");
+    ModelManager manager("nonexistent_models_dir");
     manager.scanModels();
 
     REQUIRE(manager.availableModels().empty());
 }
 
-TEST_CASE("ModelManager — class names", "[ai][models]")
+TEST_CASE("ModelManager — class name for unknown id", "[ai][models]")
 {
-    ModelManager manager;
+    ModelManager manager("nonexistent_models_dir");
 
-    // Default class names should be empty for unknown model
-    auto names = manager.classNames("unknown_model");
-    REQUIRE(names.empty());
+    // Unknown class id returns a fallback "class_<id>" string
+    auto name = manager.className(-1);
+    REQUIRE(name == "class_-1");
 }

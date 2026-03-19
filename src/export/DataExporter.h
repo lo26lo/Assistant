@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include "../ibom/IBomData.h"
 
 namespace ibom::exports {
 
@@ -20,7 +21,7 @@ public:
         std::string reference;
         std::string value;
         std::string footprint;
-        int         layer = 0;
+        Layer       layer = Layer::Front;
         std::string status;
         std::string defectType;
         float       confidence   = 0;
@@ -34,19 +35,19 @@ public:
     const std::vector<ComponentRecord>& records() const { return m_records; }
 
     /// Export to CSV
-    bool exportCSV(const QString& path, char delimiter = ',') const;
+    bool exportCSV(const QString& path, char delimiter = ',');
 
     /// Export to JSON
-    bool exportJSON(const QString& path, bool pretty = true) const;
+    bool exportJSON(const QString& path, bool pretty = true);
 
     /// Export to KiCad-compatible placement file
-    bool exportPlacement(const QString& path) const;
+    bool exportPlacement(const QString& path);
 
     /// Export BOM with checkboxes (for re-import)
-    bool exportBOM(const QString& path) const;
+    bool exportBOM(const QString& path);
 
     /// Export defects-only report
-    bool exportDefectsCSV(const QString& path) const;
+    bool exportDefectsCSV(const QString& path);
 
 signals:
     void exported(const QString& path, const QString& format);

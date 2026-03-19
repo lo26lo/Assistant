@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QListWidget>
+#include <QTableWidget>
 #include <vector>
 #include <string>
 

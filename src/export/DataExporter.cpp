@@ -2,6 +2,7 @@
 
 #include <QFile>
 #include <QTextStream>
+#include <QDateTime>
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
@@ -17,7 +18,7 @@ void DataExporter::setRecords(const std::vector<ComponentRecord>& records)
     m_records = records;
 }
 
-bool DataExporter::exportCSV(const QString& path, char delimiter) const
+bool DataExporter::exportCSV(const QString& path, char delimiter)
 {
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -37,7 +38,7 @@ bool DataExporter::exportCSV(const QString& path, char delimiter) const
         out << QString::fromStdString(r.reference) << d
             << QString::fromStdString(r.value) << d
             << QString::fromStdString(r.footprint) << d
-            << (r.layer == 0 ? "F" : "B") << d
+            << (r.layer == Layer::Front ? "F" : "B") << d
             << QString::fromStdString(r.status) << d
             << QString::fromStdString(r.defectType) << d
             << QString::number(r.confidence, 'f', 2) << d
@@ -52,7 +53,7 @@ bool DataExporter::exportCSV(const QString& path, char delimiter) const
     return true;
 }
 
-bool DataExporter::exportJSON(const QString& path, bool pretty) const
+bool DataExporter::exportJSON(const QString& path, bool pretty)
 {
     nlohmann::json root;
     root["exportDate"] = QDateTime::currentDateTime().toString(Qt::ISODate).toStdString();
@@ -64,7 +65,7 @@ bool DataExporter::exportJSON(const QString& path, bool pretty) const
         comp["reference"]  = r.reference;
         comp["value"]      = r.value;
         comp["footprint"]  = r.footprint;
-        comp["layer"]      = r.layer == 0 ? "F" : "B";
+        comp["layer"]      = r.layer == Layer::Front ? "F" : "B";
         comp["status"]     = r.status;
         comp["defectType"] = r.defectType;
         comp["confidence"] = r.confidence;
@@ -98,7 +99,7 @@ bool DataExporter::exportJSON(const QString& path, bool pretty) const
     return true;
 }
 
-bool DataExporter::exportPlacement(const QString& path) const
+bool DataExporter::exportPlacement(const QString& path)
 {
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -119,7 +120,7 @@ bool DataExporter::exportPlacement(const QString& path) const
             << QString::number(r.posX, 'f', 4) << "    "
             << QString::number(r.posY, 'f', 4) << "    "
             << QString::number(r.rotation, 'f', 1) << "    "
-            << (r.layer == 0 ? "top" : "bottom") << "    "
+            << (r.layer == Layer::Front ? "top" : "bottom") << "    "
             << QString::fromStdString(r.status) << "\n";
     }
 
@@ -129,7 +130,7 @@ bool DataExporter::exportPlacement(const QString& path) const
     return true;
 }
 
-bool DataExporter::exportBOM(const QString& path) const
+bool DataExporter::exportBOM(const QString& path)
 {
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -145,7 +146,7 @@ bool DataExporter::exportBOM(const QString& path) const
         out << QString::fromStdString(r.reference) << ","
             << QString::fromStdString(r.value) << ","
             << QString::fromStdString(r.footprint) << ","
-            << (r.layer == 0 ? "F" : "B") << ","
+            << (r.layer == Layer::Front ? "F" : "B") << ","
             << (placed ? "YES" : "NO") << "\n";
     }
 
@@ -155,7 +156,7 @@ bool DataExporter::exportBOM(const QString& path) const
     return true;
 }
 
-bool DataExporter::exportDefectsCSV(const QString& path) const
+bool DataExporter::exportDefectsCSV(const QString& path)
 {
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {

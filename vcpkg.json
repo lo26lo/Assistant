@@ -7,7 +7,8 @@
   "dependencies": [
     {
       "name": "opencv4",
-      "features": ["core", "dnn", "highgui", "imgproc", "videoio", "calib3d", "features2d"]
+      "default-features": false,
+      "features": ["dnn", "highgui", "calib3d", "msmf"]
     },
     "nlohmann-json",
     "spdlog",
@@ -17,8 +18,8 @@
       "platform": "x64"
     },
     "cpr",
-    "zxing-cpp",
+    "nu-book-zxing-cpp",
     "libharu"
   ],
-  "builtin-baseline": "2024.09.30"
+  "builtin-baseline": "717f2c1db552beed995736e41accdf4f6f4ca986"
 }

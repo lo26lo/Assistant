@@ -1,8 +1,8 @@
 # MicroscopeIBOM — État du Projet
 
-> **Dernière mise à jour :** 2026-03-18  
-> **Version :** 0.1.0 (Scaffold complet)  
-> **Statut global :** 🟢 SCAFFOLD COMPLET — Prêt à compiler  
+> **Dernière mise à jour :** 2026-03-19  
+> **Version :** 0.1.0  
+> **Statut global :** 🟢 BUILD RÉUSSI + TESTS OK + APP STABLE  
 
 ---
 
@@ -16,6 +16,8 @@
 | 2025-07-18 | Toutes les features prévues | Implémentation de tous les modules |
 | 2025-07-18 | Scaffold complet créé | 71 fichiers source C++ + 17 fichiers support |
 | 2026-03-18 | Revue du projet | Inventaire fichiers vérifié, état mis à jour |
+| 2026-03-19 | Build NMake réussi | MicroscopeIBOM.exe (736 KB) + 4 tests OK |
+| 2026-03-19 | App stable | Crash ACCESS_VIOLATION résolu, GUI refondue |
 
 ---
 
@@ -98,8 +100,8 @@
 | **OS développement** | Windows 11 (portable) + Linux (optionnel) |
 | **GPU** | NVIDIA RTX 5070 |
 | **IDE** | VS Code / Visual Studio 2022 / CLion |
-| **Compilateur** | MSVC 19.x (Win) / GCC 13+ (Linux) |
-| **Build** | CMake 3.28+ |
+| **Compilateur** | MSVC 19.44.35207 (Win) / GCC 13+ (Linux) |
+| **Build** | CMake 4.2.3, NMake Makefiles |
 | **Package manager** | vcpkg |
 | **CI/CD** | À définir (GitHub Actions probable) |
 
@@ -109,16 +111,16 @@
 
 | Prérequis | Installé | Version | Notes |
 |---|---|---|---|
-| Visual Studio Build Tools 2022 | ⬜ | | Compilateur C++ MSVC |
-| CMake | ⬜ | 3.28+ | |
-| Git | ⬜ | | |
-| vcpkg | ⬜ | latest | |
-| CUDA Toolkit | ⬜ | 12.x | |
-| cuDNN | ⬜ | 9.x | |
-| TensorRT | ⬜ | 10.x | |
-| Qt6 | ⬜ | 6.6+ | |
-| ONNX Runtime | ⬜ | 1.17+ | Via vcpkg |
-| OpenCV | ⬜ | 4.9+ | Via vcpkg |
+| Visual Studio Build Tools 2022 | ✅ | v17.14 (MSVC 19.44.35207) | Compilateur C++ MSVC |
+| CMake | ✅ | 4.2.3 | NMake Makefiles (pas Ninja — bug CMake 4.2.3) |
+| Git | ✅ | | |
+| vcpkg | ✅ | latest | C:\\Tools\\vcpkg |
+| CUDA Toolkit | ✅ | 13.2 | RTX 5070 Blackwell sm_120 |
+| cuDNN | ✅ | 9.20.0 | |
+| TensorRT | ✅ | 10.15.1.29 | C:\\TensorRT\\TensorRT-10.15.1.29 |
+| Qt6 | ✅ | 6.8.2 | C:\\Qt\\6.8.2\\msvc2022_64 |
+| ONNX Runtime | ✅ | 1.23.2 | Via vcpkg (CUDA+TRT) |
+| OpenCV | ✅ | 4.12.0 | Via vcpkg (core,highgui,dnn,calib3d) |
 | Python (pour training) | ⬜ | 3.11+ | |
 
 ---

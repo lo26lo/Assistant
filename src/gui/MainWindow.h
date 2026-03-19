@@ -42,6 +42,7 @@ signals:
     void ibomFileRequested(const QString& path);
     void cameraToggled(bool start);
     void screenshotRequested();
+    void calibrationRequested();
     void fullscreenToggled(bool fs);
 
 protected:

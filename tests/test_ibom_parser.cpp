@@ -41,7 +41,7 @@ TEST_CASE("IBomData — Component default construction", "[ibom][data]")
     REQUIRE(comp.reference.empty());
     REQUIRE(comp.value.empty());
     REQUIRE(comp.footprint.empty());
-    REQUIRE(comp.layer == 0);
+    REQUIRE(comp.layer == Layer::Front);
     REQUIRE(comp.rotation == Catch::Approx(0.0));
     REQUIRE(comp.pads.empty());
 }
@@ -49,15 +49,15 @@ TEST_CASE("IBomData — Component default construction", "[ibom][data]")
 TEST_CASE("IBomData — Pad construction", "[ibom][data]")
 {
     Pad pad;
-    pad.position = {10.5f, 20.3f};
+    pad.position = {10.5, 20.3};
     pad.shape = Pad::Shape::Rect;
-    pad.width = 1.2f;
-    pad.height = 0.8f;
+    pad.sizeX = 1.2;
+    pad.sizeY = 0.8;
     pad.isSMD = true;
     pad.isPin1 = false;
 
-    REQUIRE(pad.position.x == Catch::Approx(10.5f));
-    REQUIRE(pad.position.y == Catch::Approx(20.3f));
+    REQUIRE(pad.position.x == Catch::Approx(10.5));
+    REQUIRE(pad.position.y == Catch::Approx(20.3));
     REQUIRE(pad.shape == Pad::Shape::Rect);
     REQUIRE(pad.isSMD == true);
 }
@@ -72,9 +72,19 @@ TEST_CASE("IBomData — BBox operations", "[ibom][data]")
 
     REQUIRE(box.width() == Catch::Approx(40.0));
     REQUIRE(box.height() == Catch::Approx(40.0));
-    REQUIRE(box.centerX() == Catch::Approx(30.0));
-    REQUIRE(box.centerY() == Catch::Approx(40.0));
+    REQUIRE(box.center().x == Catch::Approx(30.0));
+    REQUIRE(box.center().y == Catch::Approx(40.0));
 
-    REQUIRE(box.contains(30, 40));
-    REQUIRE_FALSE(box.contains(5, 5));
+    // Check a point inside the box
+    Point2D inside{30, 40};
+    REQUIRE(inside.x >= box.minX);
+    REQUIRE(inside.x <= box.maxX);
+    REQUIRE(inside.y >= box.minY);
+    REQUIRE(inside.y <= box.maxY);
+
+    // Check a point outside the box
+    Point2D outside{5, 5};
+    bool isInside = outside.x >= box.minX && outside.x <= box.maxX &&
+                    outside.y >= box.minY && outside.y <= box.maxY;
+    REQUIRE_FALSE(isInside);
 }

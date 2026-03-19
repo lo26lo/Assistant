@@ -17,7 +17,8 @@ StatsPanel::StatsPanel(QWidget* parent)
 void StatsPanel::buildUI()
 {
     auto* mainLayout = new QHBoxLayout(this);
-    mainLayout->setContentsMargins(4, 4, 4, 4);
+    mainLayout->setContentsMargins(8, 6, 8, 6);
+    mainLayout->setSpacing(8);
 
     // ── Left: Progress & Counters ──
     auto* leftGroup = new QGroupBox(tr("Inspection Progress"));

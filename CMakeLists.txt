@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
 
+# Fix: CMake 4.x + Ninja on Windows — rules.ninja not generated during try_compile
+# Root cause: path normalization issue with short DOS paths (COMMON~1) in CMAKE_MAKE_PROGRAM
+# Solution from: https://cmake.org/cmake/help/latest/variable/CMAKE_TRY_COMPILE_TARGET_TYPE.html
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
 # ============================================================================
 # MicroscopeIBOM — PCB Inspection with AI Overlay
 # ============================================================================
@@ -78,9 +83,12 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(ZXing CONFIG REQUIRED)
 
 # libharu (PDF generation)
-find_package(libharu CONFIG QUIET)
-if(NOT libharu_FOUND)
-    find_package(HPDF QUIET)
+find_package(unofficial-libharu CONFIG QUIET)
+if(NOT unofficial-libharu_FOUND)
+    find_package(libharu CONFIG QUIET)
+    if(NOT libharu_FOUND)
+        find_package(HPDF QUIET)
+    endif()
 endif()
 
 # CUDA (optional, for GPU utilities)
@@ -90,11 +98,6 @@ find_package(CUDAToolkit QUIET)
 if(IBOM_ENABLE_TENSORRT)
     include(FindTensorRT)
 endif()
-
-# ============================================================================
-# Compiler flags
-# ============================================================================
-include(CompilerFlags)
 
 # ============================================================================
 # Source files
@@ -262,7 +265,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 # Optional: libharu
-if(libharu_FOUND OR HPDF_FOUND)
+if(unofficial-libharu_FOUND)
+    target_link_libraries(${PROJECT_NAME} PRIVATE unofficial::libharu::hpdf)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_HAS_LIBHARU)
+elseif(libharu_FOUND OR HPDF_FOUND)
     target_link_libraries(${PROJECT_NAME} PRIVATE hpdf)
     target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_HAS_LIBHARU)
 endif()
@@ -272,6 +278,11 @@ if(CUDAToolkit_FOUND)
     target_link_libraries(${PROJECT_NAME} PRIVATE CUDA::cudart)
     target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_HAS_CUDA)
 endif()
+
+# ============================================================================
+# Compiler flags (must be after target creation)
+# ============================================================================
+include(CompilerFlags)
 
 # Optional: TensorRT
 if(IBOM_ENABLE_TENSORRT AND TensorRT_FOUND)

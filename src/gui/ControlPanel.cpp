@@ -21,8 +21,8 @@ void ControlPanel::buildUI()
 
     auto* content = new QWidget;
     auto* layout  = new QVBoxLayout(content);
-    layout->setContentsMargins(4, 4, 4, 4);
-    layout->setSpacing(8);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(4);
 
     layout->addWidget(createOverlayGroup());
     layout->addWidget(createAiGroup());
@@ -41,6 +41,8 @@ QGroupBox* ControlPanel::createOverlayGroup()
 {
     auto* group  = new QGroupBox(tr("Overlay"));
     auto* layout = new QVBoxLayout(group);
+    layout->setSpacing(8);
+    layout->setContentsMargins(4, 8, 4, 8);
 
     // Opacity slider
     auto* opacityRow = new QHBoxLayout;
@@ -86,6 +88,9 @@ QGroupBox* ControlPanel::createAiGroup()
 {
     auto* group  = new QGroupBox(tr("AI Detection"));
     auto* layout = new QFormLayout(group);
+    layout->setSpacing(8);
+    layout->setContentsMargins(4, 8, 4, 8);
+    layout->setLabelAlignment(Qt::AlignRight);
 
     m_confidenceSpin = new QDoubleSpinBox;
     m_confidenceSpin->setRange(0.1, 1.0);
@@ -109,6 +114,9 @@ QGroupBox* ControlPanel::createCameraGroup()
 {
     auto* group  = new QGroupBox(tr("Camera"));
     auto* layout = new QFormLayout(group);
+    layout->setSpacing(8);
+    layout->setContentsMargins(4, 8, 4, 8);
+    layout->setLabelAlignment(Qt::AlignRight);
 
     m_cameraDevice = new QComboBox;
     m_cameraDevice->addItem(tr("Default (0)"));
@@ -144,6 +152,8 @@ QGroupBox* ControlPanel::createActionsGroup()
 {
     auto* group  = new QGroupBox(tr("Actions"));
     auto* layout = new QVBoxLayout(group);
+    layout->setSpacing(8);
+    layout->setContentsMargins(4, 8, 4, 8);
 
     m_btnCalibrate = new QPushButton(tr("Calibrate Camera (Checkerboard)"));
     connect(m_btnCalibrate, &QPushButton::clicked, this, &ControlPanel::recalibrateRequested);
