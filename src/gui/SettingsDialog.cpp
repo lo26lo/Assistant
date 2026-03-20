@@ -59,6 +59,37 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
     m_cameraFps->setRange(1, 120);
     form->addRow(tr("FPS:"), m_cameraFps);
 
+    // --- Calibration group ---
+    auto* calibGroup = new QGroupBox(tr("Calibration Checkerboard"));
+    auto* calibForm  = new QFormLayout(calibGroup);
+
+    m_calibBoardCols = new QSpinBox;
+    m_calibBoardCols->setRange(3, 20);
+    m_calibBoardCols->setToolTip(tr("Inner corners (columns)"));
+    calibForm->addRow(tr("Board cols:"), m_calibBoardCols);
+
+    m_calibBoardRows = new QSpinBox;
+    m_calibBoardRows->setRange(3, 20);
+    m_calibBoardRows->setToolTip(tr("Inner corners (rows)"));
+    calibForm->addRow(tr("Board rows:"), m_calibBoardRows);
+
+    m_calibSquareSize = new QDoubleSpinBox;
+    m_calibSquareSize->setRange(0.1, 50.0);
+    m_calibSquareSize->setSingleStep(0.5);
+    m_calibSquareSize->setSuffix(" mm");
+    m_calibSquareSize->setDecimals(1);
+    m_calibSquareSize->setToolTip(tr("Physical size of one square in mm"));
+    calibForm->addRow(tr("Square size:"), m_calibSquareSize);
+
+    m_scaleMethod = new QComboBox;
+    m_scaleMethod->addItem(tr("None (fixed calibration)"),     0);
+    m_scaleMethod->addItem(tr("From homography (auto-zoom)"),  1);
+    m_scaleMethod->addItem(tr("From iBOM pad distances"),      2);
+    m_scaleMethod->setToolTip(tr("How to update px/mm when the microscope zoom changes"));
+    calibForm->addRow(tr("Dynamic scale:"), m_scaleMethod);
+
+    form->addRow(calibGroup);
+
     tabs->addTab(page, tr("Camera"));
 }
 
@@ -159,6 +190,13 @@ void SettingsDialog::loadFromConfig()
     m_cameraHeight->setValue(m_config.cameraHeight());
     m_cameraFps->setValue(m_config.cameraFps());
 
+    // Calibration
+    m_calibBoardCols->setValue(m_config.calibBoardCols());
+    m_calibBoardRows->setValue(m_config.calibBoardRows());
+    m_calibSquareSize->setValue(static_cast<double>(m_config.calibSquareSize()));
+    m_scaleMethod->setCurrentIndex(
+        m_scaleMethod->findData(static_cast<int>(m_config.scaleMethod())));
+
     // Overlay
     m_overlayOpacity->setValue(static_cast<int>(m_config.overlayOpacity() * 100));
     m_showPads->setChecked(m_config.showPads());
@@ -185,6 +223,13 @@ void SettingsDialog::accept()
     m_config.setCameraWidth(m_cameraWidth->value());
     m_config.setCameraHeight(m_cameraHeight->value());
     m_config.setCameraFps(m_cameraFps->value());
+
+    // Calibration
+    m_config.setCalibBoardCols(m_calibBoardCols->value());
+    m_config.setCalibBoardRows(m_calibBoardRows->value());
+    m_config.setCalibSquareSize(static_cast<float>(m_calibSquareSize->value()));
+    m_config.setScaleMethod(
+        static_cast<ibom::ScaleMethod>(m_scaleMethod->currentData().toInt()));
 
     // Overlay
     m_config.setOverlayOpacity(static_cast<float>(m_overlayOpacity->value()) / 100.0f);

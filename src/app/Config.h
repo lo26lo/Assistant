@@ -6,6 +6,13 @@
 
 namespace ibom {
 
+/// Method for dynamic pixels/mm scaling when zoom changes.
+enum class ScaleMethod {
+    None        = 0,  // Use calibration value only (fixed)
+    Homography  = 1,  // Extract scale factor from live tracking homography
+    IBomPads    = 2   // Compute from known iBOM pad distances
+};
+
 /**
  * @brief Persistent application configuration.
  *
@@ -92,6 +99,19 @@ public:
     double ransacThreshold() const { return m_ransacThreshold; }
     void setRansacThreshold(double t) { m_ransacThreshold = t; }
 
+    // --- Calibration ---
+    int  calibBoardCols() const { return m_calibBoardCols; }
+    void setCalibBoardCols(int n) { m_calibBoardCols = n; }
+
+    int  calibBoardRows() const { return m_calibBoardRows; }
+    void setCalibBoardRows(int n) { m_calibBoardRows = n; }
+
+    float calibSquareSize() const { return m_calibSquareSize; }
+    void setCalibSquareSize(float mm) { m_calibSquareSize = mm; }
+
+    ScaleMethod scaleMethod() const { return m_scaleMethod; }
+    void setScaleMethod(ScaleMethod m) { m_scaleMethod = m; }
+
     // --- Checkboxes (BOM tracking) ---
     const std::vector<std::string>& checkboxColumns() const { return m_checkboxColumns; }
     void setCheckboxColumns(const std::vector<std::string>& cols) { m_checkboxColumns = cols; }
@@ -131,6 +151,12 @@ private:
     int    m_minMatchCount      = 8;
     double m_matchDistanceRatio = 2.0;
     double m_ransacThreshold    = 3.0;
+
+    // Calibration (microscope-friendly defaults: small 5cm card)
+    int   m_calibBoardCols  = 7;    // inner corners cols
+    int   m_calibBoardRows  = 5;    // inner corners rows
+    float m_calibSquareSize = 5.0f; // mm per square
+    ScaleMethod m_scaleMethod = ScaleMethod::Homography;
 
     // BOM
     std::vector<std::string> m_checkboxColumns = {"Sourced", "Placed"};

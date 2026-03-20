@@ -273,6 +273,7 @@ void Application::connectSignals()
                                         std::vector<cv::Point2f> imgCorners;
                                         cv::perspectiveTransform(pcbCorners, imgCorners, combined);
                                         m_homography->compute(pcbCorners, imgCorners);
+                                        updateDynamicScale();
                                     }
                                 }
                             }
@@ -505,9 +506,12 @@ void Application::connectSignals()
             m_collectingCalibImages = true;
             QMessageBox::information(m_mainWindow.get(), tr("Calibration"),
                 tr("Calibration mode started.\n\n"
-                   "1. Hold a 9x6 checkerboard in front of the camera\n"
+                   "1. Hold a %1x%2 checkerboard (squares %3 mm) in front of the microscope\n"
                    "2. Click 'Calibrate' again to capture (5 images needed)\n"
-                   "3. Move the checkerboard to a different angle each time"));
+                   "3. Move the checkerboard to a different angle each time")
+                .arg(m_config->calibBoardCols())
+                .arg(m_config->calibBoardRows())
+                .arg(static_cast<double>(m_config->calibSquareSize()), 0, 'f', 1));
             // Update button text to show progress
             for (auto* b : m_mainWindow->controlPanel()->findChildren<QPushButton*>()) {
                 if (b->text().contains("Calibrat")) {
@@ -692,6 +696,24 @@ void Application::connectSignals()
                 m_mainWindow->updateStatusMessage(
                     tr("Alignment set — reprojection error: %1 px")
                     .arg(m_homography->reprojectionError(), 0, 'f', 3));
+                // Capture baseline scale for dynamic zoom tracking
+                if (m_calibration && m_calibration->pixelsPerMm() > 0) {
+                    m_basePixelsPerMm = m_calibration->pixelsPerMm();
+                    m_currentPixelsPerMm = m_basePixelsPerMm;
+                } else {
+                    // Estimate from homography: pixels per PCB unit
+                    auto& bb = m_ibomProject->boardInfo.boardBBox;
+                    double pcbW = bb.width();
+                    auto tl = m_homography->pcbToImage({static_cast<float>(bb.minX), static_cast<float>(bb.minY)});
+                    auto tr = m_homography->pcbToImage({static_cast<float>(bb.maxX), static_cast<float>(bb.minY)});
+                    double pixW = cv::norm(cv::Point2f(tl.x - tr.x, tl.y - tr.y));
+                    if (pcbW > 0) {
+                        m_basePixelsPerMm = pixW / pcbW;
+                        m_currentPixelsPerMm = m_basePixelsPerMm;
+                    }
+                }
+                if (auto* sp = m_mainWindow->statsPanel())
+                    sp->setScale(m_currentPixelsPerMm);
                 // Reset live mode reference if active
                 m_referenceFrame = cv::Mat();
             } else {
@@ -805,7 +827,10 @@ void Application::runCalibration()
     spdlog::info("Running calibration with {} images...", m_calibImages.size());
     m_mainWindow->updateStatusMessage(tr("Running calibration..."));
 
-    double error = m_calibration->calibrate(m_calibImages);
+    double error = m_calibration->calibrate(
+        m_calibImages,
+        cv::Size(m_config->calibBoardCols(), m_config->calibBoardRows()),
+        m_config->calibSquareSize());
     m_calibImages.clear();
 
     if (error < 0) {
@@ -813,7 +838,9 @@ void Application::runCalibration()
         m_mainWindow->updateStatusMessage(tr("Calibration failed — checkerboard not detected"));
         QMessageBox::warning(m_mainWindow.get(), tr("Calibration Failed"),
             tr("Could not find checkerboard corners in the captured images.\n"
-               "Make sure the 9x6 checkerboard pattern is fully visible."));
+               "Make sure the %1x%2 checkerboard pattern is fully visible.")
+            .arg(m_config->calibBoardCols())
+            .arg(m_config->calibBoardRows()));
         return;
     }
 
@@ -829,9 +856,85 @@ void Application::runCalibration()
 
     spdlog::info("Calibration succeeded: error={:.4f}, pixels/mm={:.2f}, saved to {}",
                  error, m_calibration->pixelsPerMm(), calibPath.toStdString());
+    m_basePixelsPerMm = m_calibration->pixelsPerMm();
+    m_currentPixelsPerMm = m_basePixelsPerMm;
+    if (auto* sp = m_mainWindow->statsPanel())
+        sp->setScale(m_currentPixelsPerMm);
     m_mainWindow->updateStatusMessage(
         tr("Calibration done — error: %1, pixels/mm: %2")
         .arg(error, 0, 'f', 4).arg(m_calibration->pixelsPerMm(), 0, 'f', 1));
+}
+
+// ── Dynamic Scale ──────────────────────────────────────────────────
+
+void Application::updateDynamicScale()
+{
+    if (!m_homography || !m_homography->isValid() || !m_ibomProject)
+        return;
+
+    ScaleMethod method = m_config->scaleMethod();
+    if (method == ScaleMethod::None)
+        return;
+
+    double newPpmm = 0.0;
+
+    if (method == ScaleMethod::Homography) {
+        // Extract scale from current homography by measuring the board width in pixels
+        auto& bb = m_ibomProject->boardInfo.boardBBox;
+        double pcbW = bb.width(); // mm in PCB coords
+        if (pcbW <= 0) return;
+
+        auto tl = m_homography->pcbToImage(
+            {static_cast<float>(bb.minX), static_cast<float>(bb.minY)});
+        auto tr = m_homography->pcbToImage(
+            {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)});
+        double pixW = cv::norm(cv::Point2f(tl.x - tr.x, tl.y - tr.y));
+        newPpmm = pixW / pcbW;
+
+    } else if (method == ScaleMethod::IBomPads) {
+        // Find two pads that are far apart and use their known real distance
+        // vs their projected pixel distance
+        const auto& comps = m_ibomProject->components;
+        if (comps.size() < 2) return;
+
+        // Pick first pad of first and last component as reference points
+        const Pad* padA = nullptr;
+        const Pad* padB = nullptr;
+        for (const auto& c : comps) {
+            if (!c.pads.empty()) {
+                if (!padA) { padA = &c.pads[0]; continue; }
+                // Pick the pad farthest from padA
+                double bestDist = 0;
+                for (const auto& p : c.pads) {
+                    double dx = p.position.x - padA->position.x;
+                    double dy = p.position.y - padA->position.y;
+                    double d = dx*dx + dy*dy;
+                    if (d > bestDist) { bestDist = d; padB = &p; }
+                }
+            }
+        }
+        if (!padA || !padB) return;
+
+        double realDist = std::sqrt(
+            std::pow(padA->position.x - padB->position.x, 2) +
+            std::pow(padA->position.y - padB->position.y, 2));
+        if (realDist < 1.0) return; // too close, unreliable
+
+        auto imgA = m_homography->pcbToImage(
+            {static_cast<float>(padA->position.x), static_cast<float>(padA->position.y)});
+        auto imgB = m_homography->pcbToImage(
+            {static_cast<float>(padB->position.x), static_cast<float>(padB->position.y)});
+        double pixDist = cv::norm(cv::Point2f(imgA.x - imgB.x, imgA.y - imgB.y));
+        newPpmm = pixDist / realDist;
+    }
+
+    if (newPpmm > 0) {
+        m_currentPixelsPerMm = newPpmm;
+        if (m_calibration)
+            m_calibration->setPixelsPerMm(newPpmm);
+        if (auto* sp = m_mainWindow->statsPanel())
+            sp->setScale(newPpmm);
+    }
 }
 
 // ── Screenshot ─────────────────────────────────────────────────────

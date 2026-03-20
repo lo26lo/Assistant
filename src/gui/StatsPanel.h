@@ -25,6 +25,7 @@ public:
     void setFps(double fps);
     void setInferenceTime(double ms);
     void setGpuMemory(size_t usedMB, size_t totalMB);
+    void setScale(double pixelsPerMm);
     void addDefectEntry(const std::string& reference, const std::string& type);
 
 signals:
@@ -49,6 +50,7 @@ private:
     QLabel* m_fpsLabel          = nullptr;
     QLabel* m_inferenceLabel    = nullptr;
     QLabel* m_gpuMemLabel       = nullptr;
+    QLabel* m_scaleLabel        = nullptr;
 
     // Defect log
     QTableWidget* m_defectTable = nullptr;

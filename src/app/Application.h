@@ -70,6 +70,7 @@ private:
     void loadIBomFile(const QString& path);
     void runCalibration();
     void takeScreenshot();
+    void updateDynamicScale();
 
     QApplication&                               m_qapp;
     std::unique_ptr<Config>                    m_config;
@@ -117,6 +118,10 @@ private:
     cv::Ptr<cv::DescriptorMatcher> m_featureMatcher;
     cv::Mat m_baseHomography;  // Original homography before live tracking
     std::chrono::steady_clock::time_point m_lastTrackingTime;
+
+    // Dynamic scale tracking
+    double m_basePixelsPerMm = 0.0;  // pixelsPerMm at initial homography
+    double m_currentPixelsPerMm = 0.0;
 };
 
 } // namespace ibom

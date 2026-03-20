@@ -93,6 +93,16 @@ bool Config::load(const std::string& path)
             m_ransacThreshold    = trk.value("ransac_threshold", m_ransacThreshold);
         }
 
+        // Calibration
+        if (j.contains("calibration")) {
+            auto& cal = j["calibration"];
+            m_calibBoardCols  = cal.value("board_cols", m_calibBoardCols);
+            m_calibBoardRows  = cal.value("board_rows", m_calibBoardRows);
+            m_calibSquareSize = cal.value("square_size_mm", m_calibSquareSize);
+            m_scaleMethod     = static_cast<ScaleMethod>(cal.value("scale_method",
+                                    static_cast<int>(m_scaleMethod)));
+        }
+
         // BOM
         if (j.contains("bom") && j["bom"].contains("checkbox_columns")) {
             m_checkboxColumns = j["bom"]["checkbox_columns"]
@@ -156,6 +166,14 @@ bool Config::save(const std::string& path) const
             {"min_matches",          m_minMatchCount},
             {"match_distance_ratio", m_matchDistanceRatio},
             {"ransac_threshold",     m_ransacThreshold}
+        };
+
+        // Calibration
+        j["calibration"] = {
+            {"board_cols",     m_calibBoardCols},
+            {"board_rows",     m_calibBoardRows},
+            {"square_size_mm", m_calibSquareSize},
+            {"scale_method",   static_cast<int>(m_scaleMethod)}
         };
 
         // BOM

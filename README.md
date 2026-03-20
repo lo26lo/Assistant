@@ -5,37 +5,58 @@
 Application C++ qui capture le flux d'un microscope USB, détecte les composants par IA (YOLOv8/ONNX Runtime) et superpose les informations d'un fichier [InteractiveHtmlBom](https://github.com/openscopeproject/InteractiveHtmlBom) directement sur l'image live.
 
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue?logo=cplusplus)
-![Qt6](https://img.shields.io/badge/Qt-6.6+-green?logo=qt)
-![OpenCV](https://img.shields.io/badge/OpenCV-4.9+-orange?logo=opencv)
-![ONNX Runtime](https://img.shields.io/badge/ONNX_Runtime-1.17+-purple)
-![TensorRT](https://img.shields.io/badge/TensorRT-10.x-76B900?logo=nvidia)
+![Qt6](https://img.shields.io/badge/Qt-6.8.2-green?logo=qt)
+![OpenCV](https://img.shields.io/badge/OpenCV-4.12-orange?logo=opencv)
+![ONNX Runtime](https://img.shields.io/badge/ONNX_Runtime-1.23.2-purple)
+![TensorRT](https://img.shields.io/badge/TensorRT-10.15-76B900?logo=nvidia)
+![CUDA](https://img.shields.io/badge/CUDA-13.2-76B900?logo=nvidia)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
-![Platform](https://img.shields.io/badge/Platform-Windows%20|%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
 
 ---
 
 ## Fonctionnalités
 
+### Opérationnelles ✅
+
 | Module | Description |
 |---|---|
-| **Camera** | Capture USB temps réel (DirectShow/V4L2), calibration checkerboard, triple-buffer |
-| **iBOM Parser** | Import direct de fichiers `.html` InteractiveHtmlBom, index spatial O(1) |
-| **IA Detection** | Détection composants (YOLOv8), inspection soudure (6 classes), OCR marquages |
-| **Overlay** | Superposition PCB↔caméra par homographie RANSAC, couleurs par état |
-| **Pick & Place** | Workflow guidé de placement composant par composant |
-| **Mesure** | Distance, angle, aire calibrés en mm sur l'image live |
-| **Heatmap** | Carte thermique des défauts détectés |
-| **Barcode/QR** | Scan de codes-barres/QR pour identifier les composants |
-| **Voice Control** | Commandes vocales mains-libres |
-| **Remote View** | Streaming WebSocket pour visualisation à distance |
-| **Export** | Rapports PDF/HTML, export CSV/JSON/BOM |
-| **Snapshots** | Historique de captures avec annotations par composant |
+| **Caméra USB** | Capture temps réel 1920×1080@30fps (MSMF backend), LED auto |
+| **Calibration** | Checkerboard configurable (taille carte/carrés dans Settings), undistortion temps réel |
+| **Scale dynamique** | px/mm mis à jour auto quand le zoom du microscope change (2 méthodes : homographie ou pads iBOM, choix dans Settings) |
+| **iBOM Parser** | Import fichiers `.html` InteractiveHtmlBom, supporte JSON direct et LZ-String compressé |
+| **Overlay PCB** | Superposition pads + silkscreen + labels ref sur flux caméra, via homographie RANSAC |
+| **Alignement manuel** | 4 clics sur les coins du PCB → homographie calculée |
+| **Live Tracking** | Suivi ORB feature matching + homographie dynamique, s'adapte au déplacement et zoom |
+| **BOM Panel** | Tableau composants avec sélection → highlight overlay |
+| **Heatmap** | Toggle carte thermique des défauts |
+| **Settings** | Dialog 4 onglets (Camera/Overlay/Tracking/AI), persistance JSON |
+| **Thème Dark/Light** | Stylesheets complètes, couleurs centralisées (Theme.h) |
+| **Camera Fullscreen** | Double-clic → plein écran caméra seule, Escape pour revenir |
+| **Screenshot** | Menu File → Save capture |
+| **FPS & Stats** | Timer 1s → StatsPanel + statusBar, scale px/mm en temps réel |
+| **Inspection Wizard** | Workflow guidé 4 étapes |
+
+### À connecter ❌
+
+| Module | Description |
+|---|---|
+| **IA Détection** | YOLOv8/ONNX Runtime + TensorRT — compilé mais pas de modèle .onnx |
+| **OCR** | Lecture marquages composants — code prêt, pas de modèle |
+| **Solder Inspector** | Inspection qualité soudure — code prêt, pas de modèle |
+| **Pick & Place** | Workflow guidé de placement — code prêt, non instancié |
+| **Mesure** | Distance/angle/aire calibrés en mm — code prêt, non instancié |
+| **Barcode/QR** | Scan codes-barres/QR — code prêt, non instancié |
+| **Voice Control** | Commandes vocales mains-libres — code prêt, non instancié |
+| **Remote View** | Streaming WebSocket — code prêt, non instancié |
+| **Export** | Rapports PDF/HTML, CSV/JSON — code prêt, non instancié |
+| **Snapshots** | Historique captures avec annotations — code prêt, non instancié |
 
 ---
 
 ## Capture d'écran
 
-> *À venir — l'application est en phase de scaffold initial.*
+> *À venir — l'application est fonctionnelle, captures à documenter.*
 
 ---
 
@@ -70,12 +91,12 @@ Application C++ qui capture le flux d'un microscope USB, détecte les composants
 
 | Composant | Technologie | Version |
 |---|---|---|
-| Langage | C++20 | GCC 13+ / MSVC 19.x |
-| GUI | Qt6 (Widgets, OpenGL, Multimedia, WebSockets) | 6.6+ |
-| Vision | OpenCV | 4.9+ |
-| Inférence | ONNX Runtime + TensorRT EP + CUDA EP | 1.17+ |
-| GPU | NVIDIA CUDA + TensorRT | 12.x / 10.x |
-| Build | CMake + Ninja | 3.28+ |
+| Langage | C++20 | MSVC 14.44 (VS Build Tools 2022 v17.14) |
+| GUI | Qt6 (Widgets) | 6.8.2 |
+| Vision | OpenCV | 4.12 (vcpkg, MSMF backend) |
+| Inférence | ONNX Runtime + TensorRT EP + CUDA EP | 1.23.2 |
+| GPU | NVIDIA CUDA + cuDNN + TensorRT | 13.2 / 9.20 / 10.15.1 |
+| Build | CMake + NMake Makefiles | CMake 4.2.3 |
 | Packages | vcpkg | latest |
 | Logging | spdlog | 1.x |
 | JSON | nlohmann/json | 3.x |
@@ -87,11 +108,11 @@ Application C++ qui capture le flux d'un microscope USB, détecte les composants
 
 ## Prérequis
 
-- **Windows 10/11** (ou Linux Ubuntu 22.04+)
-- **GPU NVIDIA** avec drivers récents (optimisé pour RTX 5070)
-- **Visual Studio 2022** Build Tools ou Community
-- **Qt6 6.6+** ([télécharger](https://www.qt.io/download))
-- **CUDA Toolkit 12.x** ([télécharger](https://developer.nvidia.com/cuda-downloads))
+- **Windows 10/11**
+- **GPU NVIDIA** avec drivers récents (optimisé pour RTX 5070 Laptop)
+- **Visual Studio 2022 Build Tools** (pas Community)
+- **Qt6 6.8+** ([télécharger](https://www.qt.io/download))
+- **CUDA Toolkit 13.x** ([télécharger](https://developer.nvidia.com/cuda-downloads))
 - **cuDNN 9.x** ([télécharger](https://developer.nvidia.com/cudnn))
 - **TensorRT 10.x** ([télécharger](https://developer.nvidia.com/tensorrt)) *(optionnel)*
 
@@ -106,48 +127,32 @@ Application C++ qui capture le flux d'un microscope USB, détecte les composants
 build_windows.bat
 ```
 
-### Étape par étape
+### Build manuel
 
 ```bat
-:: 1. Installer les prérequis (admin requis)
-scripts\install_prerequisites.bat
+:: 1. Ouvrir un terminal et configurer MSVC
+set VSLANG=1033
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+set TENSORRT_HOME=C:\TensorRT\TensorRT-10.15.1.29
+set CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2
 
-:: 2. Installer Qt6 manuellement (Qt Online Installer)
-::    Définir la variable d'environnement :
-set Qt6_DIR=C:\Qt\6.8.0\msvc2022_64\lib\cmake\Qt6
+:: 2. Configurer CMake (une seule fois)
+cmake -B build -S . -G "NMake Makefiles" ^
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+  -DCMAKE_TOOLCHAIN_FILE=C:/Tools/vcpkg/scripts/buildsystems/vcpkg.cmake ^
+  -DVCPKG_TARGET_TRIPLET=x64-windows ^
+  -DIBOM_ENABLE_TENSORRT=ON ^
+  -DQt6_DIR=C:/Qt/6.8.2/msvc2022_64/lib/cmake/Qt6
 
 :: 3. Compiler
-build_windows.bat --skip-install
+cd build
+nmake
 ```
 
-### Options du build script
+> ⚠️ **NE PAS utiliser Ninja** comme générateur — bug connu avec CMake 4.2.3 (`rules.ninja`).
+> Utiliser `NMake Makefiles` uniquement.
 
-```
-build_windows.bat --help
-  --skip-install    Sauter l'installation des prérequis
-  --skip-vcpkg      Sauter les dépendances vcpkg
-  --release         Build Release (défaut: RelWithDebInfo)
-  --debug           Build Debug
-  --clean           Supprimer build/ avant compilation
-  --no-tensorrt     Désactiver TensorRT
-  --tests           Compiler et exécuter les tests
-```
-
----
-
-## Installation (Linux)
-
-```bash
-# 1. Prérequis
-chmod +x scripts/install_prerequisites.sh
-sudo scripts/install_prerequisites.sh
-
-# 2. Compiler
-cmake -B build -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build --parallel $(nproc)
-```
+> ⚠️ **NE PAS supprimer** `build\vcpkg_installed\` — onnxruntime CUDA+TRT prend ~2h à compiler.
 
 ---
 
@@ -155,16 +160,19 @@ cmake --build build --parallel $(nproc)
 
 ```bash
 # Lancer l'application
-./build/bin/MicroscopeIBOM
-
-# Avec un fichier iBOM
-./build/bin/MicroscopeIBOM --ibom "path/to/board.html"
-
-# Avec une caméra spécifique + mode sombre
-./build/bin/MicroscopeIBOM --camera 1 --dark
-
-# Drag & drop : glissez un fichier .html directement dans la fenêtre
+cd build\bin
+.\MicroscopeIBOM.exe
 ```
+
+### Workflow typique
+
+1. Lancer l'app, cliquer **Start Camera**
+2. **File → Open iBOM** → charger un fichier `.html` InteractiveHtmlBom
+3. Cliquer **Set Alignment** → cliquer les 4 coins du PCB (TL, TR, BR, BL)
+4. L'overlay des composants apparaît sur l'image caméra
+5. Activer **Live Tracking** pour que l'overlay suive les mouvements
+6. Monter/descendre le microscope → le scale (px/mm) se met à jour auto
+7. Configurer via **Ctrl+,** (Settings) : calibration, tracking, overlay, AI
 
 ---
 
@@ -222,16 +230,10 @@ Modèles attendus dans `models/` :
 | Raccourci | Action |
 |---|---|
 | `Ctrl+O` | Ouvrir fichier iBOM |
-| `Ctrl+C` | Connecter/déconnecter caméra |
-| `Space` | Capturer snapshot |
-| `F5` | Lancer inspection automatique |
-| `Tab` | Composant suivant (mode P&P) |
-| `Shift+Tab` | Composant précédent |
-| `Ctrl++` / `Ctrl+-` | Zoom in / out |
-| `Ctrl+D` | Basculer thème dark/light |
-| `Ctrl+F` | Rechercher composant |
-| `Ctrl+E` | Exporter rapport |
-| `Escape` | Annuler mode en cours |
+| `Ctrl+,` | Ouvrir Settings |
+| `Ctrl+S` | Sauvegarder capture d'écran |
+| `Double-clic` | Plein écran caméra (Escape pour revenir) |
+| `Escape` | Annuler mode en cours / quitter fullscreen |
 
 ---
 
@@ -248,10 +250,15 @@ Modèles attendus dans `models/` :
 ## Roadmap
 
 - [x] Scaffold complet (88 fichiers, 9 modules)
-- [ ] Première compilation réussie
-- [ ] Capture caméra fonctionnelle
-- [ ] Import iBOM + overlay basique
-- [ ] Intégration modèle IA PCB
+- [x] Compilation réussie (NMake + MSVC + vcpkg)
+- [x] Capture caméra fonctionnelle (1920×1080@30fps)
+- [x] Import iBOM + overlay pads/silkscreen/labels
+- [x] Calibration caméra checkerboard (configurable)
+- [x] Alignement manuel (4 points) + live tracking ORB
+- [x] Scale dynamique (auto-zoom px/mm)
+- [x] Settings dialog (Camera/Overlay/Tracking/AI)
+- [x] Thème dark/light harmonisé
+- [ ] Intégration modèle IA (détection composants)
 - [ ] Inspection soudure temps réel
 - [ ] Mode pick & place guidé
 - [ ] Export rapport PDF

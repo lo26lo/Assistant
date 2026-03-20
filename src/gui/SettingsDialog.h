@@ -8,6 +8,7 @@
 #include <QLineEdit>
 #include <QSlider>
 #include <QLabel>
+#include <QComboBox>
 
 namespace ibom { class Config; }
 
@@ -35,6 +36,12 @@ private:
     QSpinBox* m_cameraWidth  = nullptr;
     QSpinBox* m_cameraHeight = nullptr;
     QSpinBox* m_cameraFps    = nullptr;
+
+    // Calibration
+    QSpinBox*       m_calibBoardCols  = nullptr;
+    QSpinBox*       m_calibBoardRows  = nullptr;
+    QDoubleSpinBox* m_calibSquareSize = nullptr;
+    QComboBox*      m_scaleMethod     = nullptr;
 
     // Overlay
     QSlider*   m_overlayOpacity   = nullptr;

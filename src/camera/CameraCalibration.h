@@ -50,6 +50,9 @@ public:
     /// Get pixels-per-mm ratio (after calibration with known square size).
     double pixelsPerMm() const { return m_pixelsPerMm; }
 
+    /// Update pixels-per-mm dynamically (e.g. from zoom scale tracking).
+    void setPixelsPerMm(double ppmm) { m_pixelsPerMm = ppmm; }
+
 private:
     bool   m_calibrated = false;
     cv::Mat m_cameraMatrix;

@@ -92,6 +92,10 @@ void StatsPanel::buildUI()
     m_gpuMemLabel = new QLabel("-- / -- MB");
     perfGrid->addWidget(m_gpuMemLabel, 2, 1);
 
+    perfGrid->addWidget(new QLabel(tr("Scale:")),          3, 0);
+    m_scaleLabel = new QLabel("-- px/mm");
+    perfGrid->addWidget(m_scaleLabel, 3, 1);
+
     perfLayout->addLayout(perfGrid);
     perfLayout->addStretch();
     mainLayout->addWidget(perfGroup);
@@ -169,6 +173,14 @@ void StatsPanel::setInferenceTime(double ms)
 void StatsPanel::setGpuMemory(size_t usedMB, size_t totalMB)
 {
     m_gpuMemLabel->setText(QString("%1 / %2 MB").arg(usedMB).arg(totalMB));
+}
+
+void StatsPanel::setScale(double pixelsPerMm)
+{
+    if (pixelsPerMm > 0)
+        m_scaleLabel->setText(QString("%1 px/mm").arg(pixelsPerMm, 0, 'f', 1));
+    else
+        m_scaleLabel->setText("-- px/mm");
 }
 
 void StatsPanel::addDefectEntry(const std::string& reference, const std::string& type)
