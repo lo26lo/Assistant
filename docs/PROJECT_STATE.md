@@ -1,8 +1,8 @@
 # MicroscopeIBOM — État du Projet
 
-> **Dernière mise à jour :** 2026-03-19  
-> **Version :** 0.1.0  
-> **Statut global :** 🟢 BUILD RÉUSSI + TESTS OK + APP STABLE  
+> **Dernière mise à jour :** 2026-03-20  
+> **Version :** 0.2.0  
+> **Statut global :** 🟢 BUILD RÉUSSI + APP STABLE + SETTINGS DIALOG + OVERLAY TOGGLES
 
 ---
 
@@ -18,6 +18,10 @@
 | 2026-03-18 | Revue du projet | Inventaire fichiers vérifié, état mis à jour |
 | 2026-03-19 | Build NMake réussi | MicroscopeIBOM.exe (736 KB) + 4 tests OK |
 | 2026-03-19 | App stable | Crash ACCESS_VIOLATION résolu, GUI refondue |
+| 2026-03-20 | Settings dialog | 4 onglets (Camera/Overlay/Tracking/AI), Config JSON étendu |
+| 2026-03-20 | Overlay toggles fix | Show Pads/Silkscreen/Fabrication contrôlent le rendu inline |
+| 2026-03-20 | Camera fullscreen | Double-clic → plein écran caméra seule, Escape retour |
+| 2026-03-20 | Config tracking params | 5 params tracking (ORB, throttle, RANSAC) dans config.json |
 
 ---
 
@@ -175,12 +179,13 @@
 ### GUI (`src/gui/`)
 | Fichier | Description |
 |---|---|
-| `MainWindow.h/.cpp` | Fenêtre principale, menus, toolbar, docks |
-| `CameraView.h/.cpp` | Vue caméra OpenGL, zoom, pan, mesure |
+| `MainWindow.h/.cpp` | Fenêtre principale, menus, toolbar, docks, camera fullscreen |
+| `CameraView.h/.cpp` | Vue caméra OpenGL, zoom, pan, mesure, double-clic fullscreen |
 | `BomPanel.h/.cpp` | Panel BOM avec recherche, filtres, checkboxes |
 | `ControlPanel.h/.cpp` | Contrôles overlay, IA, caméra |
 | `InspectionWizard.h/.cpp` | Wizard inspection 4 étapes |
 | `StatsPanel.h/.cpp` | Statistiques, progression, log défauts |
+| `SettingsDialog.h/.cpp` | Dialog settings 4 onglets (Camera/Overlay/Tracking/AI) |
 
 ### Features (`src/features/`)
 | Fichier | Description |

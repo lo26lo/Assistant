@@ -5,6 +5,7 @@
 #include "gui/ControlPanel.h"
 #include "gui/StatsPanel.h"
 #include "gui/BomPanel.h"
+#include "gui/InspectionWizard.h"
 #include "camera/CameraCapture.h"
 #include "camera/CameraCalibration.h"
 #include "ai/InferenceEngine.h"
@@ -13,6 +14,7 @@
 #include "ibom/IBomData.h"
 #include "overlay/OverlayRenderer.h"
 #include "overlay/Homography.h"
+#include "overlay/HeatmapRenderer.h"
 #include "utils/Logger.h"
 
 #include <spdlog/spdlog.h>
@@ -27,6 +29,8 @@
 #include <QPainter>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/features2d.hpp>
+#include <opencv2/calib3d.hpp>
 
 Q_DECLARE_METATYPE(cv::Mat)
 
@@ -156,6 +160,13 @@ void Application::createSubsystems()
     m_overlayRenderer = std::make_unique<overlay::OverlayRenderer>();
     m_homography = std::make_unique<overlay::Homography>();
 
+    // Heatmap renderer
+    m_heatmapRenderer = std::make_unique<overlay::HeatmapRenderer>();
+
+    // Feature detector for live tracking mode
+    m_featureDetector = cv::ORB::create(m_config->orbKeypoints());
+    m_featureMatcher = cv::BFMatcher::create(cv::NORM_HAMMING, true);
+
     // Main window (owns GUI widgets)
     spdlog::info("Creating MainWindow...");
     m_mainWindow = std::make_unique<gui::MainWindow>(this);
@@ -196,6 +207,82 @@ void Application::connectSignals()
             processed = m_calibration->undistort(processed);
         }
 
+        // ── Live tracking: update homography from feature matching ──
+        // Throttled to max ~5 fps to avoid blocking the GUI thread
+        if (m_liveMode && m_homography && m_homography->isValid() && m_featureDetector && m_ibomProject) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - m_lastTrackingTime).count();
+
+            if (elapsed >= m_config->trackingIntervalMs()) {
+                m_lastTrackingTime = now;
+
+                cv::Mat gray;
+                if (processed.channels() == 3)
+                    cv::cvtColor(processed, gray, cv::COLOR_BGR2GRAY);
+                else
+                    gray = processed.clone();
+
+                if (m_referenceFrame.empty()) {
+                    // Capture reference frame and features
+                    m_referenceFrame = gray.clone();
+                    m_refKeypoints.clear();
+                    m_refDescriptors = cv::Mat();
+                    m_featureDetector->detectAndCompute(
+                        m_referenceFrame, cv::noArray(), m_refKeypoints, m_refDescriptors);
+                    m_baseHomography = m_homography->matrix().clone();
+                    spdlog::info("Live tracking: reference frame captured ({} keypoints)",
+                                 m_refKeypoints.size());
+                } else if (!m_refDescriptors.empty() && m_refKeypoints.size() >= 4) {
+                    try {
+                        std::vector<cv::KeyPoint> curKeypoints;
+                        cv::Mat curDescriptors;
+                        m_featureDetector->detectAndCompute(
+                            gray, cv::noArray(), curKeypoints, curDescriptors);
+
+                        if (!curDescriptors.empty() && curKeypoints.size() >= 4) {
+                            std::vector<cv::DMatch> matches;
+                            m_featureMatcher->match(m_refDescriptors, curDescriptors, matches);
+
+                            if (matches.size() >= static_cast<size_t>(m_config->minMatchCount())) {
+                                double minDist = 1e9;
+                                for (const auto& m : matches)
+                                    if (m.distance < minDist) minDist = m.distance;
+                                double threshold = std::max(m_config->matchDistanceRatio() * minDist, 30.0);
+
+                                std::vector<cv::Point2f> srcPts, dstPts;
+                                for (const auto& m : matches) {
+                                    if (m.distance <= threshold) {
+                                        srcPts.push_back(m_refKeypoints[m.queryIdx].pt);
+                                        dstPts.push_back(curKeypoints[m.trainIdx].pt);
+                                    }
+                                }
+
+                                if (srcPts.size() >= static_cast<size_t>(m_config->minMatchCount())) {
+                                    cv::Mat frameH = cv::findHomography(srcPts, dstPts, cv::RANSAC, m_config->ransacThreshold());
+                                    if (!frameH.empty() && frameH.rows == 3 && frameH.cols == 3) {
+                                        cv::Mat combined = frameH * m_baseHomography;
+                                        auto& bb = m_ibomProject->boardInfo.boardBBox;
+                                        std::vector<cv::Point2f> pcbCorners = {
+                                            {static_cast<float>(bb.minX), static_cast<float>(bb.minY)},
+                                            {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)},
+                                            {static_cast<float>(bb.maxX), static_cast<float>(bb.maxY)},
+                                            {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
+                                        };
+                                        std::vector<cv::Point2f> imgCorners;
+                                        cv::perspectiveTransform(pcbCorners, imgCorners, combined);
+                                        m_homography->compute(pcbCorners, imgCorners);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (const cv::Exception& e) {
+                        spdlog::warn("Live tracking frame error: {}", e.what());
+                    }
+                }
+            }
+        }
+
         // Convert to RGB for QImage
         cv::Mat rgb;
         if (processed.channels() == 3)
@@ -217,45 +304,140 @@ void Application::connectSignals()
             QPainter painter(&overlay);
             painter.setRenderHint(QPainter::Antialiasing, true);
 
-            // Let the overlay renderer draw components on the transparent layer
+            // Draw component pads, silkscreen outlines, and labels
+            const bool drawPads = m_config->showPads();
+            const bool drawSilk = m_config->showSilkscreen();
+            const bool drawFab  = m_config->showFabrication();
             for (const auto& comp : m_ibomProject->components) {
                 if (comp.layer != Layer::Front) continue;
-                // Transform component center through homography
-                cv::Point2f center(
-                    static_cast<float>((comp.bbox.minX + comp.bbox.maxX) / 2.0),
-                    static_cast<float>((comp.bbox.minY + comp.bbox.maxY) / 2.0));
-                cv::Point2f imgPt = m_homography->pcbToImage(center);
 
                 bool isSelected = (comp.reference == m_selectedRef);
-                QColor color = isSelected ? QColor(255, 200, 0) : QColor(100, 200, 100, 180);
+                QColor padColor = isSelected ? QColor(255, 200, 0, 200) : QColor(180, 160, 80, 180);
+                QColor silkColor = isSelected ? QColor(255, 255, 100, 220) : QColor(170, 170, 68, 180);
 
-                // Draw component rect
-                auto corners = m_homography->transformRect(
-                    static_cast<float>(comp.bbox.minX),
-                    static_cast<float>(comp.bbox.minY),
-                    static_cast<float>(comp.bbox.maxX - comp.bbox.minX),
-                    static_cast<float>(comp.bbox.maxY - comp.bbox.minY));
+                // ── Draw pads ──
+                if (drawPads) {
+                for (const auto& pad : comp.pads) {
+                    cv::Point2f padCenter(
+                        static_cast<float>(pad.position.x),
+                        static_cast<float>(pad.position.y));
+                    cv::Point2f imgPad = m_homography->pcbToImage(padCenter);
 
-                if (corners.size() == 4) {
-                    QPolygonF poly;
-                    for (auto& c : corners)
-                        poly << QPointF(c.x, c.y);
+                    // Transform pad size: map a rect at pad position
+                    auto padCorners = m_homography->transformRect(
+                        static_cast<float>(pad.position.x - pad.sizeX / 2.0),
+                        static_cast<float>(pad.position.y - pad.sizeY / 2.0),
+                        static_cast<float>(pad.sizeX),
+                        static_cast<float>(pad.sizeY));
 
-                    painter.setPen(QPen(color, isSelected ? 3 : 2));
-                    QColor fill = color;
-                    fill.setAlphaF(isSelected ? 0.3f : 0.1f);
-                    painter.setBrush(fill);
-                    painter.drawPolygon(poly);
+                    if (padCorners.size() == 4) {
+                        QPolygonF padPoly;
+                        for (auto& c : padCorners)
+                            padPoly << QPointF(c.x, c.y);
 
-                    // Draw label
-                    painter.setPen(Qt::white);
-                    painter.setFont(QFont("Segoe UI", 8, QFont::Bold));
-                    painter.drawText(QPointF(imgPt.x, imgPt.y - 5),
-                                     QString::fromStdString(comp.reference));
+                        painter.setPen(Qt::NoPen);
+                        painter.setBrush(padColor);
+
+                        if (pad.shape == Pad::Shape::Circle || pad.shape == Pad::Shape::Oval) {
+                            painter.drawEllipse(padPoly.boundingRect());
+                        } else {
+                            painter.drawPolygon(padPoly);
+                        }
+                    }
                 }
+                } // drawPads
+
+                // ── Draw silkscreen / drawings ──
+                if (drawSilk) {
+                painter.setBrush(Qt::NoBrush);
+                for (const auto& seg : comp.drawings) {
+                    if (seg.type == DrawingSegment::Type::Line) {
+                        cv::Point2f s = m_homography->pcbToImage(
+                            cv::Point2f(static_cast<float>(seg.start.x), static_cast<float>(seg.start.y)));
+                        cv::Point2f e = m_homography->pcbToImage(
+                            cv::Point2f(static_cast<float>(seg.end.x), static_cast<float>(seg.end.y)));
+                        painter.setPen(QPen(silkColor, 1.0));
+                        painter.drawLine(QPointF(s.x, s.y), QPointF(e.x, e.y));
+
+                    } else if (seg.type == DrawingSegment::Type::Rect) {
+                        auto rc = m_homography->transformRect(
+                            static_cast<float>(std::min(seg.start.x, seg.end.x)),
+                            static_cast<float>(std::min(seg.start.y, seg.end.y)),
+                            static_cast<float>(std::abs(seg.end.x - seg.start.x)),
+                            static_cast<float>(std::abs(seg.end.y - seg.start.y)));
+                        if (rc.size() == 4) {
+                            QPolygonF rp;
+                            for (auto& c : rc) rp << QPointF(c.x, c.y);
+                            painter.setPen(QPen(silkColor, 1.0));
+                            painter.drawPolygon(rp);
+                        }
+
+                    } else if (seg.type == DrawingSegment::Type::Circle) {
+                        cv::Point2f c = m_homography->pcbToImage(
+                            cv::Point2f(static_cast<float>(seg.start.x), static_cast<float>(seg.start.y)));
+                        // Approximate radius in image space
+                        cv::Point2f edge = m_homography->pcbToImage(
+                            cv::Point2f(static_cast<float>(seg.start.x + seg.radius),
+                                        static_cast<float>(seg.start.y)));
+                        float r = std::hypot(edge.x - c.x, edge.y - c.y);
+                        painter.setPen(QPen(silkColor, 1.0));
+                        painter.drawEllipse(QPointF(c.x, c.y), static_cast<qreal>(r), static_cast<qreal>(r));
+
+                    } else if (seg.type == DrawingSegment::Type::Polygon && !seg.points.empty()) {
+                        QPolygonF polyPts;
+                        for (const auto& pt : seg.points) {
+                            cv::Point2f ip = m_homography->pcbToImage(
+                                cv::Point2f(static_cast<float>(pt.x), static_cast<float>(pt.y)));
+                            polyPts << QPointF(ip.x, ip.y);
+                        }
+                        painter.setPen(QPen(silkColor, 1.0));
+                        painter.drawPolygon(polyPts);
+                    }
+                }
+                } // drawSilk
+
+                // ── Draw reference label ──
+                if (drawSilk || isSelected) {
+                cv::Point2f bboxCenter(
+                    static_cast<float>((comp.bbox.minX + comp.bbox.maxX) / 2.0),
+                    static_cast<float>((comp.bbox.minY + comp.bbox.maxY) / 2.0));
+                cv::Point2f imgPt = m_homography->pcbToImage(bboxCenter);
+                painter.setPen(isSelected ? QColor(255, 255, 200) : QColor(68, 170, 170, 200));
+                painter.setFont(QFont("Segoe UI", 7));
+                painter.drawText(QPointF(imgPt.x, imgPt.y - 3),
+                                 QString::fromStdString(comp.reference));
+                } // drawSilk || isSelected
             }
             painter.end();
             m_mainWindow->cameraView()->setOverlayImage(overlay);
+        }
+
+        // Draw alignment point picking visual feedback
+        if (m_pickingHomographyPoints && !m_homographyImagePoints.empty()) {
+            QImage pickOverlay(rgb.cols, rgb.rows, QImage::Format_ARGB32_Premultiplied);
+            pickOverlay.fill(Qt::transparent);
+            QPainter pickPainter(&pickOverlay);
+            pickPainter.setRenderHint(QPainter::Antialiasing, true);
+            pickPainter.setPen(QPen(QColor(255, 50, 50), 2));
+            pickPainter.setBrush(QColor(255, 50, 50, 100));
+            for (const auto& pt : m_homographyImagePoints) {
+                pickPainter.drawEllipse(QPointF(pt.x, pt.y), 8, 8);
+            }
+            // Draw lines between consecutive points
+            if (m_homographyImagePoints.size() >= 2) {
+                QPen linePen(QColor(255, 100, 100, 180), 1, Qt::DashLine);
+                pickPainter.setPen(linePen);
+                for (size_t i = 1; i < m_homographyImagePoints.size(); ++i) {
+                    pickPainter.drawLine(
+                        QPointF(m_homographyImagePoints[i-1].x, m_homographyImagePoints[i-1].y),
+                        QPointF(m_homographyImagePoints[i].x, m_homographyImagePoints[i].y));
+                }
+            }
+            pickPainter.end();
+            // Merge with existing overlay or set directly
+            if (!m_ibomProject || !m_homography || !m_homography->isValid()) {
+                m_mainWindow->cameraView()->setOverlayImage(pickOverlay);
+            }
         }
 
         // Calibration image collection — capture one image per K press
@@ -278,16 +460,25 @@ void Application::connectSignals()
 
     // ── Overlay opacity ─────────────────────────────────────────
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::overlayOpacityChanged,
-            m_mainWindow->cameraView(), &gui::CameraView::setOverlayOpacity);
+            this, [this](float opacity) {
+        m_config->setOverlayOpacity(opacity);
+        m_mainWindow->cameraView()->setOverlayOpacity(opacity);
+    });
 
     // ── Overlay visibility from control panel ───────────────────
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::showPadsChanged,
             this, [this](bool show) {
+        m_config->setShowPads(show);
         if (m_overlayRenderer) m_overlayRenderer->setShowPads(show);
     });
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::showSilkscreenChanged,
             this, [this](bool show) {
+        m_config->setShowSilkscreen(show);
         if (m_overlayRenderer) m_overlayRenderer->setShowLabels(show);
+    });
+    connect(m_mainWindow->controlPanel(), &gui::ControlPanel::showFabricationChanged,
+            this, [this](bool show) {
+        m_config->setShowFabrication(show);
     });
 
     // ── iBOM file loading ───────────────────────────────────────
@@ -382,6 +573,167 @@ void Application::connectSignals()
             sp->setFps(fps);
     });
     m_fpsTimer->start(1000);
+
+    // ── Fullscreen toggle ───────────────────────────────────────
+    connect(m_mainWindow.get(), &gui::MainWindow::fullscreenToggled,
+            this, [this](bool fs) {
+        if (fs)
+            m_mainWindow->showFullScreen();
+        else
+            m_mainWindow->showNormal();
+    });
+
+    // ── Settings changed ────────────────────────────────────────
+    connect(m_mainWindow.get(), &gui::MainWindow::settingsChanged,
+            this, [this]() {
+        // Recreate ORB detector with updated keypoint count
+        m_featureDetector = cv::ORB::create(m_config->orbKeypoints());
+        // Reset reference frame so next tracking cycle recomputes
+        m_referenceFrame = cv::Mat();
+        spdlog::info("Settings applied (ORB={}, interval={}ms, RANSAC={:.1f})",
+                     m_config->orbKeypoints(), m_config->trackingIntervalMs(),
+                     m_config->ransacThreshold());
+    });
+
+    // ── Heatmap toggle ──────────────────────────────────────────
+    connect(m_mainWindow->controlPanel(), &gui::ControlPanel::showHeatmapChanged,
+            this, [this](bool show) {
+        m_showHeatmap = show;
+        spdlog::info("Heatmap overlay {}", show ? "enabled" : "disabled");
+    });
+
+    // ── InspectionWizard wiring ─────────────────────────────────
+    auto* wizard = m_mainWindow->inspectionWizard();
+    if (wizard) {
+        connect(wizard, &gui::InspectionWizard::inspectionStarted,
+                this, [this](const QStringList& refs) {
+            spdlog::info("Inspection started with {} components", refs.size());
+            m_mainWindow->updateStatusMessage(
+                tr("Inspection running — %1 components").arg(refs.size()));
+        });
+
+        connect(wizard, &gui::InspectionWizard::inspectionCancelled,
+                this, [this]() {
+            spdlog::info("Inspection cancelled by user");
+            m_mainWindow->updateStatusMessage(tr("Inspection cancelled"));
+        });
+
+        connect(wizard, &gui::InspectionWizard::inspectionFinished,
+                this, [this]() {
+            spdlog::info("Inspection finished");
+            m_mainWindow->updateStatusMessage(tr("Inspection complete"));
+        });
+
+        connect(wizard, &gui::InspectionWizard::componentNavigated,
+                this, [this](const std::string& ref) {
+            m_selectedRef = ref;
+            if (m_overlayRenderer)
+                m_overlayRenderer->setHighlightedRefs({ref});
+            spdlog::info("Navigate to component: {}", ref);
+        });
+    }
+
+    // ── Manual Homography — point picking ───────────────────────
+    connect(m_mainWindow->controlPanel(), &gui::ControlPanel::alignHomographyRequested,
+            this, [this]() {
+        if (!m_ibomProject) {
+            QMessageBox::information(m_mainWindow.get(), tr("Alignment"),
+                tr("Load an iBOM file first before setting alignment points."));
+            return;
+        }
+        if (!m_camera->isCapturing()) {
+            QMessageBox::information(m_mainWindow.get(), tr("Alignment"),
+                tr("Start the camera first before setting alignment points."));
+            return;
+        }
+        m_pickingHomographyPoints = true;
+        m_homographyImagePoints.clear();
+        m_mainWindow->updateStatusMessage(
+            tr("Click the TOP-LEFT corner of the PCB in the camera image (1/4)"));
+        spdlog::info("Manual homography: point picking started");
+    });
+
+    connect(m_mainWindow->cameraView(), &gui::CameraView::clicked,
+            this, [this](QPointF imagePos) {
+        if (!m_pickingHomographyPoints) return;
+
+        m_homographyImagePoints.push_back(
+            cv::Point2f(static_cast<float>(imagePos.x()),
+                        static_cast<float>(imagePos.y())));
+
+        int n = static_cast<int>(m_homographyImagePoints.size());
+        static const char* labels[] = {"TOP-LEFT", "TOP-RIGHT", "BOTTOM-RIGHT", "BOTTOM-LEFT"};
+
+        if (n < 4) {
+            m_mainWindow->updateStatusMessage(
+                tr("Click the %1 corner of the PCB in the camera image (%2/4)")
+                .arg(labels[n]).arg(n + 1));
+            spdlog::info("Manual homography: point {}/4 at ({:.0f}, {:.0f})",
+                         n, imagePos.x(), imagePos.y());
+        } else {
+            m_pickingHomographyPoints = false;
+            spdlog::info("Manual homography: point 4/4 at ({:.0f}, {:.0f})",
+                         imagePos.x(), imagePos.y());
+
+            // Compute homography: PCB board corners → clicked image points
+            auto& bb = m_ibomProject->boardInfo.boardBBox;
+            std::vector<cv::Point2f> pcbPts = {
+                {static_cast<float>(bb.minX), static_cast<float>(bb.minY)},  // TL
+                {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)},  // TR
+                {static_cast<float>(bb.maxX), static_cast<float>(bb.maxY)},  // BR
+                {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}   // BL
+            };
+
+            if (m_homography->compute(pcbPts, m_homographyImagePoints)) {
+                m_overlayRenderer->setHomography(*m_homography);
+                spdlog::info("Manual homography computed successfully (error={:.3f}px)",
+                             m_homography->reprojectionError());
+                m_mainWindow->updateStatusMessage(
+                    tr("Alignment set — reprojection error: %1 px")
+                    .arg(m_homography->reprojectionError(), 0, 'f', 3));
+                // Reset live mode reference if active
+                m_referenceFrame = cv::Mat();
+            } else {
+                spdlog::error("Manual homography computation failed");
+                m_mainWindow->updateStatusMessage(tr("Alignment failed — try again"));
+                QMessageBox::warning(m_mainWindow.get(), tr("Alignment Failed"),
+                    tr("Could not compute homography from the selected points.\n"
+                       "Make sure you click the 4 corners in order: TL, TR, BR, BL."));
+            }
+            m_homographyImagePoints.clear();
+        }
+    });
+
+    // ── Live Tracking Mode ──────────────────────────────────────
+    connect(m_mainWindow->controlPanel(), &gui::ControlPanel::liveModeChanged,
+            this, [this](bool enabled) {
+        m_liveMode = enabled;
+        if (enabled) {
+            if (!m_homography->isValid()) {
+                QMessageBox::information(m_mainWindow.get(), tr("Live Mode"),
+                    tr("Set alignment points or load an iBOM file first."));
+                m_liveMode = false;
+                return;
+            }
+            // Store the current homography as base
+            m_baseHomography = m_homography->matrix().clone();
+            // Reference frame will be captured on next frame
+            m_referenceFrame = cv::Mat();
+            spdlog::info("Live tracking mode enabled");
+            m_mainWindow->updateStatusMessage(tr("Live tracking mode ON"));
+        } else {
+            // Restore base homography
+            if (!m_baseHomography.empty()) {
+                // Recompute from base
+                m_homography->load(""); // reset
+                // Re-apply base by using existing PCB→image mapping
+            }
+            m_referenceFrame = cv::Mat();
+            spdlog::info("Live tracking mode disabled");
+            m_mainWindow->updateStatusMessage(tr("Live tracking mode OFF"));
+        }
+    });
+
     spdlog::info("Signal/slot connections established, FPS timer started.");
 }
 

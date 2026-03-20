@@ -76,6 +76,22 @@ public:
     int remoteViewPort() const { return m_remoteViewPort; }
     void setRemoteViewPort(int port) { m_remoteViewPort = port; }
 
+    // --- Live Tracking ---
+    int  trackingIntervalMs() const { return m_trackingIntervalMs; }
+    void setTrackingIntervalMs(int ms) { m_trackingIntervalMs = ms; }
+
+    int  orbKeypoints() const { return m_orbKeypoints; }
+    void setOrbKeypoints(int n) { m_orbKeypoints = n; }
+
+    int  minMatchCount() const { return m_minMatchCount; }
+    void setMinMatchCount(int n) { m_minMatchCount = n; }
+
+    double matchDistanceRatio() const { return m_matchDistanceRatio; }
+    void setMatchDistanceRatio(double r) { m_matchDistanceRatio = r; }
+
+    double ransacThreshold() const { return m_ransacThreshold; }
+    void setRansacThreshold(double t) { m_ransacThreshold = t; }
+
     // --- Checkboxes (BOM tracking) ---
     const std::vector<std::string>& checkboxColumns() const { return m_checkboxColumns; }
     void setCheckboxColumns(const std::vector<std::string>& cols) { m_checkboxColumns = cols; }
@@ -108,6 +124,13 @@ private:
     bool m_voiceControl    = false;
     bool m_remoteView      = false;
     int  m_remoteViewPort  = 8080;
+
+    // Live Tracking
+    int    m_trackingIntervalMs = 200;
+    int    m_orbKeypoints       = 500;
+    int    m_minMatchCount      = 8;
+    double m_matchDistanceRatio = 2.0;
+    double m_ransacThreshold    = 3.0;
 
     // BOM
     std::vector<std::string> m_checkboxColumns = {"Sourced", "Placed"};

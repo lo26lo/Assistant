@@ -247,6 +247,12 @@ void CameraView::mouseMoveEvent(QMouseEvent* event)
     emit hovered(imgPos);
 }
 
+void CameraView::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton)
+        emit doubleClicked();
+}
+
 void CameraView::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::MiddleButton) {

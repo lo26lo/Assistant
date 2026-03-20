@@ -163,6 +163,11 @@ QGroupBox* ControlPanel::createActionsGroup()
     connect(m_btnAlign, &QPushButton::clicked, this, &ControlPanel::alignHomographyRequested);
     layout->addWidget(m_btnAlign);
 
+    m_liveMode = new QCheckBox(tr("Live Tracking Mode"));
+    m_liveMode->setToolTip(tr("Track PCB movement in real-time using feature matching"));
+    connect(m_liveMode, &QCheckBox::toggled, this, &ControlPanel::liveModeChanged);
+    layout->addWidget(m_liveMode);
+
     return group;
 }
 

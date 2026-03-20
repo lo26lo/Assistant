@@ -1,6 +1,6 @@
 # 🔄 Fichier de Reprise de Session — MicroscopeIBOM
 
-> Mis à jour le 19 mars 2026 (fin d'après-midi)
+> Mis à jour le 20 mars 2026
 
 ---
 
@@ -11,43 +11,44 @@
 | build_windows.bat | ✅ Tous les bugs corrigés |
 | CMake 4.2.3 | ✅ Installé (winget) |
 | Générateur CMake | ✅ **NMake Makefiles** (Ninja a un bug rules.ninja) |
-| Ninja 1.12.1 | ⚠️ Présent mais inutilisable (bug CMake 4.2.3) |
 | VS Build Tools 2022 v17.14 | ✅ Installé |
 | vcpkg | ✅ Installé et non-shallow |
 | Qt 6.8.2 msvc2022_64 | ✅ Installé |
 | CUDA 13.2 | ✅ Installé |
 | cuDNN 9.20.0 | ✅ Installé + copié dans CUDA dir |
 | TensorRT 10.15.1.29 | ✅ Extrait + détecté par CMake |
-| vcpkg.json | ✅ Corrigé |
-| onnxruntime portfile | ✅ Patché (5 patches actifs) |
-| vcpkg triplet | ✅ Clean (stock) |
 | **Tous packages vcpkg** | ✅ **INSTALLÉS** |
 | **CMake configure projet** | ✅ **RÉUSSI** (NMake Makefiles) |
-| **MicroscopeIBOM.exe** | ✅ **COMPILÉ ET LINKÉ (736 KB)** |
+| **MicroscopeIBOM.exe** | ✅ **COMPILÉ ET LINKÉ** |
 | **Tests (4/4)** | ✅ **100% PASSÉS** |
-| **Exécution** | ✅ **App stable** (crash ACCESS_VIOLATION résolu) |
+| **Exécution** | ✅ **App stable** |
 
-**Le projet compile, les tests passent, et l'app se lance correctement.** Prochaine étape : validation visuelle GUI + test caméra.
-
-### Travail en cours (session après-midi)
+### Travail session 20 mars 2026
 
 | Tâche | État |
 |-------|------|
-| Réécriture CSS dark/light theme | ✅ Appliquée (à valider visuellement) |
-| Fix caméra (cv::Mat metatype + signal connect) | ✅ Appliquée (à valider en runtime) |
-| CameraView placeholder amélioré | ✅ Appliquée |
-| FPS timer + tracking | ✅ Appliquée |
-| Fix crash ACCESS_VIOLATION | ✅ **RÉSOLU** |
+| Settings dialog (4 onglets Camera/Overlay/Tracking/AI) | ✅ |
+| Config tracking params (ORB, throttle, RANSAC, min matches) | ✅ |
+| Camera fullscreen (double-clic + Escape) | ✅ |
+| Overlay toggles fix (Show Pads/Silk/Fab → rendu conditionnel) | ✅ |
+| showFabricationChanged wiring (signal était non connecté) | ✅ |
+| Hardcoded values → Config reads dans Application.cpp | ✅ |
+| settingsChanged signal → recreate ORB detector | ✅ |
 
-### Fichiers modifiés cette session (19 mars après-midi)
+### Fichiers modifiés session 20 mars
 
 | Fichier | Modifications |
 |---------|---------------|
-| `src/app/Application.cpp` | `Q_DECLARE_METATYPE(cv::Mat)`, `qRegisterMetaType`, connexion cameraSettingsChanged, FPS timer, suppression double setupLogging + flush_every(0) |
-| `src/app/Application.h` | Ajout `QTimer*`, `atomic<int>` pour FPS |
-| `src/gui/MainWindow.cpp` | Réécriture complète dark+light stylesheets |
-| `src/gui/ControlPanel.cpp` | Spacing/margins améliorés |
-| `src/gui/CameraView.cpp` | Nouveau placeholder dégradé + icône caméra |
+| `src/app/Config.h` | +5 params tracking (trackingIntervalMs, orbKeypoints, minMatchCount, matchDistanceRatio, ransacThreshold) |
+| `src/app/Config.cpp` | Load/save section "tracking" JSON |
+| `src/gui/SettingsDialog.h` | NOUVEAU — QDialog 4 onglets |
+| `src/gui/SettingsDialog.cpp` | NOUVEAU — formulaires, load/save Config |
+| `src/gui/MainWindow.h` | +settingsChanged signal, +m_cameraFullscreen, +toggleCameraFullscreen() |
+| `src/gui/MainWindow.cpp` | onShowSettings() impl, toggleCameraFullscreen(), double-clic connect |
+| `src/gui/CameraView.h` | +doubleClicked signal, +mouseDoubleClickEvent |
+| `src/gui/CameraView.cpp` | mouseDoubleClickEvent impl |
+| `src/app/Application.cpp` | Config reads, settingsChanged handler, overlay toggles conditionnels, showFabricationChanged |
+| `CMakeLists.txt` | +SettingsDialog.h/.cpp |
 | `src/gui/StatsPanel.cpp` | Margins améliorés |
 
 ---

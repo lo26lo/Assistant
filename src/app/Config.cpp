@@ -83,6 +83,16 @@ bool Config::load(const std::string& path)
             m_remoteViewPort = feat.value("remote_view_port", m_remoteViewPort);
         }
 
+        // Tracking
+        if (j.contains("tracking")) {
+            auto& trk = j["tracking"];
+            m_trackingIntervalMs = trk.value("interval_ms", m_trackingIntervalMs);
+            m_orbKeypoints       = trk.value("orb_keypoints", m_orbKeypoints);
+            m_minMatchCount      = trk.value("min_matches", m_minMatchCount);
+            m_matchDistanceRatio = trk.value("match_distance_ratio", m_matchDistanceRatio);
+            m_ransacThreshold    = trk.value("ransac_threshold", m_ransacThreshold);
+        }
+
         // BOM
         if (j.contains("bom") && j["bom"].contains("checkbox_columns")) {
             m_checkboxColumns = j["bom"]["checkbox_columns"]
@@ -137,6 +147,15 @@ bool Config::save(const std::string& path) const
             {"voice_control",    m_voiceControl},
             {"remote_view",      m_remoteView},
             {"remote_view_port", m_remoteViewPort}
+        };
+
+        // Tracking
+        j["tracking"] = {
+            {"interval_ms",          m_trackingIntervalMs},
+            {"orb_keypoints",        m_orbKeypoints},
+            {"min_matches",          m_minMatchCount},
+            {"match_distance_ratio", m_matchDistanceRatio},
+            {"ransac_threshold",     m_ransacThreshold}
         };
 
         // BOM

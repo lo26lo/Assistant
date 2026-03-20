@@ -45,6 +45,7 @@ signals:
     void cameraSettingsChanged(int index, int w, int h, int fps);
     void recalibrateRequested();
     void alignHomographyRequested();
+    void liveModeChanged(bool enabled);
 
 private:
     void buildUI();
@@ -74,6 +75,7 @@ private:
     // Action buttons
     QPushButton* m_btnCalibrate = nullptr;
     QPushButton* m_btnAlign     = nullptr;
+    QCheckBox*   m_liveMode     = nullptr;
 };
 
 } // namespace ibom::gui

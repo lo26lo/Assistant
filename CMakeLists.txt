@@ -57,6 +57,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     MultimediaWidgets
     WebSockets
     Concurrent
+    PrintSupport
 )
 
 # OpenCV
@@ -138,6 +139,7 @@ set(SOURCES
     src/gui/ControlPanel.cpp
     src/gui/InspectionWizard.cpp
     src/gui/StatsPanel.cpp
+    src/gui/SettingsDialog.cpp
 
     # Features
     src/features/PickAndPlace.cpp
@@ -193,6 +195,7 @@ set(HEADERS
     src/gui/ControlPanel.h
     src/gui/InspectionWizard.h
     src/gui/StatsPanel.h
+    src/gui/SettingsDialog.h
 
     # Features
     src/features/PickAndPlace.h
@@ -247,6 +250,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::MultimediaWidgets
     Qt6::WebSockets
     Qt6::Concurrent
+    Qt6::PrintSupport
 
     # OpenCV
     ${OpenCV_LIBS}

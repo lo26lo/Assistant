@@ -30,6 +30,7 @@ public:
 signals:
     void clicked(QPointF imagePos);
     void rightClicked(QPointF imagePos);
+    void doubleClicked();
     void hovered(QPointF imagePos);
     void zoomChanged(float zoom);
     void measurePoint(QPointF imagePos);
@@ -38,6 +39,7 @@ protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;

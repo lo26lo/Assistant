@@ -3,9 +3,11 @@
 #include <QApplication>
 #include <QTimer>
 #include <opencv2/core.hpp>
+#include <opencv2/features2d.hpp>
 #include <memory>
 #include <string>
 #include <atomic>
+#include <chrono>
 
 namespace ibom {
 
@@ -30,6 +32,7 @@ class ModelManager;
 namespace overlay {
 class OverlayRenderer;
 class Homography;
+class HeatmapRenderer;
 }
 
 /**
@@ -82,6 +85,7 @@ private:
     // Overlay rendering
     std::unique_ptr<overlay::OverlayRenderer>  m_overlayRenderer;
     std::unique_ptr<overlay::Homography>       m_homography;
+    std::unique_ptr<overlay::HeatmapRenderer>  m_heatmapRenderer;
 
     // Camera calibration
     std::unique_ptr<camera::CameraCalibration> m_calibration;
@@ -96,6 +100,23 @@ private:
 
     // Selected component ref for overlay highlight
     std::string m_selectedRef;
+
+    // Heatmap visibility
+    bool m_showHeatmap = false;
+
+    // Manual homography point picking
+    bool m_pickingHomographyPoints = false;
+    std::vector<cv::Point2f> m_homographyImagePoints;
+
+    // Live tracking mode
+    bool    m_liveMode = false;
+    cv::Mat m_referenceFrame;
+    std::vector<cv::KeyPoint> m_refKeypoints;
+    cv::Mat m_refDescriptors;
+    cv::Ptr<cv::Feature2D> m_featureDetector;
+    cv::Ptr<cv::DescriptorMatcher> m_featureMatcher;
+    cv::Mat m_baseHomography;  // Original homography before live tracking
+    std::chrono::steady_clock::time_point m_lastTrackingTime;
 };
 
 } // namespace ibom

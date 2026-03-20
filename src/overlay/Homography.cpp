@@ -3,6 +3,7 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
+#include <chrono>
 
 namespace ibom::overlay {
 
@@ -30,7 +31,6 @@ bool Homography::compute(const std::vector<cv::Point2f>& pcbPoints,
 
     // Count inliers
     int inliers = cv::countNonZero(inliersMask);
-    spdlog::info("Homography computed: {}/{} inliers", inliers, pcbPoints.size());
 
     // Compute reprojection error
     m_reprojError = 0.0;
@@ -41,7 +41,13 @@ bool Homography::compute(const std::vector<cv::Point2f>& pcbPoints,
     }
     m_reprojError /= projected.size();
 
-    spdlog::info("Homography reprojection error: {:.3f} px", m_reprojError);
+    // Only log when not called in a tight loop (>1s since last log)
+    static auto lastLogTime = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastLogTime).count() > 1000) {
+        spdlog::info("Homography computed: {}/{} inliers, error: {:.3f} px", inliers, pcbPoints.size(), m_reprojError);
+        lastLogTime = now;
+    }
 
     m_valid = true;
     return true;

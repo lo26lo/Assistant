@@ -4,6 +4,7 @@
 #include "ControlPanel.h"
 #include "InspectionWizard.h"
 #include "StatsPanel.h"
+#include "SettingsDialog.h"
 #include "../app/Application.h"
 #include "../app/Config.h"
 
@@ -18,6 +19,9 @@
 #include <QSettings>
 #include <QScreen>
 #include <QShortcut>
+#include <QPainter>
+#include <QPrintDialog>
+#include <QPrinter>
 #include <spdlog/spdlog.h>
 
 namespace ibom::gui {
@@ -47,6 +51,11 @@ MainWindow::MainWindow(Application* app, QWidget* parent)
         applyDarkStylesheet();
     else
         applyLightStylesheet();
+
+    // Double-click camera view → camera-only fullscreen
+    connect(m_cameraView, &CameraView::doubleClicked, this, [this]() {
+        toggleCameraFullscreen(!m_cameraFullscreen);
+    });
 
     spdlog::info("MainWindow initialized");
 }
@@ -134,6 +143,10 @@ void MainWindow::createMenuBar()
     auto* cameraMenu = menuBar()->addMenu(tr("&Camera"));
     cameraMenu->addAction(m_actToggleCam);
     cameraMenu->addAction(m_actCalibrate);
+    cameraMenu->addSeparator();
+    auto* actGenBoard = cameraMenu->addAction(tr("Generate Checkerboard..."));
+    actGenBoard->setToolTip(tr("Generate a printable 9x6 checkerboard for camera calibration"));
+    connect(actGenBoard, &QAction::triggered, this, &MainWindow::onGenerateCheckerboard);
 
     auto* inspectMenu = menuBar()->addMenu(tr("&Inspection"));
     inspectMenu->addAction(m_actInspect);
@@ -258,8 +271,11 @@ void MainWindow::onToggleFullscreen()
 
 void MainWindow::onShowSettings()
 {
-    // TODO: Open a settings dialog
-    spdlog::info("Settings dialog requested");
+    SettingsDialog dlg(m_app->config(), this);
+    if (dlg.exec() == QDialog::Accepted) {
+        spdlog::info("Settings saved");
+        emit settingsChanged();
+    }
 }
 
 void MainWindow::onShowAbout()
@@ -296,6 +312,99 @@ void MainWindow::onExportReport()
     }
 }
 
+void MainWindow::onGenerateCheckerboard()
+{
+    // 9x6 inner corners = 10x7 squares
+    const int cols = 10;
+    const int rows = 7;
+    const int squarePx = 100; // pixels per square at 300 DPI ≈ ~8.5mm
+    const int margin = squarePx;
+
+    int imgW = cols * squarePx + 2 * margin;
+    int imgH = rows * squarePx + 2 * margin;
+
+    QImage img(imgW, imgH, QImage::Format_RGB32);
+    img.fill(Qt::white);
+
+    QPainter painter(&img);
+    painter.setPen(Qt::NoPen);
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            if ((r + c) % 2 == 0) {
+                painter.setBrush(Qt::black);
+                painter.drawRect(margin + c * squarePx, margin + r * squarePx, squarePx, squarePx);
+            }
+        }
+    }
+
+    // Draw title and info
+    painter.setPen(Qt::black);
+    painter.setFont(QFont("Segoe UI", 10));
+    painter.drawText(margin, margin - 10,
+        tr("Checkerboard 9x6 inner corners — Print at 100% scale (no fit-to-page)"));
+    painter.end();
+
+    // Ask user: Save as image or Print directly
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle(tr("Generate Checkerboard"));
+    msgBox.setText(tr("Checkerboard pattern generated (9x6 inner corners).\n"
+                      "How would you like to output it?"));
+    auto* btnSave  = msgBox.addButton(tr("Save as Image..."), QMessageBox::ActionRole);
+    auto* btnPrint = msgBox.addButton(tr("Print..."), QMessageBox::ActionRole);
+    msgBox.addButton(QMessageBox::Cancel);
+    msgBox.exec();
+
+    if (msgBox.clickedButton() == btnSave) {
+        QString path = QFileDialog::getSaveFileName(
+            this, tr("Save Checkerboard"), "checkerboard_9x6.png",
+            tr("PNG Image (*.png);;JPEG Image (*.jpg);;BMP Image (*.bmp)"));
+        if (!path.isEmpty()) {
+            // Save at 300 DPI for printing
+            QImage hiRes(imgW * 3, imgH * 3, QImage::Format_RGB32);
+            hiRes.fill(Qt::white);
+            QPainter hp(&hiRes);
+            hp.setPen(Qt::NoPen);
+            int sq3 = squarePx * 3;
+            int mg3 = margin * 3;
+            for (int r = 0; r < rows; ++r) {
+                for (int c = 0; c < cols; ++c) {
+                    if ((r + c) % 2 == 0) {
+                        hp.setBrush(Qt::black);
+                        hp.drawRect(mg3 + c * sq3, mg3 + r * sq3, sq3, sq3);
+                    }
+                }
+            }
+            hp.setPen(Qt::black);
+            hp.setFont(QFont("Segoe UI", 24));
+            hp.drawText(mg3, mg3 - 20,
+                tr("Checkerboard 9x6 inner corners — Print at 100%% scale"));
+            hp.end();
+            hiRes.setDotsPerMeterX(11811); // 300 DPI
+            hiRes.setDotsPerMeterY(11811);
+            hiRes.save(path);
+            spdlog::info("Checkerboard saved to: {}", path.toStdString());
+            updateStatusMessage(tr("Checkerboard saved: %1").arg(QFileInfo(path).fileName()));
+        }
+    } else if (msgBox.clickedButton() == btnPrint) {
+        QPrinter printer(QPrinter::HighResolution);
+        printer.setPageSize(QPageSize::A4);
+        QPrintDialog dlg(&printer, this);
+        if (dlg.exec() == QDialog::Accepted) {
+            QPainter pp(&printer);
+            // Scale to fit page with correct aspect ratio
+            QRect pageRect = printer.pageRect(QPrinter::DevicePixel).toRect();
+            double scale = std::min(
+                static_cast<double>(pageRect.width()) / imgW,
+                static_cast<double>(pageRect.height()) / imgH);
+            pp.scale(scale, scale);
+            pp.drawImage(0, 0, img);
+            pp.end();
+            spdlog::info("Checkerboard printed");
+            updateStatusMessage(tr("Checkerboard printed"));
+        }
+    }
+}
+
 // ── Protected ────────────────────────────────────────────────────
 
 void MainWindow::closeEvent(QCloseEvent* event)
@@ -306,11 +415,38 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
 void MainWindow::keyPressEvent(QKeyEvent* event)
 {
-    if (event->key() == Qt::Key_Escape && isFullScreen()) {
-        showNormal();
-        m_actFullscreen->setChecked(false);
+    if (event->key() == Qt::Key_Escape) {
+        if (m_cameraFullscreen) {
+            toggleCameraFullscreen(false);
+            return;
+        }
+        if (isFullScreen()) {
+            showNormal();
+            m_actFullscreen->setChecked(false);
+        }
     }
     QMainWindow::keyPressEvent(event);
+}
+
+void MainWindow::toggleCameraFullscreen(bool enter)
+{
+    if (enter == m_cameraFullscreen) return;
+    m_cameraFullscreen = enter;
+
+    // Hide/show all dock widgets
+    const auto docks = findChildren<QDockWidget*>();
+    for (auto* dock : docks)
+        dock->setVisible(!enter);
+
+    // Hide/show chrome
+    menuBar()->setVisible(!enter);
+    m_mainToolBar->setVisible(!enter);
+    statusBar()->setVisible(!enter);
+
+    if (enter)
+        showFullScreen();
+    else
+        showNormal();
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event)

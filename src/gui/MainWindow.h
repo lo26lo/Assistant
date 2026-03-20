@@ -44,6 +44,7 @@ signals:
     void screenshotRequested();
     void calibrationRequested();
     void fullscreenToggled(bool fs);
+    void settingsChanged();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -61,6 +62,7 @@ private slots:
     void onCalibrate();
     void onStartInspection();
     void onExportReport();
+    void onGenerateCheckerboard();
 
 private:
     void createActions();
@@ -72,6 +74,7 @@ private:
     void saveLayoutState();
     void applyDarkStylesheet();
     void applyLightStylesheet();
+    void toggleCameraFullscreen(bool enter);
 
     Application* m_app = nullptr;
 
@@ -100,6 +103,7 @@ private:
     QLabel* m_gpuLabel    = nullptr;
 
     bool m_darkMode = true;
+    bool m_cameraFullscreen = false;
 };
 
 } // namespace ibom::gui

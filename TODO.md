@@ -1,6 +1,6 @@
 # TODO — MicroscopeIBOM
 
-> Dernière mise à jour : 2026-03-19
+> Dernière mise à jour : 2026-03-20
 
 ---
 
@@ -25,24 +25,24 @@
 ### UX
 - [ ] **Placeholder CameraView** — icône caméra géométrique basique → remplacer par une vraie icône SVG
 - [ ] **InspectionWizard page Alignment** — juste un QLabel placeholder, pas de contenu réel
-- [ ] **Settings dialog** — `onShowSettings()` ne fait rien (juste un log)
+- [x] **Settings dialog** — ~~`onShowSettings()` ne fait rien~~ → SettingsDialog avec 4 onglets (Camera/Overlay/Tracking/AI)
 - [ ] **Pas de splash screen** — l'app met ~3s au démarrage (GPU warmup), afficher un splash
 - [ ] **Menu Help → About** — vérifier que le dialog est complet
+- [x] **Camera fullscreen** — double-clic CameraView → plein écran caméra seule, Escape retour
 
 ---
 
 ## 🔌 Wiring — Features non connectées
 
 ### Priorité haute (fonctionnalités core)
-- [ ] **🔴 Mode Live** — Après calibration, l'overlay suit le PCB en temps réel quand il bouge/tourne sous la caméra. Nécessite :
-  - Détection automatique du PCB dans chaque frame (contour board ou feature matching)
-  - Recalcul dynamique de l'homographie à chaque frame
-  - Support rotation + translation du PCB
-  - Interpolation/lissage pour éviter le jitter
-  - Toggle ON/OFF dans ControlPanel
-- [ ] **InspectionWizard** — signaux non connectés dans `Application.cpp`
-- [ ] **Heatmap** — `showHeatmapChanged` signal existe dans ControlPanel mais pas connecté
-- [ ] **Manual Homography** — `alignHomographyRequested` signal non connecté
+- [x] **🔴 Mode Live** — ORB feature matching + homography dynamique par frame, toggle "Live Tracking Mode" dans ControlPanel
+  - [x] Toggle ON/OFF dans ControlPanel
+  - [x] Détection features ORB, matching BFMatcher, RANSAC homography
+  - [x] Composition homography (base PCB→ref_image × ref_image→current)
+  - [ ] Interpolation/lissage pour éviter le jitter (amélioration future)
+- [x] **InspectionWizard** — 4 signaux connectés (started, cancelled, finished, componentNavigated)
+- [x] **Heatmap** — `showHeatmapChanged` → toggle `m_showHeatmap`, HeatmapRenderer instancié
+- [x] **Manual Homography** — workflow point-picking : clic 4 coins PCB sur image caméra → compute homography
 
 ### Priorité moyenne (AI pipeline)
 - [ ] **InferenceEngine** — pipeline complète non wired (besoin modèle ONNX)
