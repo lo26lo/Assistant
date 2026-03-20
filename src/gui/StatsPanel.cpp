@@ -1,4 +1,5 @@
 #include "StatsPanel.h"
+#include "Theme.h"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -17,8 +18,9 @@ StatsPanel::StatsPanel(QWidget* parent)
 void StatsPanel::buildUI()
 {
     auto* mainLayout = new QHBoxLayout(this);
-    mainLayout->setContentsMargins(8, 6, 8, 6);
-    mainLayout->setSpacing(8);
+    mainLayout->setContentsMargins(theme::PanelMargin, theme::PanelMargin,
+                                   theme::PanelMargin, theme::PanelMargin);
+    mainLayout->setSpacing(theme::PanelSpacing * 2);
 
     // ── Left: Progress & Counters ──
     auto* leftGroup = new QGroupBox(tr("Inspection Progress"));
@@ -37,17 +39,17 @@ void StatsPanel::buildUI()
     auto* counters = new QGridLayout;
     counters->addWidget(new QLabel(tr("Placed:")),   0, 0);
     m_placedLabel = new QLabel("0");
-    m_placedLabel->setStyleSheet("color: #40c040; font-weight: bold;");
+    m_placedLabel->setStyleSheet(theme::placedCSS());
     counters->addWidget(m_placedLabel, 0, 1);
 
     counters->addWidget(new QLabel(tr("Missing:")),  1, 0);
     m_missingLabel = new QLabel("0");
-    m_missingLabel->setStyleSheet("color: #ff5050; font-weight: bold;");
+    m_missingLabel->setStyleSheet(theme::missingCSS());
     counters->addWidget(m_missingLabel, 1, 1);
 
     counters->addWidget(new QLabel(tr("Defects:")),  2, 0);
     m_defectLabel = new QLabel("0");
-    m_defectLabel->setStyleSheet("color: #ffa500; font-weight: bold;");
+    m_defectLabel->setStyleSheet(theme::defectCSS());
     counters->addWidget(m_defectLabel, 2, 1);
 
     counters->addWidget(new QLabel(tr("Pending:")),  3, 0);
@@ -162,7 +164,7 @@ void StatsPanel::addDefectEntry(const std::string& reference, const std::string&
     m_defectTable->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(reference)));
 
     auto* typeItem = new QTableWidgetItem(QString::fromStdString(type));
-    typeItem->setForeground(QColor(255, 165, 0));
+    typeItem->setForeground(theme::defectColor());
     m_defectTable->setItem(row, 2, typeItem);
 
     // Scroll to latest

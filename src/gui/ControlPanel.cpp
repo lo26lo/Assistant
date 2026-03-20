@@ -1,4 +1,5 @@
 #include "ControlPanel.h"
+#include "Theme.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -21,8 +22,9 @@ void ControlPanel::buildUI()
 
     auto* content = new QWidget;
     auto* layout  = new QVBoxLayout(content);
-    layout->setContentsMargins(8, 8, 8, 8);
-    layout->setSpacing(4);
+    layout->setContentsMargins(theme::PanelMargin, theme::PanelMargin,
+                               theme::PanelMargin, theme::PanelMargin);
+    layout->setSpacing(theme::PanelSpacing);
 
     layout->addWidget(createOverlayGroup());
     layout->addWidget(createAiGroup());
@@ -41,8 +43,9 @@ QGroupBox* ControlPanel::createOverlayGroup()
 {
     auto* group  = new QGroupBox(tr("Overlay"));
     auto* layout = new QVBoxLayout(group);
-    layout->setSpacing(8);
-    layout->setContentsMargins(4, 8, 4, 8);
+    layout->setSpacing(theme::GroupSpacing);
+    layout->setContentsMargins(theme::GroupMarginH, theme::GroupMarginV,
+                               theme::GroupMarginH, theme::GroupMarginV);
 
     // Opacity slider
     auto* opacityRow = new QHBoxLayout;
@@ -88,8 +91,9 @@ QGroupBox* ControlPanel::createAiGroup()
 {
     auto* group  = new QGroupBox(tr("AI Detection"));
     auto* layout = new QFormLayout(group);
-    layout->setSpacing(8);
-    layout->setContentsMargins(4, 8, 4, 8);
+    layout->setSpacing(theme::GroupSpacing);
+    layout->setContentsMargins(theme::GroupMarginH, theme::GroupMarginV,
+                               theme::GroupMarginH, theme::GroupMarginV);
     layout->setLabelAlignment(Qt::AlignRight);
 
     m_confidenceSpin = new QDoubleSpinBox;
@@ -114,8 +118,9 @@ QGroupBox* ControlPanel::createCameraGroup()
 {
     auto* group  = new QGroupBox(tr("Camera"));
     auto* layout = new QFormLayout(group);
-    layout->setSpacing(8);
-    layout->setContentsMargins(4, 8, 4, 8);
+    layout->setSpacing(theme::GroupSpacing);
+    layout->setContentsMargins(theme::GroupMarginH, theme::GroupMarginV,
+                               theme::GroupMarginH, theme::GroupMarginV);
     layout->setLabelAlignment(Qt::AlignRight);
 
     m_cameraDevice = new QComboBox;
@@ -152,8 +157,9 @@ QGroupBox* ControlPanel::createActionsGroup()
 {
     auto* group  = new QGroupBox(tr("Actions"));
     auto* layout = new QVBoxLayout(group);
-    layout->setSpacing(8);
-    layout->setContentsMargins(4, 8, 4, 8);
+    layout->setSpacing(theme::GroupSpacing);
+    layout->setContentsMargins(theme::GroupMarginH, theme::GroupMarginV,
+                               theme::GroupMarginH, theme::GroupMarginV);
 
     m_btnCalibrate = new QPushButton(tr("Calibrate Camera (Checkerboard)"));
     connect(m_btnCalibrate, &QPushButton::clicked, this, &ControlPanel::recalibrateRequested);

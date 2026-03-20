@@ -1,4 +1,5 @@
 #include "BomPanel.h"
+#include "Theme.h"
 #include "../ibom/IBomData.h"
 
 #include <QVBoxLayout>
@@ -17,8 +18,9 @@ BomPanel::BomPanel(QWidget* parent)
 void BomPanel::buildUI()
 {
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(4, 4, 4, 4);
-    layout->setSpacing(4);
+    layout->setContentsMargins(theme::PanelMargin, theme::PanelMargin,
+                               theme::PanelMargin, theme::PanelMargin);
+    layout->setSpacing(theme::PanelSpacing);
 
     // Search row
     auto* searchRow = new QHBoxLayout;
@@ -43,8 +45,8 @@ void BomPanel::buildUI()
     m_table->horizontalHeader()->setStretchLastSection(true);
     m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
     m_table->setColumnWidth(0, 30);
-    m_table->setColumnWidth(1, 60);
-    m_table->setColumnWidth(2, 100);
+    m_table->setColumnWidth(1, 70);
+    m_table->setColumnWidth(2, 110);
     m_table->setColumnWidth(3, 120);
     m_table->verticalHeader()->setVisible(false);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -59,8 +61,8 @@ void BomPanel::buildUI()
     m_progressLabel = new QLabel("0 / 0");
     m_selectAllBtn   = new QPushButton(tr("All"));
     m_deselectAllBtn = new QPushButton(tr("None"));
-    m_selectAllBtn->setMaximumWidth(50);
-    m_deselectAllBtn->setMaximumWidth(50);
+    m_selectAllBtn->setMaximumWidth(60);
+    m_deselectAllBtn->setMaximumWidth(60);
     connect(m_selectAllBtn,   &QPushButton::clicked, this, &BomPanel::onSelectAll);
     connect(m_deselectAllBtn, &QPushButton::clicked, this, &BomPanel::onDeselectAll);
 
@@ -124,10 +126,10 @@ void BomPanel::setComponentState(const std::string& reference, const QString& st
             if (stateItem) {
                 stateItem->setText(state);
                 // Color by state
-                if (state == "placed")      stateItem->setForeground(QColor(0, 200, 0));
-                else if (state == "missing") stateItem->setForeground(QColor(255, 80, 80));
-                else if (state == "defect")  stateItem->setForeground(QColor(255, 165, 0));
-                else                         stateItem->setForeground(QColor(180, 180, 180));
+                if (state == "placed")      stateItem->setForeground(theme::placedColor());
+                else if (state == "missing") stateItem->setForeground(theme::missingColor());
+                else if (state == "defect")  stateItem->setForeground(theme::defectColor());
+                else                         stateItem->setForeground(theme::pendingColor());
             }
             return;
         }
@@ -249,9 +251,9 @@ void BomPanel::populateTable(const QString& filter, const QString& layer)
         m_table->setItem(row, 3, new QTableWidgetItem(QString::fromStdString(r.footprint)));
 
         auto* stateItem = new QTableWidgetItem(QString::fromStdString(r.state));
-        if (r.state == "placed")      stateItem->setForeground(QColor(0, 200, 0));
-        else if (r.state == "missing") stateItem->setForeground(QColor(255, 80, 80));
-        else if (r.state == "defect")  stateItem->setForeground(QColor(255, 165, 0));
+        if (r.state == "placed")      stateItem->setForeground(theme::placedColor());
+        else if (r.state == "missing") stateItem->setForeground(theme::missingColor());
+        else if (r.state == "defect")  stateItem->setForeground(theme::defectColor());
         m_table->setItem(row, 4, stateItem);
 
         row++;

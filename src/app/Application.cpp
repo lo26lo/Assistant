@@ -15,6 +15,7 @@
 #include "overlay/OverlayRenderer.h"
 #include "overlay/Homography.h"
 #include "overlay/HeatmapRenderer.h"
+#include "gui/Theme.h"
 #include "utils/Logger.h"
 
 #include <spdlog/spdlog.h>
@@ -312,8 +313,8 @@ void Application::connectSignals()
                 if (comp.layer != Layer::Front) continue;
 
                 bool isSelected = (comp.reference == m_selectedRef);
-                QColor padColor = isSelected ? QColor(255, 200, 0, 200) : QColor(180, 160, 80, 180);
-                QColor silkColor = isSelected ? QColor(255, 255, 100, 220) : QColor(170, 170, 68, 180);
+                QColor padColor = isSelected ? ibom::gui::theme::padSelectedColor() : ibom::gui::theme::padNormalColor();
+                QColor silkColor = isSelected ? ibom::gui::theme::silkSelectedColor() : ibom::gui::theme::silkNormalColor();
 
                 // ── Draw pads ──
                 if (drawPads) {
@@ -402,7 +403,7 @@ void Application::connectSignals()
                     static_cast<float>((comp.bbox.minX + comp.bbox.maxX) / 2.0),
                     static_cast<float>((comp.bbox.minY + comp.bbox.maxY) / 2.0));
                 cv::Point2f imgPt = m_homography->pcbToImage(bboxCenter);
-                painter.setPen(isSelected ? QColor(255, 255, 200) : QColor(68, 170, 170, 200));
+                painter.setPen(isSelected ? ibom::gui::theme::labelSelectedColor() : ibom::gui::theme::labelNormalColor());
                 painter.setFont(QFont("Segoe UI", 7));
                 painter.drawText(QPointF(imgPt.x, imgPt.y - 3),
                                  QString::fromStdString(comp.reference));
@@ -418,14 +419,14 @@ void Application::connectSignals()
             pickOverlay.fill(Qt::transparent);
             QPainter pickPainter(&pickOverlay);
             pickPainter.setRenderHint(QPainter::Antialiasing, true);
-            pickPainter.setPen(QPen(QColor(255, 50, 50), 2));
-            pickPainter.setBrush(QColor(255, 50, 50, 100));
+            pickPainter.setPen(QPen(ibom::gui::theme::pickPointColor(), 2));
+            pickPainter.setBrush(ibom::gui::theme::pickPointFill());
             for (const auto& pt : m_homographyImagePoints) {
                 pickPainter.drawEllipse(QPointF(pt.x, pt.y), 8, 8);
             }
             // Draw lines between consecutive points
             if (m_homographyImagePoints.size() >= 2) {
-                QPen linePen(QColor(255, 100, 100, 180), 1, Qt::DashLine);
+                QPen linePen(ibom::gui::theme::pickLineColor(), 1, Qt::DashLine);
                 pickPainter.setPen(linePen);
                 for (size_t i = 1; i < m_homographyImagePoints.size(); ++i) {
                     pickPainter.drawLine(

@@ -5,6 +5,7 @@
 #include "InspectionWizard.h"
 #include "StatsPanel.h"
 #include "SettingsDialog.h"
+#include "Theme.h"
 #include "../app/Application.h"
 #include "../app/Config.h"
 
@@ -164,7 +165,7 @@ void MainWindow::createToolBar()
 {
     m_mainToolBar = addToolBar(tr("Main"));
     m_mainToolBar->setMovable(false);
-    m_mainToolBar->setIconSize(QSize(24, 24));
+    m_mainToolBar->setIconSize(QSize(theme::ToolbarIcon, theme::ToolbarIcon));
 
     m_mainToolBar->addAction(m_actOpenIBom);
     m_mainToolBar->addSeparator();
@@ -183,6 +184,10 @@ void MainWindow::createStatusBar()
     m_fpsLabel    = new QLabel("FPS: --");
     m_statusLabel = new QLabel(tr("Ready"));
     m_gpuLabel    = new QLabel("GPU: --");
+
+    // Add spacing between permanent widgets
+    m_fpsLabel->setContentsMargins(theme::StatusPadding, 0, theme::StatusPadding, 0);
+    m_gpuLabel->setContentsMargins(theme::StatusPadding, 0, theme::StatusPadding, 0);
 
     statusBar()->addWidget(m_statusLabel, 1);
     statusBar()->addPermanentWidget(m_gpuLabel);
@@ -564,10 +569,10 @@ void MainWindow::applyDarkStylesheet()
         /* ── Status Bar ── */
         QStatusBar {
             background: #0e0e14; color: #5a6282;
-            font-size: 11px; padding: 3px 8px;
+            font-size: 11px; padding: 4px 12px;
             border-top: 1px solid #1c1c2e;
         }
-        QStatusBar QLabel { color: #5a6282; }
+        QStatusBar QLabel { color: #5a6282; font-size: 11px; }
 
         /* ── Dock Widgets ── */
         QDockWidget {
@@ -575,9 +580,9 @@ void MainWindow::applyDarkStylesheet()
             titlebar-close-icon: none;
         }
         QDockWidget::title {
-            background: #16161e; padding: 8px 12px;
+            background: #16161e; padding: 10px 14px;
             border-bottom: 1px solid #1c1c2e;
-            font-weight: 600;
+            font-weight: 600; font-size: 12px;
         }
         QDockWidget::close-button, QDockWidget::float-button {
             background: transparent;
@@ -692,7 +697,7 @@ void MainWindow::applyDarkStylesheet()
             text-transform: uppercase; letter-spacing: 0.5px;
             border: none; border-top: 2px solid #22223a;
             border-radius: 0px;
-            margin-top: 16px; padding: 16px 6px 8px 6px;
+            margin-top: 18px; padding: 18px 8px 10px 8px;
             background: transparent;
         }
         QGroupBox::title {
@@ -808,12 +813,12 @@ void MainWindow::applyLightStylesheet()
         QToolBar::separator { width: 1px; background: #d0d4e0; margin: 6px 4px; }
         QStatusBar {
             background: #e8eaf2; color: #6a7090;
-            font-size: 11px; padding: 3px 8px;
+            font-size: 11px; padding: 4px 12px;
             border-top: 1px solid #d8dae4;
         }
         QDockWidget { color: #3a4060; }
         QDockWidget::title {
-            background: #ebedf5; padding: 8px 12px;
+            background: #ebedf5; padding: 10px 14px;
             border-bottom: 1px solid #d8dae4; font-weight: 600;
         }
         QLabel { color: #4a5272; font-size: 12px; }
@@ -851,8 +856,8 @@ void MainWindow::applyLightStylesheet()
             color: #4466cc; font-size: 11px; font-weight: 600;
             text-transform: uppercase;
             border: none; border-top: 2px solid #e0e2ec;
-            border-radius: 0; margin-top: 16px;
-            padding: 16px 6px 8px 6px; background: transparent;
+            border-radius: 0; margin-top: 18px;
+            padding: 18px 8px 10px 8px; background: transparent;
         }
         QGroupBox::title {
             subcontrol-origin: margin; subcontrol-position: top left;

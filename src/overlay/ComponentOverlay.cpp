@@ -1,4 +1,5 @@
 #include "ComponentOverlay.h"
+#include "gui/Theme.h"
 
 namespace ibom::overlay {
 
@@ -31,11 +32,11 @@ void ComponentOverlay::draw(QPainter& painter, const Component& comp,
 
 QColor ComponentOverlay::color() const
 {
-    if (m_state == "placed")            return QColor(0, 220, 0);
-    if (m_state == "missing")           return QColor(255, 0, 0);
-    if (m_state == "wrong_orientation") return QColor(255, 165, 0);
-    if (m_state == "inspected")         return QColor(0, 200, 200);
-    return QColor(0, 180, 255); // Default: light blue
+    if (m_state == "placed")            return ibom::gui::theme::placedColor();
+    if (m_state == "missing")           return ibom::gui::theme::missingColor();
+    if (m_state == "wrong_orientation") return ibom::gui::theme::defectColor();
+    if (m_state == "inspected")         return ibom::gui::theme::inspectedColor();
+    return ibom::gui::theme::defaultComponentColor();
 }
 
 } // namespace ibom::overlay

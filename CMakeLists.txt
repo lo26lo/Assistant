@@ -196,6 +196,7 @@ set(HEADERS
     src/gui/InspectionWizard.h
     src/gui/StatsPanel.h
     src/gui/SettingsDialog.h
+    src/gui/Theme.h
 
     # Features
     src/features/PickAndPlace.h

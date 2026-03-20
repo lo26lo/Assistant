@@ -1,5 +1,6 @@
 #include "OverlayRenderer.h"
 
+#include "gui/Theme.h"
 #include <QPen>
 #include <QBrush>
 #include <QFont>
@@ -150,7 +151,7 @@ void OverlayRenderer::drawComponentPads(QPainter& painter, const Component& comp
                                   static_cast<float>(pad.position.y));
         }
 
-        QColor padColor = pad.isPin1 ? QColor(255, 0, 0) : QColor(0, 180, 220);
+        QColor padColor = pad.isPin1 ? ibom::gui::theme::padPin1Color() : ibom::gui::theme::padRegularColor();
         painter.setPen(QPen(padColor, 1));
         painter.setBrush(QBrush(padColor));
 
@@ -175,8 +176,10 @@ void OverlayRenderer::drawPin1Marker(QPainter& painter, const Component& comp)
         }
 
         // Draw a distinct pin 1 marker (red filled circle)
-        painter.setPen(QPen(Qt::red, 2));
-        painter.setBrush(QBrush(QColor(255, 0, 0, 150)));
+        QColor pin1Fill = ibom::gui::theme::padPin1Color();
+        pin1Fill.setAlpha(150);
+        painter.setPen(QPen(ibom::gui::theme::padPin1Color(), 2));
+        painter.setBrush(QBrush(pin1Fill));
         painter.drawEllipse(QPointF(imgPos.x, imgPos.y), 5.0, 5.0);
         break;
     }
@@ -186,7 +189,7 @@ void OverlayRenderer::drawBoardOutline(QPainter& painter)
 {
     if (m_project.boardOutline.empty()) return;
 
-    QPen pen(QColor(255, 255, 0), 2);
+    QPen pen(ibom::gui::theme::boardOutlineColor(), 2);
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
 
@@ -207,15 +210,15 @@ void OverlayRenderer::drawBoardOutline(QPainter& painter)
 QColor OverlayRenderer::stateColor(const std::string& ref) const
 {
     auto it = m_componentStates.find(ref);
-    if (it == m_componentStates.end()) return QColor(0, 200, 255); // Cyan (default)
+    if (it == m_componentStates.end()) return ibom::gui::theme::defaultComponentColor();
 
     const auto& state = it->second;
-    if (state == "placed")             return QColor(0, 255, 0);    // Green
-    if (state == "missing")            return QColor(255, 0, 0);    // Red
-    if (state == "wrong_orientation")  return QColor(255, 165, 0);  // Orange
-    if (state == "inspected")          return QColor(0, 255, 200);  // Teal
+    if (state == "placed")             return ibom::gui::theme::placedColor();
+    if (state == "missing")            return ibom::gui::theme::missingColor();
+    if (state == "wrong_orientation")  return ibom::gui::theme::defectColor();
+    if (state == "inspected")          return ibom::gui::theme::inspectedColor();
 
-    return QColor(0, 200, 255); // Default cyan
+    return ibom::gui::theme::defaultComponentColor();
 }
 
 void OverlayRenderer::setHighlightedRefs(const std::vector<std::string>& refs)

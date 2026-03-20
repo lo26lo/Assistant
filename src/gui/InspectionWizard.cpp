@@ -1,4 +1,5 @@
 #include "InspectionWizard.h"
+#include "Theme.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -59,11 +60,11 @@ void InspectionWizard::addResult(const std::string& reference,
 
     auto* statusItem = new QTableWidgetItem(status);
     if (status == "OK" || status == "Placed")
-        statusItem->setForeground(QColor(0, 200, 0));
+        statusItem->setForeground(theme::placedColor());
     else if (status == "Missing")
-        statusItem->setForeground(QColor(255, 80, 80));
+        statusItem->setForeground(theme::missingColor());
     else if (status == "Defect")
-        statusItem->setForeground(QColor(255, 165, 0));
+        statusItem->setForeground(theme::defectColor());
     m_resultsTable->setItem(row, 1, statusItem);
     m_resultsTable->setItem(row, 2, new QTableWidgetItem(detail));
 }
