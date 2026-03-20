@@ -219,7 +219,7 @@ void MainWindow::createDockWidgets()
     auto* statsDock = new QDockWidget(tr("Statistics"), this);
     statsDock->setObjectName("StatsDock");
     statsDock->setWidget(m_statsPanel);
-    statsDock->setMaximumHeight(200);
+    statsDock->setMaximumHeight(260);
     addDockWidget(Qt::BottomDockWidgetArea, statsDock);
 
     // Inspection wizard (floating, hidden by default)
@@ -592,6 +592,18 @@ void MainWindow::applyDarkStylesheet()
         QDockWidget::close-button:hover, QDockWidget::float-button:hover {
             background: #2a2a48; border-radius: 3px;
         }
+        /* Force dock content panels to dark background */
+        QDockWidget > QWidget {
+            background: #111118;
+        }
+
+        /* ── Scroll Areas (prevent system white bg) ── */
+        QScrollArea {
+            background: #111118; border: none;
+        }
+        QScrollArea > QWidget > QWidget {
+            background: #111118;
+        }
 
         /* ── Labels ── */
         QLabel { color: #9098b8; font-size: 12px; }
@@ -615,8 +627,8 @@ void MainWindow::applyDarkStylesheet()
 
         /* ── Inputs ── */
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
-            background: #131320; color: #c0c8e8;
-            border: 1px solid #2a2a48; border-radius: 6px;
+            background: #0e0e18; color: #b0b8d8;
+            border: 1px solid #22223a; border-radius: 6px;
             padding: 6px 10px; font-size: 12px;
             selection-background-color: #3a3a68;
             selection-color: #fff;
@@ -650,10 +662,10 @@ void MainWindow::applyDarkStylesheet()
 
         /* ── Tables ── */
         QTableWidget, QTreeWidget, QListWidget {
-            background: #111118; color: #b0b8d8;
-            border: 1px solid #1e1e32; border-radius: 6px;
+            background: #0e0e18; color: #b0b8d8;
+            border: 1px solid #1c1c2e; border-radius: 6px;
             gridline-color: #1a1a2a;
-            alternate-background-color: #14141e;
+            alternate-background-color: #111120;
             font-size: 12px;
             outline: none;
         }
@@ -665,8 +677,8 @@ void MainWindow::applyDarkStylesheet()
             background: rgba(100, 140, 255, 0.06);
         }
         QHeaderView::section {
-            background: #16161e; color: #7882a8;
-            border: none; border-bottom: 1px solid #2a2a42;
+            background: #14141e; color: #7882a8;
+            border: none; border-bottom: 1px solid #22223a;
             padding: 8px 10px; font-size: 11px;
             font-weight: 600; text-transform: uppercase;
         }
@@ -695,7 +707,7 @@ void MainWindow::applyDarkStylesheet()
         QGroupBox {
             color: #6488e8; font-size: 11px; font-weight: 600;
             text-transform: uppercase; letter-spacing: 0.5px;
-            border: none; border-top: 2px solid #22223a;
+            border: none; border-top: 2px solid #1e1e34;
             border-radius: 0px;
             margin-top: 18px; padding: 18px 8px 10px 8px;
             background: transparent;
@@ -712,7 +724,7 @@ void MainWindow::applyDarkStylesheet()
         QCheckBox { color: #9098b8; spacing: 8px; font-size: 12px; }
         QCheckBox::indicator {
             width: 18px; height: 18px; border-radius: 4px;
-            border: 2px solid #2a2a48; background: #131320;
+            border: 2px solid #2a2a48; background: #0e0e18;
         }
         QCheckBox::indicator:checked {
             background: #6488e8; border-color: #6488e8;
@@ -722,7 +734,7 @@ void MainWindow::applyDarkStylesheet()
 
         /* ── Sliders ── */
         QSlider::groove:horizontal {
-            background: #1e1e34; height: 6px; border-radius: 3px;
+            background: #1a1a2e; height: 6px; border-radius: 3px;
         }
         QSlider::handle:horizontal {
             background: #6488e8; width: 16px; height: 16px;
@@ -738,11 +750,14 @@ void MainWindow::applyDarkStylesheet()
 
         /* ── Tab Bars (for dock tabs) ── */
         QTabWidget::pane {
-            border: 1px solid #1e1e32;
+            border: 1px solid #1c1c2e;
             background: #111118;
         }
+        QTabBar {
+            background: #16161e;
+        }
         QTabBar::tab {
-            background: transparent; color: #5a6282;
+            background: #16161e; color: #5a6282;
             padding: 10px 24px; border: none;
             border-bottom: 2px solid transparent;
             font-size: 12px; font-weight: 500;
@@ -773,6 +788,11 @@ void MainWindow::applyDarkStylesheet()
             background: #1e1e36; color: #c0c8e8;
             border: 1px solid #2e2e4a; border-radius: 6px;
             padding: 6px 10px; font-size: 11px;
+        }
+
+        /* ── Dialogs ── */
+        QDialog {
+            background: #111118;
         }
     )");
 }
@@ -816,10 +836,26 @@ void MainWindow::applyLightStylesheet()
             font-size: 11px; padding: 4px 12px;
             border-top: 1px solid #d8dae4;
         }
+        QStatusBar QLabel { color: #6a7090; font-size: 11px; }
         QDockWidget { color: #3a4060; }
         QDockWidget::title {
             background: #ebedf5; padding: 10px 14px;
             border-bottom: 1px solid #d8dae4; font-weight: 600;
+        }
+        QDockWidget::close-button, QDockWidget::float-button {
+            background: transparent; border: none; padding: 2px;
+        }
+        QDockWidget::close-button:hover, QDockWidget::float-button:hover {
+            background: #d4d8e8; border-radius: 3px;
+        }
+        QDockWidget > QWidget {
+            background: #f5f6fa;
+        }
+        QScrollArea {
+            background: #f5f6fa; border: none;
+        }
+        QScrollArea > QWidget > QWidget {
+            background: #f5f6fa;
         }
         QLabel { color: #4a5272; font-size: 12px; }
         QPushButton {
@@ -829,17 +865,31 @@ void MainWindow::applyLightStylesheet()
         }
         QPushButton:hover { background: #d4d8e8; border-color: #b0b4c8; color: #2a3050; }
         QPushButton:pressed { background: #c8cce0; }
+        QPushButton:disabled {
+            color: #a0a4b0; background: #e8eaf2;
+            border-color: #d4d8e0;
+        }
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
             background: #ffffff; color: #3a4060;
             border: 1px solid #c8ccd8; border-radius: 6px;
             padding: 6px 10px; font-size: 12px;
         }
-        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #4466cc; }
+        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+            border-color: #4466cc;
+        }
         QComboBox::drop-down { border: none; width: 28px; }
         QComboBox QAbstractItemView {
             background: #fff; color: #3a4060;
             border: 1px solid #d0d4e0; selection-background-color: #dce0ec;
             padding: 4px;
+        }
+        QSpinBox::up-button, QDoubleSpinBox::up-button,
+        QSpinBox::down-button, QDoubleSpinBox::down-button {
+            background: transparent; border: none; width: 18px;
+        }
+        QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+        QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+            background: #dce0ec;
         }
         QTableWidget, QTreeWidget, QListWidget {
             background: #ffffff; color: #3a4060;
@@ -847,15 +897,26 @@ void MainWindow::applyLightStylesheet()
             alternate-background-color: #f8f9fc; outline: none;
         }
         QTableWidget::item:selected { background: rgba(68, 102, 204, 0.1); }
+        QTableWidget::item:hover { background: rgba(68, 102, 204, 0.05); }
         QHeaderView::section {
             background: #ebedf5; color: #5a6282;
             border: none; border-bottom: 1px solid #d0d4e0;
             padding: 8px 10px; font-size: 11px; font-weight: 600;
         }
+        QScrollBar:vertical { background: transparent; width: 8px; margin: 2px 1px; }
+        QScrollBar::handle:vertical { background: #c0c4d4; border-radius: 4px; min-height: 30px; }
+        QScrollBar::handle:vertical:hover { background: #a8acbc; }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+        QScrollBar:horizontal { background: transparent; height: 8px; margin: 1px 2px; }
+        QScrollBar::handle:horizontal { background: #c0c4d4; border-radius: 4px; min-width: 30px; }
+        QScrollBar::handle:horizontal:hover { background: #a8acbc; }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
         QGroupBox {
             color: #4466cc; font-size: 11px; font-weight: 600;
             text-transform: uppercase;
-            border: none; border-top: 2px solid #e0e2ec;
+            border: none; border-top: 2px solid #d8dae4;
             border-radius: 0; margin-top: 18px;
             padding: 18px 8px 10px 8px; background: transparent;
         }
@@ -876,8 +937,14 @@ void MainWindow::applyLightStylesheet()
             margin: -5px 0; border-radius: 8px; border: 2px solid #3354b8;
         }
         QSlider::sub-page:horizontal { background: #4466cc; border-radius: 3px; }
+        QTabWidget::pane {
+            border: 1px solid #d8dae4; background: #f5f6fa;
+        }
+        QTabBar {
+            background: #ebedf5;
+        }
         QTabBar::tab {
-            background: transparent; color: #6a7090;
+            background: #ebedf5; color: #6a7090;
             padding: 10px 24px; border: none;
             border-bottom: 2px solid transparent; font-size: 12px; font-weight: 500;
         }
@@ -892,15 +959,14 @@ void MainWindow::applyLightStylesheet()
                 stop:0 #3354b8, stop:1 #4466cc);
             border-radius: 4px;
         }
-        QScrollBar:vertical { background: transparent; width: 8px; margin: 2px 1px; }
-        QScrollBar::handle:vertical { background: #c0c4d4; border-radius: 4px; min-height: 30px; }
-        QScrollBar::handle:vertical:hover { background: #a8acbc; }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+        QSplitter::handle { background: #d8dae4; width: 1px; }
         QToolTip {
             background: #f5f6fa; color: #3a4060;
             border: 1px solid #d0d4e0; border-radius: 6px;
             padding: 6px 10px; font-size: 11px;
+        }
+        QDialog {
+            background: #f5f6fa;
         }
     )");
 }

@@ -18,13 +18,15 @@ StatsPanel::StatsPanel(QWidget* parent)
 void StatsPanel::buildUI()
 {
     auto* mainLayout = new QHBoxLayout(this);
-    mainLayout->setContentsMargins(theme::PanelMargin, theme::PanelMargin,
-                                   theme::PanelMargin, theme::PanelMargin);
+    mainLayout->setContentsMargins(theme::PanelMargin, 6,
+                                   theme::PanelMargin, 6);
     mainLayout->setSpacing(theme::PanelSpacing * 2);
 
     // ── Left: Progress & Counters ──
     auto* leftGroup = new QGroupBox(tr("Inspection Progress"));
     auto* leftLayout = new QVBoxLayout(leftGroup);
+    leftLayout->setContentsMargins(8, 4, 8, 4);
+    leftLayout->setSpacing(4);
 
     m_summaryLabel = new QLabel(tr("No inspection data"));
     m_summaryLabel->setStyleSheet("font-size: 13px; font-weight: bold;");
@@ -34,9 +36,18 @@ void StatsPanel::buildUI()
     m_progressBar->setRange(0, 100);
     m_progressBar->setValue(0);
     m_progressBar->setTextVisible(true);
+    m_progressBar->setFixedHeight(18);
+    m_progressBar->setStyleSheet(
+        "QProgressBar { background: #1a1a2e; border: none; border-radius: 4px;"
+        "  height: 18px; text-align: center; font-size: 10px; color: #8892b8; }"
+        "QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+        "  stop:0 #4a68c8, stop:1 #6488e8); border-radius: 4px; }"
+    );
     leftLayout->addWidget(m_progressBar);
 
     auto* counters = new QGridLayout;
+    counters->setVerticalSpacing(2);
+    counters->setHorizontalSpacing(6);
     counters->addWidget(new QLabel(tr("Placed:")),   0, 0);
     m_placedLabel = new QLabel("0");
     m_placedLabel->setStyleSheet(theme::placedCSS());
@@ -63,10 +74,14 @@ void StatsPanel::buildUI()
     // ── Center: Performance ──
     auto* perfGroup = new QGroupBox(tr("Performance"));
     auto* perfLayout = new QVBoxLayout(perfGroup);
+    perfLayout->setContentsMargins(8, 4, 8, 4);
+    perfLayout->setSpacing(2);
 
     auto* perfGrid = new QGridLayout;
+    perfGrid->setVerticalSpacing(2);
+    perfGrid->setHorizontalSpacing(8);
     perfGrid->addWidget(new QLabel(tr("Camera FPS:")),    0, 0);
-    m_fpsLabel = new QLabel("--");
+    m_fpsLabel = new QLabel("0.0");
     perfGrid->addWidget(m_fpsLabel, 0, 1);
 
     perfGrid->addWidget(new QLabel(tr("Inference:")),     1, 0);
@@ -84,6 +99,8 @@ void StatsPanel::buildUI()
     // ── Right: Defect Log ──
     auto* defectGroup = new QGroupBox(tr("Defect Log"));
     auto* defectLayout = new QVBoxLayout(defectGroup);
+    defectLayout->setContentsMargins(8, 4, 8, 4);
+    defectLayout->setSpacing(2);
 
     m_defectTable = new QTableWidget;
     m_defectTable->setColumnCount(3);
