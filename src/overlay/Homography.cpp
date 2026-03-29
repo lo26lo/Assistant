@@ -132,4 +132,15 @@ void Homography::reset()
     m_reprojError = 0.0;
 }
 
+void Homography::setMatrix(const cv::Mat& matrix)
+{
+    if (matrix.empty()) {
+        reset();
+        return;
+    }
+    m_homography = matrix.clone();
+    m_inverse = m_homography.inv();
+    m_valid = true;
+}
+
 } // namespace ibom::overlay

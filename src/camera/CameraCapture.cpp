@@ -184,8 +184,8 @@ void CameraCapture::captureLoop()
         // Push to ring buffer for AI pipeline
         m_frameBuffer->push(frame);
 
-        // Notify listeners
-        emit frameReady(frame);
+        // Notify listeners (clone to decouple from capture loop's buffer)
+        emit frameReady(frame.clone());
     }
 
     cap.release();

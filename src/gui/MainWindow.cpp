@@ -5,6 +5,7 @@
 #include "InspectionWizard.h"
 #include "StatsPanel.h"
 #include "SettingsDialog.h"
+#include "HelpDialog.h"
 #include "Theme.h"
 #include "../app/Application.h"
 #include "../app/Config.h"
@@ -23,6 +24,10 @@
 #include <QPainter>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QDesktopServices>
+#include <QTemporaryDir>
+#include <cmath>
+#include <algorithm>
 #include <spdlog/spdlog.h>
 
 namespace ibom::gui {
@@ -146,8 +151,12 @@ void MainWindow::createMenuBar()
     cameraMenu->addAction(m_actCalibrate);
     cameraMenu->addSeparator();
     auto* actGenBoard = cameraMenu->addAction(tr("Generate Checkerboard..."));
-    actGenBoard->setToolTip(tr("Generate a printable 9x6 checkerboard for camera calibration"));
+    actGenBoard->setToolTip(tr("Generate a printable checkerboard for camera calibration"));
     connect(actGenBoard, &QAction::triggered, this, &MainWindow::onGenerateCheckerboard);
+
+    auto* actOpenPatterns = cameraMenu->addAction(tr("Open Calibration Patterns PDF..."));
+    actOpenPatterns->setToolTip(tr("Open pre-generated calibration patterns (0.5, 1, 2 mm squares)"));
+    connect(actOpenPatterns, &QAction::triggered, this, &MainWindow::onOpenCalibrationPDF);
 
     auto* inspectMenu = menuBar()->addMenu(tr("&Inspection"));
     inspectMenu->addAction(m_actInspect);
@@ -157,6 +166,33 @@ void MainWindow::createMenuBar()
     viewMenu->addAction(m_actDarkMode);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
+
+    auto* actGettingStarted = helpMenu->addAction(tr("Getting Started"));
+    actGettingStarted->setShortcut(Qt::Key_F1);
+    connect(actGettingStarted, &QAction::triggered, this, [this]() { onShowHelp(0); });
+
+    auto* actHelpCalib = helpMenu->addAction(tr("Calibration Guide"));
+    connect(actHelpCalib, &QAction::triggered, this, [this]() { onShowHelp(1); });
+
+    auto* actHelpAlign = helpMenu->addAction(tr("Alignment Guide"));
+    connect(actHelpAlign, &QAction::triggered, this, [this]() { onShowHelp(2); });
+
+    auto* actHelpLens = helpMenu->addAction(tr("Lens Adapters"));
+    connect(actHelpLens, &QAction::triggered, this, [this]() { onShowHelp(3); });
+
+    auto* actHelpInspect = helpMenu->addAction(tr("Inspection"));
+    connect(actHelpInspect, &QAction::triggered, this, [this]() { onShowHelp(4); });
+
+    auto* actHelpOverlay = helpMenu->addAction(tr("Overlay Settings"));
+    connect(actHelpOverlay, &QAction::triggered, this, [this]() { onShowHelp(5); });
+
+    auto* actHelpExport = helpMenu->addAction(tr("Export & Reports"));
+    connect(actHelpExport, &QAction::triggered, this, [this]() { onShowHelp(6); });
+
+    auto* actHelpTrouble = helpMenu->addAction(tr("Troubleshooting"));
+    connect(actHelpTrouble, &QAction::triggered, this, [this]() { onShowHelp(7); });
+
+    helpMenu->addSeparator();
     auto* about = helpMenu->addAction(tr("About..."));
     connect(about, &QAction::triggered, this, &MainWindow::onShowAbout);
 }
@@ -292,6 +328,14 @@ void MainWindow::onShowAbout()
            "<p>Built with Qt6, OpenCV, ONNX Runtime.</p>"));
 }
 
+void MainWindow::onShowHelp(int tab)
+{
+    static HelpDialog* dlg = nullptr;
+    if (!dlg)
+        dlg = new HelpDialog(this);
+    dlg->showTab(tab);
+}
+
 void MainWindow::onCalibrate()
 {
     emit calibrationRequested();
@@ -319,16 +363,38 @@ void MainWindow::onExportReport()
 
 void MainWindow::onGenerateCheckerboard()
 {
-    // 9x6 inner corners = 10x7 squares
-    const int cols = 10;
-    const int rows = 7;
-    const int squarePx = 100; // pixels per square at 300 DPI ≈ ~8.5mm
-    const int margin = squarePx;
+    // Read calibration params from Config
+    const auto& cfg = m_app->config();
+    const int innerCols = cfg.calibBoardCols();  // inner corners (default 7)
+    const int innerRows = cfg.calibBoardRows();  // inner corners (default 5)
+    const float sqMm    = cfg.calibSquareSize();  // mm per square (default 5.0)
 
-    int imgW = cols * squarePx + 2 * margin;
-    int imgH = rows * squarePx + 2 * margin;
+    // Squares = inner corners + 1
+    const int cols = innerCols + 1;  // 8
+    const int rows = innerRows + 1;  // 6
 
-    QImage img(imgW, imgH, QImage::Format_RGB32);
+    // Card size: 50mm x 50mm (fits microscope field of view)
+    const float cardMm = std::max(50.0f,
+        std::max(cols * sqMm + 10.0f, rows * sqMm + 10.0f)); // ensure margin
+
+    // 300 DPI output
+    const int dpi = 300;
+    const double mmToPx = dpi / 25.4;
+    const int cardPx = static_cast<int>(std::round(cardMm * mmToPx));
+    const double sqPx = sqMm * mmToPx;
+
+    // Center the checkerboard on the card
+    double boardW = cols * sqPx;
+    double boardH = rows * sqPx;
+    double offX = (cardPx - boardW) / 2.0;
+    double offY = (cardPx - boardH) / 2.0;
+
+    // DPI metadata for correct physical size
+    const int dotsPerMeter = static_cast<int>(std::round(dpi / 0.0254));
+
+    QImage img(cardPx, cardPx, QImage::Format_RGB32);
+    img.setDotsPerMeterX(dotsPerMeter);
+    img.setDotsPerMeterY(dotsPerMeter);
     img.fill(Qt::white);
 
     QPainter painter(&img);
@@ -337,57 +403,62 @@ void MainWindow::onGenerateCheckerboard()
         for (int c = 0; c < cols; ++c) {
             if ((r + c) % 2 == 0) {
                 painter.setBrush(Qt::black);
-                painter.drawRect(margin + c * squarePx, margin + r * squarePx, squarePx, squarePx);
+                double x = offX + c * sqPx;
+                double y = offY + r * sqPx;
+                painter.drawRect(QRectF(x, y, sqPx, sqPx));
             }
         }
     }
 
-    // Draw title and info
-    painter.setPen(Qt::black);
-    painter.setFont(QFont("Segoe UI", 10));
-    painter.drawText(margin, margin - 10,
-        tr("Checkerboard 9x6 inner corners — Print at 100% scale (no fit-to-page)"));
+    // Label at top
+    painter.setPen(QColor(100, 100, 100));
+    int fontSize = std::max(6, static_cast<int>(3.0 * mmToPx / 3.0)); // ~3mm text
+    painter.setFont(QFont("Segoe UI", fontSize));
+    QString title = tr("%1x%2 inner corners — %3 mm squares — print at 100%%")
+        .arg(innerCols).arg(innerRows).arg(static_cast<double>(sqMm), 0, 'f', 1);
+    painter.drawText(QRectF(0, offY * 0.1, cardPx, offY * 0.8),
+                     Qt::AlignCenter, title);
+
+    // Card dimensions at bottom
+    int smallFont = std::max(5, fontSize * 2 / 3);
+    painter.setFont(QFont("Segoe UI", smallFont));
+    painter.setPen(QColor(160, 160, 160));
+    QString sizeInfo = tr("Card: %1 x %1 mm — MicroscopeIBOM calibration")
+        .arg(static_cast<double>(cardMm), 0, 'f', 0);
+    painter.drawText(QRectF(0, offY + boardH + offY * 0.1, cardPx, offY * 0.8),
+                     Qt::AlignCenter, sizeInfo);
+
+    // Thin border
+    painter.setPen(QPen(QColor(180, 180, 180), 1));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(0, 0, cardPx - 1, cardPx - 1);
     painter.end();
 
-    // Ask user: Save as image or Print directly
+    // Ask user: Save or Print
     QMessageBox msgBox(this);
     msgBox.setWindowTitle(tr("Generate Checkerboard"));
-    msgBox.setText(tr("Checkerboard pattern generated (9x6 inner corners).\n"
-                      "How would you like to output it?"));
-    auto* btnSave  = msgBox.addButton(tr("Save as Image..."), QMessageBox::ActionRole);
+    msgBox.setText(tr("Checkerboard pattern generated (%1x%2 inner corners, %3 mm squares).\n"
+                      "Card size: %4 x %4 mm at 300 DPI.\n\n"
+                      "How would you like to output it?")
+                  .arg(innerCols).arg(innerRows)
+                  .arg(static_cast<double>(sqMm), 0, 'f', 1)
+                  .arg(static_cast<double>(cardMm), 0, 'f', 0));
+    auto* btnSave  = msgBox.addButton(tr("Save as PNG..."), QMessageBox::ActionRole);
     auto* btnPrint = msgBox.addButton(tr("Print..."), QMessageBox::ActionRole);
     msgBox.addButton(QMessageBox::Cancel);
     msgBox.exec();
 
     if (msgBox.clickedButton() == btnSave) {
+        QString defaultName = QString("checkerboard_%1x%2_%3mm.png")
+            .arg(innerCols).arg(innerRows)
+            .arg(static_cast<int>(sqMm));
         QString path = QFileDialog::getSaveFileName(
-            this, tr("Save Checkerboard"), "checkerboard_9x6.png",
-            tr("PNG Image (*.png);;JPEG Image (*.jpg);;BMP Image (*.bmp)"));
+            this, tr("Save Checkerboard"), defaultName,
+            tr("PNG Image (*.png)"));
         if (!path.isEmpty()) {
-            // Save at 300 DPI for printing
-            QImage hiRes(imgW * 3, imgH * 3, QImage::Format_RGB32);
-            hiRes.fill(Qt::white);
-            QPainter hp(&hiRes);
-            hp.setPen(Qt::NoPen);
-            int sq3 = squarePx * 3;
-            int mg3 = margin * 3;
-            for (int r = 0; r < rows; ++r) {
-                for (int c = 0; c < cols; ++c) {
-                    if ((r + c) % 2 == 0) {
-                        hp.setBrush(Qt::black);
-                        hp.drawRect(mg3 + c * sq3, mg3 + r * sq3, sq3, sq3);
-                    }
-                }
-            }
-            hp.setPen(Qt::black);
-            hp.setFont(QFont("Segoe UI", 24));
-            hp.drawText(mg3, mg3 - 20,
-                tr("Checkerboard 9x6 inner corners — Print at 100%% scale"));
-            hp.end();
-            hiRes.setDotsPerMeterX(11811); // 300 DPI
-            hiRes.setDotsPerMeterY(11811);
-            hiRes.save(path);
-            spdlog::info("Checkerboard saved to: {}", path.toStdString());
+            img.save(path, "PNG");
+            spdlog::info("Checkerboard saved to: {} ({}x{} px, {} DPI, {:.0f}x{:.0f} mm)",
+                         path.toStdString(), cardPx, cardPx, dpi, cardMm, cardMm);
             updateStatusMessage(tr("Checkerboard saved: %1").arg(QFileInfo(path).fileName()));
         }
     } else if (msgBox.clickedButton() == btnPrint) {
@@ -396,17 +467,55 @@ void MainWindow::onGenerateCheckerboard()
         QPrintDialog dlg(&printer, this);
         if (dlg.exec() == QDialog::Accepted) {
             QPainter pp(&printer);
-            // Scale to fit page with correct aspect ratio
+            // Print at exact physical size (no fit-to-page)
+            // Convert card mm to printer device pixels
+            double printerDpi = printer.resolution();
+            double printerPxPerMm = printerDpi / 25.4;
+            int printW = static_cast<int>(std::round(cardMm * printerPxPerMm));
+            int printH = printW;
+            // Center on page
             QRect pageRect = printer.pageRect(QPrinter::DevicePixel).toRect();
-            double scale = std::min(
-                static_cast<double>(pageRect.width()) / imgW,
-                static_cast<double>(pageRect.height()) / imgH);
-            pp.scale(scale, scale);
-            pp.drawImage(0, 0, img);
+            int xOff = (pageRect.width() - printW) / 2;
+            int yOff = (pageRect.height() - printH) / 2;
+            pp.drawImage(QRect(xOff, yOff, printW, printH), img);
             pp.end();
-            spdlog::info("Checkerboard printed");
-            updateStatusMessage(tr("Checkerboard printed"));
+            spdlog::info("Checkerboard printed at {:.0f}x{:.0f} mm", cardMm, cardMm);
+            updateStatusMessage(tr("Checkerboard printed at %1x%1 mm")
+                .arg(static_cast<double>(cardMm), 0, 'f', 0));
         }
+    }
+}
+
+void MainWindow::onOpenCalibrationPDF()
+{
+    // Extract the bundled PDF from Qt resources to a temp file, then open it
+    QFile res(":/calibration_patterns.pdf");
+    if (!res.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, tr("Error"),
+            tr("Calibration patterns PDF not found in application resources."));
+        return;
+    }
+
+    // Write to a persistent temp directory so the PDF viewer can read it
+    static QTemporaryDir tmpDir;
+    if (!tmpDir.isValid()) {
+        QMessageBox::warning(this, tr("Error"), tr("Cannot create temporary directory."));
+        return;
+    }
+
+    QString tmpPath = tmpDir.path() + "/calibration_patterns.pdf";
+    QFile out(tmpPath);
+    if (out.exists() || out.open(QIODevice::WriteOnly)) {
+        if (!out.exists() || out.isOpen()) {
+            out.write(res.readAll());
+            out.close();
+        }
+        QDesktopServices::openUrl(QUrl::fromLocalFile(tmpPath));
+        spdlog::info("Opened calibration patterns PDF: {}", tmpPath.toStdString());
+        updateStatusMessage(tr("Calibration patterns PDF opened"));
+    } else {
+        QMessageBox::warning(this, tr("Error"),
+            tr("Cannot write temporary PDF file: %1").arg(out.errorString()));
     }
 }
 

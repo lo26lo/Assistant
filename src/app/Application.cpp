@@ -28,6 +28,8 @@
 #include <QStandardPaths>
 #include <QPushButton>
 #include <QPainter>
+#include <QMediaDevices>
+#include <QCameraDevice>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/features2d.hpp>
@@ -75,6 +77,24 @@ bool Application::initialize()
 
     // Wire signals between subsystems
     connectSignals();
+
+    // Enumerate cameras and populate ControlPanel
+    {
+        QStringList cameraNames;
+        const auto cameras = QMediaDevices::videoInputs();
+        for (int i = 0; i < cameras.size(); ++i)
+            cameraNames << QString("%1: %2").arg(i).arg(cameras[i].description());
+        if (cameraNames.isEmpty())
+            cameraNames << tr("No camera detected");
+        m_mainWindow->controlPanel()->setCameraDevices(cameraNames);
+        // Select the configured camera index
+        int idx = m_config->cameraIndex();
+        if (auto* cp = m_mainWindow->controlPanel()) {
+            if (idx >= 0 && idx < cameraNames.size())
+                cp->findChild<QComboBox*>()->setCurrentIndex(idx);
+        }
+        spdlog::info("Found {} camera(s)", cameras.size());
+    }
 
     // Show main window
     m_mainWindow->show();
@@ -181,10 +201,9 @@ void Application::connectSignals()
     // ── Camera toggle ───────────────────────────────────────────
     connect(m_mainWindow.get(), &gui::MainWindow::cameraToggled, this, [this](bool start) {
         if (start) {
-            auto* cp = m_mainWindow->controlPanel();
-            m_camera->setDeviceIndex(cp->cameraIndex());
-            m_camera->setResolution(cp->cameraWidth(), cp->cameraHeight());
-            m_camera->setFps(cp->cameraFps());
+            m_camera->setDeviceIndex(m_config->cameraIndex());
+            m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
+            m_camera->setFps(m_config->cameraFps());
             if (!m_camera->start()) {
                 m_mainWindow->updateStatusMessage(tr("Failed to start camera"));
             }
@@ -451,6 +470,11 @@ void Application::connectSignals()
     // ── Camera settings from control panel ──────────────────────
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::cameraSettingsChanged,
             this, [this](int index, int w, int h, int fps) {
+        // Sync to Config
+        m_config->setCameraIndex(index);
+        m_config->setCameraWidth(w);
+        m_config->setCameraHeight(h);
+        m_config->setCameraFps(fps);
         bool wasCapturing = m_camera->isCapturing();
         if (wasCapturing) m_camera->stop();
         m_camera->setDeviceIndex(index);
@@ -559,12 +583,50 @@ void Application::connectSignals()
     connect(m_mainWindow.get(), &gui::MainWindow::calibrationRequested,
             this, calibHandler);
 
-    // ── BOM panel component selection → overlay highlight ───────
+    // ── BOM panel component selection → overlay highlight + 2-comp align ─
     connect(m_mainWindow->bomPanel(), &gui::BomPanel::componentSelected,
             this, [this](const std::string& ref) {
         m_selectedRef = ref;
         if (m_overlayRenderer)
             m_overlayRenderer->setHighlightedRefs({ref});
+
+        // Handle 2-component alignment selection
+        if (m_alignOnComponents) {
+            // Find the component's center position
+            const Component* comp = nullptr;
+            for (const auto& c : m_ibomProject->components) {
+                if (c.reference == ref) { comp = &c; break; }
+            }
+            if (!comp) return;
+
+            cv::Point2f pcbPt(static_cast<float>(comp->bbox.center().x),
+                              static_cast<float>(comp->bbox.center().y));
+
+            if (m_alignCompStep == 0) {
+                m_alignRef1 = ref;
+                m_alignPcb1 = pcbPt;
+                m_alignCompStep = 1;
+                spdlog::info("2-comp align: comp1 = {} at PCB ({:.2f}, {:.2f})",
+                             ref, pcbPt.x, pcbPt.y);
+                m_mainWindow->updateStatusMessage(
+                    tr("Now CLICK on %1 in the camera image").arg(QString::fromStdString(ref)));
+            } else if (m_alignCompStep == 2) {
+                if (ref == m_alignRef1) {
+                    m_mainWindow->updateStatusMessage(
+                        tr("Choose a DIFFERENT component for point 2"));
+                    return;
+                }
+                m_alignRef2 = ref;
+                m_alignPcb2 = pcbPt;
+                m_alignCompStep = 3;
+                spdlog::info("2-comp align: comp2 = {} at PCB ({:.2f}, {:.2f})",
+                             ref, pcbPt.x, pcbPt.y);
+                m_mainWindow->updateStatusMessage(
+                    tr("Now CLICK on %1 in the camera image").arg(QString::fromStdString(ref)));
+            }
+            return;
+        }
+
         spdlog::info("Component selected: {}", ref);
     });
 
@@ -591,13 +653,46 @@ void Application::connectSignals()
     // ── Settings changed ────────────────────────────────────────
     connect(m_mainWindow.get(), &gui::MainWindow::settingsChanged,
             this, [this]() {
+        // Check if camera index changed and restart if needed
+        int newIdx = m_config->cameraIndex();
+        bool wasCapturing = m_camera->isCapturing();
+        if (wasCapturing) {
+            m_camera->stop();
+            m_camera->setDeviceIndex(newIdx);
+            m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
+            m_camera->setFps(m_config->cameraFps());
+            m_camera->start();
+            spdlog::info("Camera restarted on device {} ({}x{} @{}fps)",
+                         newIdx, m_config->cameraWidth(), m_config->cameraHeight(),
+                         m_config->cameraFps());
+        } else {
+            m_camera->setDeviceIndex(newIdx);
+            m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
+            m_camera->setFps(m_config->cameraFps());
+        }
         // Recreate ORB detector with updated keypoint count
         m_featureDetector = cv::ORB::create(m_config->orbKeypoints());
         // Reset reference frame so next tracking cycle recomputes
         m_referenceFrame = cv::Mat();
-        spdlog::info("Settings applied (ORB={}, interval={}ms, RANSAC={:.1f})",
-                     m_config->orbKeypoints(), m_config->trackingIntervalMs(),
+        spdlog::info("Settings applied (camera={}, ORB={}, interval={}ms, RANSAC={:.1f})",
+                     newIdx, m_config->orbKeypoints(), m_config->trackingIntervalMs(),
                      m_config->ransacThreshold());
+        // Sync ControlPanel combo to new camera index
+        auto* cp = m_mainWindow->controlPanel();
+        if (cp && newIdx >= 0)
+            cp->findChild<QComboBox*>()->setCurrentIndex(newIdx);
+
+        // Apply optical multiplier change to pixels-per-mm
+        float mult = m_config->opticalMultiplier();
+        if (mult > 0 && m_basePixelsPerMm > 0) {
+            m_currentPixelsPerMm = m_basePixelsPerMm * mult;
+            if (m_calibration)
+                m_calibration->setPixelsPerMm(m_currentPixelsPerMm);
+            if (auto* sp = m_mainWindow->statsPanel())
+                sp->setScale(m_currentPixelsPerMm);
+            spdlog::info("Optical multiplier={:.2f}x → effective px/mm={:.2f}",
+                         mult, m_currentPixelsPerMm);
+        }
     });
 
     // ── Heatmap toggle ──────────────────────────────────────────
@@ -651,6 +746,7 @@ void Application::connectSignals()
                 tr("Start the camera first before setting alignment points."));
             return;
         }
+        m_alignOnComponents = false;  // cancel any 2-comp align in progress
         m_pickingHomographyPoints = true;
         m_homographyImagePoints.clear();
         m_mainWindow->updateStatusMessage(
@@ -658,8 +754,119 @@ void Application::connectSignals()
         spdlog::info("Manual homography: point picking started");
     });
 
+    // ── 2-Component Alignment ───────────────────────────────────
+    connect(m_mainWindow->controlPanel(), &gui::ControlPanel::alignOnComponentsRequested,
+            this, [this]() {
+        if (!m_ibomProject) {
+            QMessageBox::information(m_mainWindow.get(), tr("Alignment"),
+                tr("Load an iBOM file first."));
+            return;
+        }
+        if (!m_camera->isCapturing()) {
+            QMessageBox::information(m_mainWindow.get(), tr("Alignment"),
+                tr("Start the camera first."));
+            return;
+        }
+        m_pickingHomographyPoints = false;  // cancel any 4-corner align
+        m_alignOnComponents = true;
+        m_alignCompStep = 0;
+        m_mainWindow->updateStatusMessage(
+            tr("Select the FIRST component in the BOM panel (choose 2 components far apart)"));
+        spdlog::info("2-component alignment started");
+    });
+
     connect(m_mainWindow->cameraView(), &gui::CameraView::clicked,
             this, [this](QPointF imagePos) {
+        // ── 2-component alignment click handling ──
+        if (m_alignOnComponents && (m_alignCompStep == 1 || m_alignCompStep == 3)) {
+            cv::Point2f imgPt(static_cast<float>(imagePos.x()),
+                              static_cast<float>(imagePos.y()));
+
+            if (m_alignCompStep == 1) {
+                m_alignImg1 = imgPt;
+                m_alignCompStep = 2;
+                spdlog::info("2-comp align: comp1 '{}' clicked at ({:.0f}, {:.0f})",
+                             m_alignRef1, imgPt.x, imgPt.y);
+                m_mainWindow->updateStatusMessage(
+                    tr("Now select the SECOND component in the BOM panel"));
+            } else { // step 3
+                m_alignImg2 = imgPt;
+                spdlog::info("2-comp align: comp2 '{}' clicked at ({:.0f}, {:.0f})",
+                             m_alignRef2, imgPt.x, imgPt.y);
+                m_alignOnComponents = false;
+                m_alignCompStep = 0;
+
+                // Compute similarity transform from 2 point pairs
+                // PCB coords → image coords
+                // A similarity has 4 DOF: scale, rotation, tx, ty
+                // From 2 points we get exactly 4 equations
+                double dx_pcb = m_alignPcb2.x - m_alignPcb1.x;
+                double dy_pcb = m_alignPcb2.y - m_alignPcb1.y;
+                double dx_img = m_alignImg2.x - m_alignImg1.x;
+                double dy_img = m_alignImg2.y - m_alignImg1.y;
+
+                double dist_pcb = std::sqrt(dx_pcb * dx_pcb + dy_pcb * dy_pcb);
+                double dist_img = std::sqrt(dx_img * dx_img + dy_img * dy_img);
+
+                if (dist_pcb < 0.1 || dist_img < 1.0) {
+                    QMessageBox::warning(m_mainWindow.get(), tr("Alignment Failed"),
+                        tr("The two components are too close together. Choose components that are far apart."));
+                    m_mainWindow->updateStatusMessage(tr("Alignment failed — components too close"));
+                    return;
+                }
+
+                // Similarity transform: scale, rotation
+                double scale = dist_img / dist_pcb;
+                double angle_pcb = std::atan2(dy_pcb, dx_pcb);
+                double angle_img = std::atan2(dy_img, dx_img);
+                double rot = angle_img - angle_pcb;
+
+                double cosR = std::cos(rot) * scale;
+                double sinR = std::sin(rot) * scale;
+
+                // Translation from point 1
+                double tx = m_alignImg1.x - (cosR * m_alignPcb1.x - sinR * m_alignPcb1.y);
+                double ty = m_alignImg1.y - (sinR * m_alignPcb1.x + cosR * m_alignPcb1.y);
+
+                // Build 4 virtual corners from the board bbox using the similarity
+                auto& bb = m_ibomProject->boardInfo.boardBBox;
+                std::vector<cv::Point2f> pcbCorners = {
+                    {static_cast<float>(bb.minX), static_cast<float>(bb.minY)},
+                    {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)},
+                    {static_cast<float>(bb.maxX), static_cast<float>(bb.maxY)},
+                    {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
+                };
+                std::vector<cv::Point2f> imgCorners;
+                for (const auto& p : pcbCorners) {
+                    float ix = static_cast<float>(cosR * p.x - sinR * p.y + tx);
+                    float iy = static_cast<float>(sinR * p.x + cosR * p.y + ty);
+                    imgCorners.push_back({ix, iy});
+                }
+
+                if (m_homography->compute(pcbCorners, imgCorners)) {
+                    m_overlayRenderer->setHomography(*m_homography);
+                    m_basePixelsPerMm = scale;
+                    m_currentPixelsPerMm = scale;
+                    if (auto* sp = m_mainWindow->statsPanel())
+                        sp->setScale(m_currentPixelsPerMm);
+                    m_referenceFrame = cv::Mat();  // reset live tracking
+
+                    spdlog::info("2-comp alignment OK: scale={:.2f} px/unit, rot={:.1f}°",
+                                 scale, rot * 180.0 / CV_PI);
+                    m_mainWindow->updateStatusMessage(
+                        tr("Alignment set from %1 + %2 — scale: %3 px/mm")
+                        .arg(QString::fromStdString(m_alignRef1))
+                        .arg(QString::fromStdString(m_alignRef2))
+                        .arg(scale, 0, 'f', 1));
+                } else {
+                    spdlog::error("2-comp alignment: homography compute failed");
+                    m_mainWindow->updateStatusMessage(tr("Alignment failed"));
+                }
+            }
+            return;
+        }
+
+        // ── 4-corner alignment click handling ──
         if (!m_pickingHomographyPoints) return;
 
         m_homographyImagePoints.push_back(
@@ -747,9 +954,8 @@ void Application::connectSignals()
         } else {
             // Restore base homography
             if (!m_baseHomography.empty()) {
-                // Recompute from base
-                m_homography->load(""); // reset
-                // Re-apply base by using existing PCB→image mapping
+                m_homography->setMatrix(m_baseHomography);
+                m_overlayRenderer->setHomography(*m_homography);
             }
             m_referenceFrame = cv::Mat();
             spdlog::info("Live tracking mode disabled");
@@ -793,8 +999,9 @@ void Application::loadIBomFile(const QString& path)
         float bw = static_cast<float>(bb.maxX - bb.minX);
         float bh = static_cast<float>(bb.maxY - bb.minY);
         if (bw > 0 && bh > 0) {
-            float iw = 1920.0f;
-            float ih = 1080.0f;
+            float iw = static_cast<float>(m_camera->resolution().width());
+            float ih = static_cast<float>(m_camera->resolution().height());
+            if (iw <= 0 || ih <= 0) { iw = 1920.0f; ih = 1080.0f; }
             float scale = std::min(iw / bw, ih / bh) * 0.8f;
             float ox = (iw - bw * scale) / 2.0f;
             float oy = (ih - bh * scale) / 2.0f;
@@ -857,7 +1064,7 @@ void Application::runCalibration()
     spdlog::info("Calibration succeeded: error={:.4f}, pixels/mm={:.2f}, saved to {}",
                  error, m_calibration->pixelsPerMm(), calibPath.toStdString());
     m_basePixelsPerMm = m_calibration->pixelsPerMm();
-    m_currentPixelsPerMm = m_basePixelsPerMm;
+    m_currentPixelsPerMm = m_basePixelsPerMm * m_config->opticalMultiplier();
     if (auto* sp = m_mainWindow->statsPanel())
         sp->setScale(m_currentPixelsPerMm);
     m_mainWindow->updateStatusMessage(

@@ -140,6 +140,7 @@ set(SOURCES
     src/gui/InspectionWizard.cpp
     src/gui/StatsPanel.cpp
     src/gui/SettingsDialog.cpp
+    src/gui/HelpDialog.cpp
 
     # Features
     src/features/PickAndPlace.cpp
@@ -196,6 +197,7 @@ set(HEADERS
     src/gui/InspectionWizard.h
     src/gui/StatsPanel.h
     src/gui/SettingsDialog.h
+    src/gui/HelpDialog.h
     src/gui/Theme.h
 
     # Features

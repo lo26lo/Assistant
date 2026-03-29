@@ -112,6 +112,9 @@ public:
     ScaleMethod scaleMethod() const { return m_scaleMethod; }
     void setScaleMethod(ScaleMethod m) { m_scaleMethod = m; }
 
+    float opticalMultiplier() const { return m_opticalMultiplier; }
+    void setOpticalMultiplier(float m) { m_opticalMultiplier = m; }
+
     // --- Checkboxes (BOM tracking) ---
     const std::vector<std::string>& checkboxColumns() const { return m_checkboxColumns; }
     void setCheckboxColumns(const std::vector<std::string>& cols) { m_checkboxColumns = cols; }
@@ -157,6 +160,7 @@ private:
     int   m_calibBoardRows  = 5;    // inner corners rows
     float m_calibSquareSize = 5.0f; // mm per square
     ScaleMethod m_scaleMethod = ScaleMethod::Homography;
+    float m_opticalMultiplier = 1.0f; // Lens adapter: 0.5x, 1x, 2x etc.
 
     // BOM
     std::vector<std::string> m_checkboxColumns = {"Sourced", "Placed"};

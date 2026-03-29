@@ -63,8 +63,8 @@ QPointF CameraView::mapToImage(const QPoint& widgetPos) const
 {
     if (m_frame.isNull() || m_scale <= 0) return {};
 
-    float x = (widgetPos.x() - m_imageRect.x() - m_panOffset.x()) / (m_scale * m_zoom);
-    float y = (widgetPos.y() - m_imageRect.y() - m_panOffset.y()) / (m_scale * m_zoom);
+    float x = (widgetPos.x() - m_imageRect.x() - m_panOffset.x()) / m_scale;
+    float y = (widgetPos.y() - m_imageRect.y() - m_panOffset.y()) / m_scale;
     return {x, y};
 }
 
@@ -172,10 +172,10 @@ void CameraView::drawMeasurement(QPainter& painter)
     painter.setPen(QPen(QColor(255, 255, 0), 2));
 
     // Convert image coords to widget
-    QPointF s(m_measureStart.x() * m_scale * m_zoom + m_imageRect.x() + m_panOffset.x(),
-              m_measureStart.y() * m_scale * m_zoom + m_imageRect.y() + m_panOffset.y());
-    QPointF e(m_measureEnd.x()   * m_scale * m_zoom + m_imageRect.x() + m_panOffset.x(),
-              m_measureEnd.y()   * m_scale * m_zoom + m_imageRect.y() + m_panOffset.y());
+    QPointF s(m_measureStart.x() * m_scale + m_imageRect.x() + m_panOffset.x(),
+              m_measureStart.y() * m_scale + m_imageRect.y() + m_panOffset.y());
+    QPointF e(m_measureEnd.x()   * m_scale + m_imageRect.x() + m_panOffset.x(),
+              m_measureEnd.y()   * m_scale + m_imageRect.y() + m_panOffset.y());
 
     painter.drawLine(s, e);
 
@@ -275,8 +275,8 @@ void CameraView::wheelEvent(QWheelEvent* event)
 
     QPointF afterZoom = mapToImage(mousePos.toPoint());
     QPointF diff = afterZoom - beforeZoom;
-    m_panOffset += QPointF(diff.x() * m_scale * m_zoom,
-                           diff.y() * m_scale * m_zoom);
+    m_panOffset += QPointF(diff.x() * m_scale,
+                           diff.y() * m_scale);
 
     update();
     emit zoomChanged(m_zoom);

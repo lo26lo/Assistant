@@ -165,9 +165,14 @@ QGroupBox* ControlPanel::createActionsGroup()
     connect(m_btnCalibrate, &QPushButton::clicked, this, &ControlPanel::recalibrateRequested);
     layout->addWidget(m_btnCalibrate);
 
-    m_btnAlign = new QPushButton(tr("Set Alignment Points"));
+    m_btnAlign = new QPushButton(tr("Set Alignment Points (4 corners)"));
     connect(m_btnAlign, &QPushButton::clicked, this, &ControlPanel::alignHomographyRequested);
     layout->addWidget(m_btnAlign);
+
+    m_btnAlignComps = new QPushButton(tr("Align on 2 Components"));
+    m_btnAlignComps->setToolTip(tr("Align overlay by clicking 2 known components — best for small FOV microscopes"));
+    connect(m_btnAlignComps, &QPushButton::clicked, this, &ControlPanel::alignOnComponentsRequested);
+    layout->addWidget(m_btnAlignComps);
 
     m_liveMode = new QCheckBox(tr("Live Tracking Mode"));
     m_liveMode->setToolTip(tr("Track PCB movement in real-time using feature matching"));
@@ -203,8 +208,8 @@ int ControlPanel::cameraFps()    const { return m_camFps->value(); }
 void ControlPanel::setCameraDevices(const QStringList& devices)
 {
     m_cameraDevice->clear();
-    for (int i = 0; i < devices.size(); ++i) {
-        m_cameraDevice->addItem(QString("%1: %2").arg(i).arg(devices[i]));
+    for (const auto& dev : devices) {
+        m_cameraDevice->addItem(dev);
     }
 }
 

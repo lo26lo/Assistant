@@ -42,6 +42,9 @@ public:
     /// Get the homography matrix (PCB -> image).
     const cv::Mat& matrix() const { return m_homography; }
 
+    /// Set the homography matrix directly (e.g., restore from backup).
+    void setMatrix(const cv::Mat& matrix);
+
     /// Get the inverse matrix (image -> PCB).
     const cv::Mat& inverseMatrix() const { return m_inverse; }
 

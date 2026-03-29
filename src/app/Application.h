@@ -109,6 +109,16 @@ private:
     bool m_pickingHomographyPoints = false;
     std::vector<cv::Point2f> m_homographyImagePoints;
 
+    // 2-component alignment mode
+    bool m_alignOnComponents = false;
+    int  m_alignCompStep = 0;  // 0=select comp1, 1=click comp1, 2=select comp2, 3=click comp2
+    std::string m_alignRef1;
+    std::string m_alignRef2;
+    cv::Point2f m_alignPcb1;
+    cv::Point2f m_alignPcb2;
+    cv::Point2f m_alignImg1;
+    cv::Point2f m_alignImg2;
+
     // Live tracking mode
     bool    m_liveMode = false;
     cv::Mat m_referenceFrame;

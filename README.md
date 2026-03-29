@@ -21,13 +21,15 @@ Application C++ qui capture le flux d'un microscope USB, détecte les composants
 
 | Module | Description |
 |---|---|
-| **Caméra USB** | Capture temps réel 1920×1080@30fps (MSMF backend), LED auto |
-| **Calibration** | Checkerboard configurable (taille carte/carrés dans Settings), undistortion temps réel |
+| **Caméra USB** | Capture temps réel 1920×1080@30fps (MSMF backend), LED auto, sélecteur de caméra |
+| **Calibration** | Checkerboard configurable (taille carte/carrés dans Settings), undistortion temps réel, PDF patron intégré |
+| **Adaptateur optique** | Support bagues 0.5×/0.75×/1×/1.5×/2× — multiplicateur appliqué au scale px/mm |
 | **Scale dynamique** | px/mm mis à jour auto quand le zoom du microscope change (2 méthodes : homographie ou pads iBOM, choix dans Settings) |
 | **iBOM Parser** | Import fichiers `.html` InteractiveHtmlBom, supporte JSON direct et LZ-String compressé |
 | **Overlay PCB** | Superposition pads + silkscreen + labels ref sur flux caméra, via homographie RANSAC |
 | **Alignement manuel** | 4 clics sur les coins du PCB → homographie calculée |
-| **Live Tracking** | Suivi ORB feature matching + homographie dynamique, s'adapte au déplacement et zoom |
+| **Alignement 2 points** | Mode rapide : 2 composants de référence → transformation similarité (4 DOF) |
+| **Live Tracking** | Suivi ORB feature matching + homographie dynamique, restauration correcte au désengagement |
 | **BOM Panel** | Tableau composants avec sélection → highlight overlay |
 | **Heatmap** | Toggle carte thermique des défauts |
 | **Settings** | Dialog 4 onglets (Camera/Overlay/Tracking/AI), persistance JSON |
@@ -36,6 +38,7 @@ Application C++ qui capture le flux d'un microscope USB, détecte les composants
 | **Screenshot** | Menu File → Save capture |
 | **FPS & Stats** | Timer 1s → StatsPanel + statusBar, scale px/mm en temps réel |
 | **Inspection Wizard** | Workflow guidé 4 étapes |
+| **Help** | Menu Help avec 8 sections (Démarrage, Calibration, Alignement, Lentilles, Inspection, Overlay, Export, Dépannage) |
 
 ### À connecter ❌
 
@@ -166,13 +169,17 @@ cd build\bin
 
 ### Workflow typique
 
-1. Lancer l'app, cliquer **Start Camera**
-2. **File → Open iBOM** → charger un fichier `.html` InteractiveHtmlBom
-3. Cliquer **Set Alignment** → cliquer les 4 coins du PCB (TL, TR, BR, BL)
-4. L'overlay des composants apparaît sur l'image caméra
-5. Activer **Live Tracking** pour que l'overlay suive les mouvements
-6. Monter/descendre le microscope → le scale (px/mm) se met à jour auto
-7. Configurer via **Ctrl+,** (Settings) : calibration, tracking, overlay, AI
+1. Lancer l'app, cliquer **Start Camera** (sélecteur de caméra dans le panneau latéral)
+2. Si bague optique (0.5×, 2×, etc.) : configurer dans **Settings → Camera → Lens Adapter**
+3. **Camera → Open Calibration Patterns PDF** pour imprimer le patron de calibration
+4. **Calibrer** avec le checkerboard (bouton Calibrate, 5 captures)
+5. **File → Open iBOM** → charger un fichier `.html` InteractiveHtmlBom
+6. Cliquer **Set Alignment** → cliquer les 4 coins du PCB (ou 2 composants en mode rapide)
+7. L'overlay des composants apparaît sur l'image caméra
+8. Activer **Live Tracking** pour que l'overlay suive les mouvements
+9. Monter/descendre le microscope → le scale (px/mm) se met à jour auto
+10. Configurer via **Ctrl+,** (Settings) : calibration, tracking, overlay, AI
+11. **Help** pour documentation détaillée de chaque fonctionnalité
 
 ---
 
@@ -204,7 +211,7 @@ Assistant/
 └── docs/                       # Documentation projet
 ```
 
-**88 fichiers** — 71 sources C++, 5 tests, 4 build, 8 support — **11 400+ lignes de code**
+**90+ fichiers** — 73 sources C++, 5 tests, 4 build, 8 support — **12 000+ lignes de code**
 
 ---
 
@@ -232,6 +239,8 @@ Modèles attendus dans `models/` :
 | `Ctrl+O` | Ouvrir fichier iBOM |
 | `Ctrl+,` | Ouvrir Settings |
 | `Ctrl+S` | Sauvegarder capture d'écran |
+| `F1` | Aide / Help |
+| `C` | Démarrer/arrêter la caméra |
 | `Double-clic` | Plein écran caméra (Escape pour revenir) |
 | `Escape` | Annuler mode en cours / quitter fullscreen |
 
@@ -253,11 +262,13 @@ Modèles attendus dans `models/` :
 - [x] Compilation réussie (NMake + MSVC + vcpkg)
 - [x] Capture caméra fonctionnelle (1920×1080@30fps)
 - [x] Import iBOM + overlay pads/silkscreen/labels
-- [x] Calibration caméra checkerboard (configurable)
-- [x] Alignement manuel (4 points) + live tracking ORB
-- [x] Scale dynamique (auto-zoom px/mm)
-- [x] Settings dialog (Camera/Overlay/Tracking/AI)
+- [x] Calibration caméra checkerboard (configurable) + PDF patron intégré
+- [x] Alignement manuel (4 points + mode 2 composants) + live tracking ORB
+- [x] Scale dynamique (auto-zoom px/mm) + support bagues optiques
+- [x] Settings dialog (Camera/Overlay/Tracking/AI) + sélecteur caméra
 - [x] Thème dark/light harmonisé
+- [x] Help dialog complet (8 sections documentées)
+- [x] Code review + correction 5 bugs majeurs (thread safety, coordonnées, homographie)
 - [ ] Intégration modèle IA (détection composants)
 - [ ] Inspection soudure temps réel
 - [ ] Mode pick & place guidé

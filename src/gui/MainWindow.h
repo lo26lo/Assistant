@@ -63,6 +63,8 @@ private slots:
     void onStartInspection();
     void onExportReport();
     void onGenerateCheckerboard();
+    void onOpenCalibrationPDF();
+    void onShowHelp(int tab = 0);
 
 private:
     void createActions();

@@ -15,5 +15,8 @@
         <!-- Stylesheets -->
         <!-- <file alias="styles/dark.qss">styles/dark.qss</file> -->
         <!-- <file alias="styles/light.qss">styles/light.qss</file> -->
+
+        <!-- Calibration -->
+        <file alias="calibration_patterns.pdf">calibration_patterns.pdf</file>
     </qresource>
 </RCC>

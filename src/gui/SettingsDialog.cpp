@@ -4,7 +4,11 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QGroupBox>
+#include <QApplication>
+#include <QMediaDevices>
+#include <QCameraDevice>
 
 SettingsDialog::SettingsDialog(ibom::Config& config, QWidget* parent)
     : QDialog(parent)
@@ -41,9 +45,19 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
     auto* page = new QWidget;
     auto* form = new QFormLayout(page);
 
-    m_cameraIndex = new QSpinBox;
-    m_cameraIndex->setRange(0, 10);
-    form->addRow(tr("Camera index:"), m_cameraIndex);
+    // Camera device selector with refresh button
+    auto* deviceRow = new QHBoxLayout;
+    m_cameraDevice = new QComboBox;
+    m_cameraDevice->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_refreshCameras = new QPushButton(tr("Refresh"));
+    m_refreshCameras->setToolTip(tr("Re-scan available cameras"));
+    m_refreshCameras->setFixedWidth(70);
+    connect(m_refreshCameras, &QPushButton::clicked, this, &SettingsDialog::enumerateCameras);
+    deviceRow->addWidget(m_cameraDevice, 1);
+    deviceRow->addWidget(m_refreshCameras);
+    form->addRow(tr("Camera:"), deviceRow);
+
+    enumerateCameras();
 
     m_cameraWidth = new QSpinBox;
     m_cameraWidth->setRange(320, 7680);
@@ -87,6 +101,15 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
     m_scaleMethod->addItem(tr("From iBOM pad distances"),      2);
     m_scaleMethod->setToolTip(tr("How to update px/mm when the microscope zoom changes"));
     calibForm->addRow(tr("Dynamic scale:"), m_scaleMethod);
+
+    m_opticalMultiplier = new QComboBox;
+    m_opticalMultiplier->addItem(tr("0.5x (wide FOV)"),  0.5);
+    m_opticalMultiplier->addItem(tr("0.75x"),             0.75);
+    m_opticalMultiplier->addItem(tr("1x (no adapter)"),   1.0);
+    m_opticalMultiplier->addItem(tr("1.5x"),              1.5);
+    m_opticalMultiplier->addItem(tr("2x (zoom)"),         2.0);
+    m_opticalMultiplier->setToolTip(tr("Optical adapter multiplier — affects pixels/mm ratio"));
+    calibForm->addRow(tr("Lens adapter:"), m_opticalMultiplier);
 
     form->addRow(calibGroup);
 
@@ -185,7 +208,9 @@ void SettingsDialog::createAiTab(QTabWidget* tabs)
 void SettingsDialog::loadFromConfig()
 {
     // Camera
-    m_cameraIndex->setValue(m_config.cameraIndex());
+    int idx = m_config.cameraIndex();
+    if (idx >= 0 && idx < m_cameraDevice->count())
+        m_cameraDevice->setCurrentIndex(idx);
     m_cameraWidth->setValue(m_config.cameraWidth());
     m_cameraHeight->setValue(m_config.cameraHeight());
     m_cameraFps->setValue(m_config.cameraFps());
@@ -196,6 +221,8 @@ void SettingsDialog::loadFromConfig()
     m_calibSquareSize->setValue(static_cast<double>(m_config.calibSquareSize()));
     m_scaleMethod->setCurrentIndex(
         m_scaleMethod->findData(static_cast<int>(m_config.scaleMethod())));
+    m_opticalMultiplier->setCurrentIndex(
+        m_opticalMultiplier->findData(static_cast<double>(m_config.opticalMultiplier())));
 
     // Overlay
     m_overlayOpacity->setValue(static_cast<int>(m_config.overlayOpacity() * 100));
@@ -219,7 +246,7 @@ void SettingsDialog::loadFromConfig()
 void SettingsDialog::accept()
 {
     // Camera
-    m_config.setCameraIndex(m_cameraIndex->value());
+    m_config.setCameraIndex(m_cameraDevice->currentIndex());
     m_config.setCameraWidth(m_cameraWidth->value());
     m_config.setCameraHeight(m_cameraHeight->value());
     m_config.setCameraFps(m_cameraFps->value());
@@ -230,6 +257,8 @@ void SettingsDialog::accept()
     m_config.setCalibSquareSize(static_cast<float>(m_calibSquareSize->value()));
     m_config.setScaleMethod(
         static_cast<ibom::ScaleMethod>(m_scaleMethod->currentData().toInt()));
+    m_config.setOpticalMultiplier(
+        static_cast<float>(m_opticalMultiplier->currentData().toDouble()));
 
     // Overlay
     m_config.setOverlayOpacity(static_cast<float>(m_overlayOpacity->value()) / 100.0f);
@@ -253,4 +282,27 @@ void SettingsDialog::accept()
     m_config.save();
 
     QDialog::accept();
+}
+
+void SettingsDialog::enumerateCameras()
+{
+    int previousIndex = m_cameraDevice->currentIndex();
+    m_cameraDevice->clear();
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+
+    const auto cameras = QMediaDevices::videoInputs();
+    if (cameras.isEmpty()) {
+        m_cameraDevice->addItem(tr("No camera detected"));
+    } else {
+        for (int i = 0; i < cameras.size(); ++i) {
+            QString label = QString("%1: %2").arg(i).arg(cameras[i].description());
+            m_cameraDevice->addItem(label, i);
+        }
+    }
+
+    QApplication::restoreOverrideCursor();
+
+    if (previousIndex >= 0 && previousIndex < m_cameraDevice->count())
+        m_cameraDevice->setCurrentIndex(previousIndex);
 }

@@ -101,6 +101,7 @@ bool Config::load(const std::string& path)
             m_calibSquareSize = cal.value("square_size_mm", m_calibSquareSize);
             m_scaleMethod     = static_cast<ScaleMethod>(cal.value("scale_method",
                                     static_cast<int>(m_scaleMethod)));
+            m_opticalMultiplier = cal.value("optical_multiplier", m_opticalMultiplier);
         }
 
         // BOM
@@ -173,7 +174,8 @@ bool Config::save(const std::string& path) const
             {"board_cols",     m_calibBoardCols},
             {"board_rows",     m_calibBoardRows},
             {"square_size_mm", m_calibSquareSize},
-            {"scale_method",   static_cast<int>(m_scaleMethod)}
+            {"scale_method",   static_cast<int>(m_scaleMethod)},
+            {"optical_multiplier", m_opticalMultiplier}
         };
 
         // BOM

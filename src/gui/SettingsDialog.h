@@ -9,6 +9,7 @@
 #include <QSlider>
 #include <QLabel>
 #include <QComboBox>
+#include <QPushButton>
 
 namespace ibom { class Config; }
 
@@ -28,20 +29,23 @@ private:
     void createAiTab(QTabWidget* tabs);
 
     void loadFromConfig();
+    void enumerateCameras();
 
     ibom::Config& m_config;
 
     // Camera
-    QSpinBox* m_cameraIndex  = nullptr;
-    QSpinBox* m_cameraWidth  = nullptr;
-    QSpinBox* m_cameraHeight = nullptr;
-    QSpinBox* m_cameraFps    = nullptr;
+    QComboBox*    m_cameraDevice   = nullptr;
+    QPushButton*  m_refreshCameras = nullptr;
+    QSpinBox*     m_cameraWidth    = nullptr;
+    QSpinBox*     m_cameraHeight   = nullptr;
+    QSpinBox*     m_cameraFps      = nullptr;
 
     // Calibration
     QSpinBox*       m_calibBoardCols  = nullptr;
     QSpinBox*       m_calibBoardRows  = nullptr;
     QDoubleSpinBox* m_calibSquareSize = nullptr;
     QComboBox*      m_scaleMethod     = nullptr;
+    QComboBox*      m_opticalMultiplier = nullptr;
 
     // Overlay
     QSlider*   m_overlayOpacity   = nullptr;
