@@ -52,10 +52,10 @@ void CameraCapture::stop()
     spdlog::info("Camera capture stopped.");
 }
 
-cv::Mat CameraCapture::latestFrame() const
+FrameRef CameraCapture::latestFrame() const
 {
     std::lock_guard<std::mutex> lock(m_frameMutex);
-    return m_latestFrame.clone();
+    return m_latestFrame;
 }
 
 FrameBuffer& CameraCapture::frameBuffer()
@@ -165,9 +165,10 @@ void CameraCapture::captureLoop()
         static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT)),
         static_cast<int>(cap.get(cv::CAP_PROP_FPS)));
 
-    cv::Mat frame;
-
     while (m_capturing.load()) {
+        // Fresh cv::Mat each iteration — prevents cap.read() from writing
+        // into a buffer that is still shared with downstream consumers.
+        cv::Mat frame;
         if (!cap.read(frame)) {
             spdlog::warn("Failed to read frame from camera.");
             continue;
@@ -175,17 +176,22 @@ void CameraCapture::captureLoop()
 
         if (frame.empty()) continue;
 
-        // Update latest frame (thread-safe)
+        // Wrap in shared_ptr<const cv::Mat> — pixel buffer is NOT copied;
+        // cv::Mat's internal refcount + shared_ptr give us zero-copy fan-out.
+        auto shared = std::make_shared<const cv::Mat>(std::move(frame));
+
+        // Publish latest (thread-safe pointer swap, no pixel copy)
         {
             std::lock_guard<std::mutex> lock(m_frameMutex);
-            frame.copyTo(m_latestFrame);
+            m_latestFrame = shared;
         }
 
-        // Push to ring buffer for AI pipeline
-        m_frameBuffer->push(frame);
+        // Ring buffer still takes cv::Mat — internally it copyTo's, which is
+        // acceptable (bounded capacity, isolates AI pipeline timing).
+        m_frameBuffer->push(*shared);
 
-        // Notify listeners (clone to decouple from capture loop's buffer)
-        emit frameReady(frame.clone());
+        // Notify listeners — Qt copies the shared_ptr (refcount bump only).
+        emit frameReady(shared);
     }
 
     cap.release();

@@ -2,8 +2,8 @@
 
 #include <QApplication>
 #include <QTimer>
+#include <QThread>
 #include <opencv2/core.hpp>
-#include <opencv2/features2d.hpp>
 #include <memory>
 #include <string>
 #include <atomic>
@@ -33,6 +33,7 @@ namespace overlay {
 class OverlayRenderer;
 class Homography;
 class HeatmapRenderer;
+class TrackingWorker;
 }
 
 /**
@@ -119,15 +120,11 @@ private:
     cv::Point2f m_alignImg1;
     cv::Point2f m_alignImg2;
 
-    // Live tracking mode
-    bool    m_liveMode = false;
-    cv::Mat m_referenceFrame;
-    std::vector<cv::KeyPoint> m_refKeypoints;
-    cv::Mat m_refDescriptors;
-    cv::Ptr<cv::Feature2D> m_featureDetector;
-    cv::Ptr<cv::DescriptorMatcher> m_featureMatcher;
-    cv::Mat m_baseHomography;  // Original homography before live tracking
-    std::chrono::steady_clock::time_point m_lastTrackingTime;
+    // Live tracking mode — ORB work happens on m_trackingThread via m_trackingWorker.
+    bool     m_liveMode = false;
+    cv::Mat  m_baseHomography;  // Original homography before live tracking
+    QThread* m_trackingThread = nullptr;            // owned by Application (QObject parent)
+    overlay::TrackingWorker* m_trackingWorker = nullptr;  // lives on m_trackingThread
 
     // Dynamic scale tracking
     double m_basePixelsPerMm = 0.0;  // pixelsPerMm at initial homography

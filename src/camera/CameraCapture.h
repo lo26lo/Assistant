@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QMetaType>
 #include <QSize>
 #include <opencv2/core.hpp>
 #include <memory>
@@ -10,6 +11,11 @@
 namespace ibom::camera {
 
 class FrameBuffer;
+
+/// Shared, immutable frame view. Pixel buffer is reference-counted — copying
+/// the shared_ptr does not copy pixels. Multiple consumers (GUI, tracking
+/// worker, calibration) can hold a reference concurrently without clones.
+using FrameRef = std::shared_ptr<const cv::Mat>;
 
 /**
  * @brief Captures frames from a USB camera (microscope).
@@ -37,8 +43,9 @@ public:
     /// Whether the camera is currently capturing.
     bool isCapturing() const { return m_capturing.load(); }
 
-    /// Get the latest frame (thread-safe copy).
-    cv::Mat latestFrame() const;
+    /// Get the latest frame (thread-safe, zero-copy shared view).
+    /// Returns an empty FrameRef (null) if no frame has been captured yet.
+    FrameRef latestFrame() const;
 
     /// Get the shared frame buffer.
     FrameBuffer& frameBuffer();
@@ -53,8 +60,9 @@ public:
     static std::vector<std::string> listDevices();
 
 signals:
-    /// Emitted when a new frame is ready.
-    void frameReady(const cv::Mat& frame);
+    /// Emitted when a new frame is ready. The FrameRef is shared — consumers
+    /// may hold it but MUST NOT mutate the underlying cv::Mat.
+    void frameReady(ibom::camera::FrameRef frame);
 
     /// Emitted on capture error.
     void captureError(const QString& message);
@@ -75,7 +83,9 @@ private:
     std::unique_ptr<FrameBuffer> m_frameBuffer;
 
     mutable std::mutex m_frameMutex;
-    cv::Mat            m_latestFrame;
+    FrameRef           m_latestFrame;
 };
 
 } // namespace ibom::camera
+
+Q_DECLARE_METATYPE(ibom::camera::FrameRef)

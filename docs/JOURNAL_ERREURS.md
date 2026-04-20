@@ -644,3 +644,100 @@ Le log s'arrête après le GPU warmup — aucun message de `Application::initial
 3. **Crash handler ajouté** dans `main.cpp` — `SetUnhandledExceptionFilter` pour logger l'adresse du crash en cas de récidive.
 
 > **Résultat : App stable après 12+ secondes. ✅**
+
+---
+
+## Session du 17 avril 2026 — Pipeline zero-copy + ORB en worker thread
+
+> Implémentation du **point 2** de l'analyse d'améliorations (priorité haute — performance) :
+> pipeline frame sans `.clone()` et déplacement du tracking ORB hors du thread GUI.
+
+### Objectifs
+
+1. **Zero-copy** : éliminer les `cv::Mat::clone()` dans le chemin caméra → CameraView.
+2. **ORB en worker thread** : sortir le tracking ORB + RANSAC du thread UI.
+3. **Downscale** : détecter sur image réduite (×0.5) pour diviser le coût ORB par ~4.
+
+### Changements appliqués
+
+#### A. Zero-copy (`FrameRef = std::shared_ptr<const cv::Mat>`)
+
+| Fichier | Changement |
+|---|---|
+| `src/camera/CameraCapture.h` | `using FrameRef = std::shared_ptr<const cv::Mat>;` + `Q_DECLARE_METATYPE` ; signal `frameReady` prend un `FrameRef` ; `latestFrame()` retourne `FrameRef` au lieu de `cv::Mat` ; membre `m_latestFrame` devient `FrameRef` |
+| `src/camera/CameraCapture.cpp` | `captureLoop()` : `cv::Mat frame` **local à chaque itération** (plus de réutilisation qui pouvait corrompre les buffers partagés) → `std::make_shared<const cv::Mat>(std::move(frame))` → stockage + `emit frameReady(shared)` **sans clone** |
+| `src/app/Application.cpp` | Slot frame : `[this](ibom::camera::FrameRef frameRef)` → lecture via `const cv::Mat& frame = *frameRef;` (partage de buffer refcounté) ; appel `latestFrame()` du calibrateur adapté pour déréférencer le shared_ptr et cloner explicitement (stockage long-terme légitime) ; `qRegisterMetaType<FrameRef>("ibom::camera::FrameRef")` |
+
+**Gain attendu** : ~2-3 copies cv::Mat par frame supprimées (capture → emit → slot → CameraView). À 1920×1080 BGR = ~6 MB par copie, à 30 fps = ~360-540 MB/s de bande passante mémoire économisée.
+
+#### B. TrackingWorker (ORB sur thread dédié, downscale 0.5×)
+
+| Fichier | Changement |
+|---|---|
+| `src/overlay/TrackingWorker.h` (nouveau) | Classe QObject avec slots `configure`, `setBaseHomography`, `resetReference`, `processFrame` ; signaux `homographyUpdated(cv::Mat)`, `referenceCaptured(int)`, `trackingError(QString)` |
+| `src/overlay/TrackingWorker.cpp` (nouveau) | Détection ORB sur image downscalée 0.5× (×4 moins de pixels) puis keypoints **rescalés vers la résolution originale** → l'homographie émise est en coords pleine résolution, aucune compensation nécessaire en aval ; throttle interne `m_intervalMs` ; BFMatcher + RANSAC + composition `frameH * baseHomography` |
+| `src/app/Application.h` | Remplacement de 7 membres (`m_referenceFrame`, `m_refKeypoints`, `m_refDescriptors`, `m_featureDetector`, `m_featureMatcher`, `m_lastTrackingTime`, et l'include `<opencv2/features2d.hpp>`) par `QThread* m_trackingThread` + `overlay::TrackingWorker* m_trackingWorker` ; `m_baseHomography` conservé pour la restauration au désengagement |
+| `src/app/Application.cpp` | Bloc ORB inline dans `frameReady` (72 lignes) **supprimé** → remplacé par `QMetaObject::invokeMethod(m_trackingWorker, "processFrame", Qt::QueuedConnection, Q_ARG(FrameRef, frameRef))` ; signal `homographyUpdated` connecté à un slot GUI qui appelle `m_homography->setMatrix()` + `updateDynamicScale()` ; destructeur `Application::~Application()` implémente l'arrêt propre du thread (`quit()` + `wait()`) ; `finished` → `deleteLater` du worker ; reconfiguration au changement de settings via `QMetaObject::invokeMethod(..., "configure", ...)` ; reset de référence lors des alignements via `resetReference` |
+| `CMakeLists.txt` | Ajout de `src/overlay/TrackingWorker.cpp` et `.h` dans `SOURCES`/`HEADERS` |
+
+**Gain attendu** : le thread GUI ne fait plus jamais d'ORB. Détection sur image 960×540 (downscale 0.5×) au lieu de 1920×1080 → ~4× plus rapide. Le frame rate caméra n'est plus impacté par le cycle de tracking de 200 ms.
+
+### Erreurs rencontrées et corrections
+
+#### ERREUR 36 — Réutilisation de `cv::Mat frame` hors boucle = corruption buffer partagé
+
+**Symptôme anticipé :**
+Dans le code original, `cv::Mat frame;` était déclaré **avant** la boucle `while(m_capturing)` puis réutilisé. Avec le refcount interne de cv::Mat, `cap.read(frame)` peut écrire en place si le refcount == 1. Mais dès qu'on émet un `shared_ptr<const cv::Mat>` qui contient ce buffer, le refcount passe à 2 et `cap.read()` **devrait** allouer un nouveau buffer (vérifié dans le code OpenCV). Cependant, cette garantie est subtile et dépend de l'implémentation de `VideoCapture::retrieve()`.
+
+**Correction appliquée ✅ :**
+Déclarer `cv::Mat frame;` **à l'intérieur** de la boucle → à chaque itération, frame est neuf, et le buffer ne peut pas entrer en concurrence avec un shared_ptr sortant.
+
+#### ERREUR 37 — `Q_DECLARE_METATYPE` pour `std::shared_ptr<const cv::Mat>`
+
+**Symptôme anticipé :**
+Qt MOC ne peut pas marshaller un type non enregistré à travers `Qt::QueuedConnection`. Le signal `frameReady` avec un `std::shared_ptr<const cv::Mat>` non déclaré métatype serait silencieusement ignoré (exactement comme l'erreur 33 avec `cv::Mat`).
+
+**Correction appliquée ✅ :**
+1. Typedef `using FrameRef = std::shared_ptr<const cv::Mat>;` pour donner un nom simple
+2. `Q_DECLARE_METATYPE(ibom::camera::FrameRef)` **en dehors du namespace**, après la fermeture de `namespace ibom::camera`
+3. `qRegisterMetaType<ibom::camera::FrameRef>("ibom::camera::FrameRef")` au début de `Application::initialize()` — le string doit correspondre **exactement** à ce que MOC enregistre (type qualifié tel qu'écrit dans la déclaration du signal)
+4. Signal déclaré avec le type qualifié : `void frameReady(ibom::camera::FrameRef frame);` (et non `FrameRef` non qualifié) pour que MOC enregistre le même nom
+
+#### ERREUR 38 — `cv::Mat` en argument de `Q_ARG` à travers les threads
+
+**Symptôme anticipé :**
+`QMetaObject::invokeMethod(m_trackingWorker, "setBaseHomography", Qt::QueuedConnection, Q_ARG(cv::Mat, m_baseHomography))` — `cv::Mat` est déjà enregistré comme métatype dans `Application::initialize()` (héritage de l'erreur 33). Donc ça marche. Mais le slot doit accepter par valeur (`void setBaseHomography(cv::Mat h)`) et pas par référence — sinon Qt ne peut pas copier dans la file d'attente.
+
+**Correction appliquée ✅ :**
+Slot `TrackingWorker::setBaseHomography(cv::Mat h)` déclaré par valeur. Le `.clone()` à l'intérieur du slot garantit une copie privée indépendante.
+
+#### ERREUR 39 — Slot `processFrame` non invocable via string name
+
+**Symptôme anticipé :**
+`QMetaObject::invokeMethod` avec un nom en chaîne (`"processFrame"`) nécessite que la méthode soit déclarée comme `Q_SLOT` / `public slots:` **ET** que MOC l'ait traitée. Si on oublie `Q_OBJECT` ou qu'on déclare la méthode en `private:`, l'invocation échoue silencieusement au runtime.
+
+**Correction appliquée ✅ :**
+Toutes les méthodes cibles de `invokeMethod` dans `TrackingWorker` placées sous `public slots:` dans le header. `Q_OBJECT` présent.
+
+#### ERREUR 40 — Arrêt du thread ORB au shutdown
+
+**Symptôme anticipé :**
+Si on laisse `QThread` mourir avec le worker encore vivant et des slots en attente, Qt émet des warnings `QObject: Cannot create children for a parent that is in a different thread.` ou crash au shutdown.
+
+**Correction appliquée ✅ :**
+Destructeur `Application::~Application()` appelle `m_trackingThread->quit()` + `m_trackingThread->wait()`. Le worker est détruit via `connect(QThread::finished, worker, &QObject::deleteLater)` — exécuté dans le thread ORB avant qu'il ne se termine.
+
+### Ce qui n'est PAS fait
+
+- **Build non vérifié** dans cette session — nécessite MSVC + vcpkg + CUDA + TensorRT (plusieurs heures) qui ne sont pas disponibles en mode sandbox. Les erreurs 36–40 ci-dessus sont anticipées par raisonnement sur le code Qt/OpenCV ; les vraies erreurs émergeront au premier `nmake`.
+- **QImage zéro-copie** : `qimg.copy()` avant `updateFrame` reste (copie pixel). Non adressé ici — il faudrait garder `rgb` vivant via membre ou capture de lambda ; plus intrusif, laissé pour une itération ultérieure.
+- **FrameBuffer** : continue à `copyTo` en interne. Acceptable (capacité 3, isole le pipeline AI). Pas touché.
+- **Interpolation/lissage d'homographie** : le worker émet l'homographie brute ; pas de filtre de Kalman ni de moyenne glissante. Toujours marqué comme amélioration future dans TODO.md.
+
+### Points à valider au prochain build
+
+1. `MOC` reconnait-il `ibom::camera::FrameRef` comme type valide pour un signal ? (si erreur, fallback sur `std::shared_ptr<const cv::Mat>` sans typedef, ou registration avec string non qualifié)
+2. Le downscale 0.5× + rescaling des keypoints donne-t-il une homographie de qualité équivalente à l'original ? (test visuel : l'overlay doit suivre les mouvements sans drift visible)
+3. Stabilité au toggle rapide `liveMode ON/OFF` (le worker doit traiter les messages `resetReference` avant le prochain `processFrame`)
+
+---

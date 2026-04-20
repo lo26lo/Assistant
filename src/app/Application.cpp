@@ -15,6 +15,7 @@
 #include "overlay/OverlayRenderer.h"
 #include "overlay/Homography.h"
 #include "overlay/HeatmapRenderer.h"
+#include "overlay/TrackingWorker.h"
 #include "gui/Theme.h"
 #include "utils/Logger.h"
 
@@ -32,7 +33,6 @@
 #include <QCameraDevice>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/features2d.hpp>
 #include <opencv2/calib3d.hpp>
 
 Q_DECLARE_METATYPE(cv::Mat)
@@ -45,12 +45,19 @@ Application::Application(QApplication& qapp)
 {
 }
 
-Application::~Application() = default;
+Application::~Application()
+{
+    if (m_trackingThread) {
+        m_trackingThread->quit();
+        m_trackingThread->wait();
+    }
+}
 
 bool Application::initialize()
 {
-    // Register cv::Mat for cross-thread signal/slot
+    // Register types for cross-thread signal/slot marshalling.
     qRegisterMetaType<cv::Mat>("cv::Mat");
+    qRegisterMetaType<ibom::camera::FrameRef>("ibom::camera::FrameRef");
 
     // Logging is already initialized in main(); just flush on info for diagnostics
     spdlog::flush_on(spdlog::level::info);
@@ -184,9 +191,21 @@ void Application::createSubsystems()
     // Heatmap renderer
     m_heatmapRenderer = std::make_unique<overlay::HeatmapRenderer>();
 
-    // Feature detector for live tracking mode
-    m_featureDetector = cv::ORB::create(m_config->orbKeypoints());
-    m_featureMatcher = cv::BFMatcher::create(cv::NORM_HAMMING, true);
+    // Live-tracking worker on its own thread. ORB + BFMatcher + RANSAC run
+    // there, off the GUI thread, so heavy CV work never blocks rendering.
+    m_trackingThread = new QThread(this);
+    m_trackingThread->setObjectName("ORB-Tracking");
+    m_trackingWorker = new overlay::TrackingWorker();
+    m_trackingWorker->moveToThread(m_trackingThread);
+    connect(m_trackingThread, &QThread::finished,
+            m_trackingWorker, &QObject::deleteLater);
+    m_trackingThread->start();
+    QMetaObject::invokeMethod(m_trackingWorker, "configure", Qt::QueuedConnection,
+        Q_ARG(int,    m_config->orbKeypoints()),
+        Q_ARG(int,    m_config->minMatchCount()),
+        Q_ARG(double, m_config->matchDistanceRatio()),
+        Q_ARG(double, m_config->ransacThreshold()),
+        Q_ARG(int,    m_config->trackingIntervalMs()));
 
     // Main window (owns GUI widgets)
     spdlog::info("Creating MainWindow...");
@@ -197,6 +216,23 @@ void Application::createSubsystems()
 void Application::connectSignals()
 {
     connect(this, &Application::shutdownRequested, &m_qapp, &QApplication::quit);
+
+    // ── Tracking worker → homography update on GUI thread ───────
+    if (m_trackingWorker) {
+        connect(m_trackingWorker, &overlay::TrackingWorker::homographyUpdated,
+                this, [this](cv::Mat combined) {
+            if (!m_liveMode || combined.empty() || !m_homography) return;
+            m_homography->setMatrix(combined);
+            if (m_overlayRenderer)
+                m_overlayRenderer->setHomography(*m_homography);
+            updateDynamicScale();
+        }, Qt::QueuedConnection);
+
+        connect(m_trackingWorker, &overlay::TrackingWorker::trackingError,
+                this, [](const QString& msg) {
+            spdlog::warn("Tracking worker error: {}", msg.toStdString());
+        }, Qt::QueuedConnection);
+    }
 
     // ── Camera toggle ───────────────────────────────────────────
     connect(m_mainWindow.get(), &gui::MainWindow::cameraToggled, this, [this](bool start) {
@@ -219,89 +255,25 @@ void Application::connectSignals()
     });
 
     // ── Camera frame → CameraView + Overlay ─────────────────────
-    connect(m_camera.get(), &camera::CameraCapture::frameReady, this, [this](const cv::Mat& frame) {
-        cv::Mat processed = frame;
+    // Slot receives a shared_ptr<const cv::Mat> — no pixel clone across threads.
+    connect(m_camera.get(), &camera::CameraCapture::frameReady, this,
+            [this](ibom::camera::FrameRef frameRef) {
+        if (!frameRef || frameRef->empty()) return;
+        const cv::Mat& frame = *frameRef;
 
-        // Apply undistortion if calibrated
-        if (m_calibration && m_calibration->isCalibrated()) {
-            processed = m_calibration->undistort(processed);
+        // ── Live tracking: hand the raw frame off to the worker thread ──
+        // The worker throttles, downscales and runs ORB without blocking us.
+        if (m_liveMode && m_trackingWorker && m_homography && m_homography->isValid()) {
+            QMetaObject::invokeMethod(m_trackingWorker, "processFrame", Qt::QueuedConnection,
+                Q_ARG(ibom::camera::FrameRef, frameRef));
         }
 
-        // ── Live tracking: update homography from feature matching ──
-        // Throttled to max ~5 fps to avoid blocking the GUI thread
-        if (m_liveMode && m_homography && m_homography->isValid() && m_featureDetector && m_ibomProject) {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now - m_lastTrackingTime).count();
-
-            if (elapsed >= m_config->trackingIntervalMs()) {
-                m_lastTrackingTime = now;
-
-                cv::Mat gray;
-                if (processed.channels() == 3)
-                    cv::cvtColor(processed, gray, cv::COLOR_BGR2GRAY);
-                else
-                    gray = processed.clone();
-
-                if (m_referenceFrame.empty()) {
-                    // Capture reference frame and features
-                    m_referenceFrame = gray.clone();
-                    m_refKeypoints.clear();
-                    m_refDescriptors = cv::Mat();
-                    m_featureDetector->detectAndCompute(
-                        m_referenceFrame, cv::noArray(), m_refKeypoints, m_refDescriptors);
-                    m_baseHomography = m_homography->matrix().clone();
-                    spdlog::info("Live tracking: reference frame captured ({} keypoints)",
-                                 m_refKeypoints.size());
-                } else if (!m_refDescriptors.empty() && m_refKeypoints.size() >= 4) {
-                    try {
-                        std::vector<cv::KeyPoint> curKeypoints;
-                        cv::Mat curDescriptors;
-                        m_featureDetector->detectAndCompute(
-                            gray, cv::noArray(), curKeypoints, curDescriptors);
-
-                        if (!curDescriptors.empty() && curKeypoints.size() >= 4) {
-                            std::vector<cv::DMatch> matches;
-                            m_featureMatcher->match(m_refDescriptors, curDescriptors, matches);
-
-                            if (matches.size() >= static_cast<size_t>(m_config->minMatchCount())) {
-                                double minDist = 1e9;
-                                for (const auto& m : matches)
-                                    if (m.distance < minDist) minDist = m.distance;
-                                double threshold = std::max(m_config->matchDistanceRatio() * minDist, 30.0);
-
-                                std::vector<cv::Point2f> srcPts, dstPts;
-                                for (const auto& m : matches) {
-                                    if (m.distance <= threshold) {
-                                        srcPts.push_back(m_refKeypoints[m.queryIdx].pt);
-                                        dstPts.push_back(curKeypoints[m.trainIdx].pt);
-                                    }
-                                }
-
-                                if (srcPts.size() >= static_cast<size_t>(m_config->minMatchCount())) {
-                                    cv::Mat frameH = cv::findHomography(srcPts, dstPts, cv::RANSAC, m_config->ransacThreshold());
-                                    if (!frameH.empty() && frameH.rows == 3 && frameH.cols == 3) {
-                                        cv::Mat combined = frameH * m_baseHomography;
-                                        auto& bb = m_ibomProject->boardInfo.boardBBox;
-                                        std::vector<cv::Point2f> pcbCorners = {
-                                            {static_cast<float>(bb.minX), static_cast<float>(bb.minY)},
-                                            {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)},
-                                            {static_cast<float>(bb.maxX), static_cast<float>(bb.maxY)},
-                                            {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
-                                        };
-                                        std::vector<cv::Point2f> imgCorners;
-                                        cv::perspectiveTransform(pcbCorners, imgCorners, combined);
-                                        m_homography->compute(pcbCorners, imgCorners);
-                                        updateDynamicScale();
-                                    }
-                                }
-                            }
-                        }
-                    } catch (const cv::Exception& e) {
-                        spdlog::warn("Live tracking frame error: {}", e.what());
-                    }
-                }
-            }
+        // Apply undistortion if calibrated (allocates a new Mat; unavoidable).
+        cv::Mat processed;
+        if (m_calibration && m_calibration->isCalibrated()) {
+            processed = m_calibration->undistort(frame);
+        } else {
+            processed = frame;  // header share, no pixel copy
         }
 
         // Convert to RGB for QImage
@@ -311,7 +283,7 @@ void Application::connectSignals()
         else if (processed.channels() == 1)
             cv::cvtColor(processed, rgb, cv::COLOR_GRAY2RGB);
         else
-            rgb = processed.clone();
+            rgb = processed;
 
         QImage qimg(rgb.data, rgb.cols, rgb.rows, static_cast<int>(rgb.step),
                     QImage::Format_RGB888);
@@ -545,8 +517,10 @@ void Application::connectSignals()
             }
             spdlog::info("Calibration image collection started");
         } else {
-            // Capture current frame
-            cv::Mat current = m_camera->latestFrame();
+            // Capture current frame — clone here: we store it long-term and
+            // don't want the capture loop to overwrite the shared buffer.
+            auto latest = m_camera->latestFrame();
+            cv::Mat current = (latest && !latest->empty()) ? latest->clone() : cv::Mat();
             if (!current.empty()) {
                 m_calibImages.push_back(current);
                 int count = static_cast<int>(m_calibImages.size());
@@ -670,10 +644,16 @@ void Application::connectSignals()
             m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
             m_camera->setFps(m_config->cameraFps());
         }
-        // Recreate ORB detector with updated keypoint count
-        m_featureDetector = cv::ORB::create(m_config->orbKeypoints());
-        // Reset reference frame so next tracking cycle recomputes
-        m_referenceFrame = cv::Mat();
+        // Push updated tracking parameters to the worker — it will recreate
+        // its detector and drop the current reference frame.
+        if (m_trackingWorker) {
+            QMetaObject::invokeMethod(m_trackingWorker, "configure", Qt::QueuedConnection,
+                Q_ARG(int,    m_config->orbKeypoints()),
+                Q_ARG(int,    m_config->minMatchCount()),
+                Q_ARG(double, m_config->matchDistanceRatio()),
+                Q_ARG(double, m_config->ransacThreshold()),
+                Q_ARG(int,    m_config->trackingIntervalMs()));
+        }
         spdlog::info("Settings applied (camera={}, ORB={}, interval={}ms, RANSAC={:.1f})",
                      newIdx, m_config->orbKeypoints(), m_config->trackingIntervalMs(),
                      m_config->ransacThreshold());
@@ -849,7 +829,9 @@ void Application::connectSignals()
                     m_currentPixelsPerMm = scale;
                     if (auto* sp = m_mainWindow->statsPanel())
                         sp->setScale(m_currentPixelsPerMm);
-                    m_referenceFrame = cv::Mat();  // reset live tracking
+                    if (m_trackingWorker)
+                        QMetaObject::invokeMethod(m_trackingWorker, "resetReference",
+                                                  Qt::QueuedConnection);
 
                     spdlog::info("2-comp alignment OK: scale={:.2f} px/unit, rot={:.1f}°",
                                  scale, rot * 180.0 / CV_PI);
@@ -921,8 +903,9 @@ void Application::connectSignals()
                 }
                 if (auto* sp = m_mainWindow->statsPanel())
                     sp->setScale(m_currentPixelsPerMm);
-                // Reset live mode reference if active
-                m_referenceFrame = cv::Mat();
+                if (m_trackingWorker)
+                    QMetaObject::invokeMethod(m_trackingWorker, "resetReference",
+                                              Qt::QueuedConnection);
             } else {
                 spdlog::error("Manual homography computation failed");
                 m_mainWindow->updateStatusMessage(tr("Alignment failed — try again"));
@@ -945,10 +928,13 @@ void Application::connectSignals()
                 m_liveMode = false;
                 return;
             }
-            // Store the current homography as base
             m_baseHomography = m_homography->matrix().clone();
-            // Reference frame will be captured on next frame
-            m_referenceFrame = cv::Mat();
+            if (m_trackingWorker) {
+                QMetaObject::invokeMethod(m_trackingWorker, "setBaseHomography",
+                    Qt::QueuedConnection, Q_ARG(cv::Mat, m_baseHomography));
+                QMetaObject::invokeMethod(m_trackingWorker, "resetReference",
+                    Qt::QueuedConnection);
+            }
             spdlog::info("Live tracking mode enabled");
             m_mainWindow->updateStatusMessage(tr("Live tracking mode ON"));
         } else {
@@ -957,7 +943,9 @@ void Application::connectSignals()
                 m_homography->setMatrix(m_baseHomography);
                 m_overlayRenderer->setHomography(*m_homography);
             }
-            m_referenceFrame = cv::Mat();
+            if (m_trackingWorker)
+                QMetaObject::invokeMethod(m_trackingWorker, "resetReference",
+                                          Qt::QueuedConnection);
             spdlog::info("Live tracking mode disabled");
             m_mainWindow->updateStatusMessage(tr("Live tracking mode OFF"));
         }
