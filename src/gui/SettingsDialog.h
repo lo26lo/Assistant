@@ -55,11 +55,12 @@ private:
     QCheckBox* m_showFabrication  = nullptr;
 
     // Tracking
-    QSpinBox*       m_trackingInterval = nullptr;
-    QSpinBox*       m_orbKeypoints     = nullptr;
-    QSpinBox*       m_minMatches       = nullptr;
-    QDoubleSpinBox* m_matchRatio       = nullptr;
-    QDoubleSpinBox* m_ransacThreshold  = nullptr;
+    QSpinBox*       m_trackingInterval  = nullptr;
+    QSpinBox*       m_orbKeypoints      = nullptr;
+    QSpinBox*       m_minMatches        = nullptr;
+    QDoubleSpinBox* m_matchRatio        = nullptr;
+    QDoubleSpinBox* m_ransacThreshold   = nullptr;
+    QDoubleSpinBox* m_trackingDownscale = nullptr;
 
     // AI
     QLineEdit*      m_modelsPath     = nullptr;

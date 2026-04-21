@@ -9,31 +9,34 @@ namespace ibom::overlay {
 TrackingWorker::TrackingWorker(QObject* parent)
     : QObject(parent)
 {
-    m_detector = cv::ORB::create(500);
-    m_matcher  = cv::BFMatcher::create(cv::NORM_HAMMING, true);
+    m_detector = cv::ORB::create(200);
+    // crossCheck must be false: knnMatch(k=2) is incompatible with crossCheck.
+    m_matcher  = cv::BFMatcher::create(cv::NORM_HAMMING, false);
 }
 
 void TrackingWorker::configure(int orbKeypoints,
                                int minMatchCount,
-                               double matchDistanceRatio,
+                               double loweRatio,
                                double ransacThreshold,
-                               int intervalMs)
+                               int intervalMs,
+                               float downscale)
 {
-    m_detector           = cv::ORB::create(std::max(50, orbKeypoints));
-    m_minMatchCount      = std::max(4, minMatchCount);
-    m_matchDistanceRatio = matchDistanceRatio;
-    m_ransacThreshold    = ransacThreshold;
-    m_intervalMs         = std::max(0, intervalMs);
+    m_detector        = cv::ORB::create(std::max(50, orbKeypoints));
+    m_minMatchCount   = std::max(4, minMatchCount);
+    m_loweRatio       = std::clamp(loweRatio, 0.1, 0.99);
+    m_ransacThreshold = ransacThreshold;
+    m_intervalMs      = std::max(0, intervalMs);
+    m_downscale       = std::clamp(downscale, 0.1f, 1.0f);
 
     // Drop reference so the next frame re-captures it with the new detector.
     m_hasReference = false;
     m_refKeypoints.clear();
     m_refDescriptors = cv::Mat();
 
-    spdlog::info("TrackingWorker configured: ORB={}, minMatch={}, ratio={:.2f}, "
-                 "RANSAC={:.1f}, interval={}ms",
-                 orbKeypoints, minMatchCount, matchDistanceRatio,
-                 ransacThreshold, intervalMs);
+    spdlog::info("TrackingWorker configured: ORB={}, minMatch={}, loweRatio={:.2f}, "
+                 "RANSAC={:.1f}, interval={}ms, downscale={:.2f}",
+                 orbKeypoints, minMatchCount, m_loweRatio,
+                 ransacThreshold, intervalMs, m_downscale);
 }
 
 void TrackingWorker::setBaseHomography(cv::Mat h)
@@ -65,6 +68,8 @@ void TrackingWorker::processFrame(ibom::camera::FrameRef frame)
     }
     m_lastProcessTime = now;
 
+    const auto t0 = std::chrono::steady_clock::now();
+
     try {
         // Convert + downscale for speed. Keypoints are rescaled back to full
         // resolution so the emitted homography is in original image coords.
@@ -81,10 +86,12 @@ void TrackingWorker::processFrame(ibom::camera::FrameRef frame)
             small = gray;
 
         const float invScale = (m_downscale > 0.0f) ? (1.0f / m_downscale) : 1.0f;
+        const auto tPrep = std::chrono::steady_clock::now();
 
         std::vector<cv::KeyPoint> kp;
         cv::Mat desc;
         m_detector->detectAndCompute(small, cv::noArray(), kp, desc);
+        const auto tDetect = std::chrono::steady_clock::now();
 
         // Rescale keypoint positions back to original-resolution coords.
         for (auto& k : kp) {
@@ -108,23 +115,20 @@ void TrackingWorker::processFrame(ibom::camera::FrameRef frame)
         if (desc.empty() || kp.size() < static_cast<size_t>(m_minMatchCount))
             return;
 
-        std::vector<cv::DMatch> matches;
-        m_matcher->match(m_refDescriptors, desc, matches);
-        if (matches.size() < static_cast<size_t>(m_minMatchCount))
-            return;
-
-        double minDist = 1e9;
-        for (const auto& m : matches)
-            if (m.distance < minDist) minDist = m.distance;
-        const double threshold = std::max(m_matchDistanceRatio * minDist, 30.0);
+        // Lowe's ratio test — only keep matches where the nearest neighbor is
+        // clearly better than the second-nearest. Standard practice for ORB/SIFT.
+        std::vector<std::vector<cv::DMatch>> knn;
+        m_matcher->knnMatch(m_refDescriptors, desc, knn, 2);
+        const auto tMatch = std::chrono::steady_clock::now();
 
         std::vector<cv::Point2f> srcPts, dstPts;
-        srcPts.reserve(matches.size());
-        dstPts.reserve(matches.size());
-        for (const auto& m : matches) {
-            if (m.distance <= threshold) {
-                srcPts.push_back(m_refKeypoints[m.queryIdx].pt);
-                dstPts.push_back(kp[m.trainIdx].pt);
+        srcPts.reserve(knn.size());
+        dstPts.reserve(knn.size());
+        for (const auto& pair : knn) {
+            if (pair.size() < 2) continue;
+            if (pair[0].distance < m_loweRatio * pair[1].distance) {
+                srcPts.push_back(m_refKeypoints[pair[0].queryIdx].pt);
+                dstPts.push_back(kp[pair[0].trainIdx].pt);
             }
         }
 
@@ -140,6 +144,17 @@ void TrackingWorker::processFrame(ibom::camera::FrameRef frame)
 
         cv::Mat combined = frameH * m_baseHomography;
         emit homographyUpdated(combined);
+
+        const auto tEnd = std::chrono::steady_clock::now();
+        using ms = std::chrono::duration<double, std::milli>;
+        spdlog::debug("TrackingWorker: {}×{} → kp={} inliers={} | prep={:.1f} detect={:.1f} "
+                      "match={:.1f} homog={:.1f} total={:.1f} ms",
+                      small.cols, small.rows, kp.size(), srcPts.size(),
+                      ms(tPrep   - t0).count(),
+                      ms(tDetect - tPrep).count(),
+                      ms(tMatch  - tDetect).count(),
+                      ms(tEnd    - tMatch).count(),
+                      ms(tEnd    - t0).count());
 
     } catch (const cv::Exception& e) {
         emit trackingError(QString::fromStdString(e.what()));

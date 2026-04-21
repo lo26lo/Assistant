@@ -91,6 +91,15 @@ bool Config::load(const std::string& path)
             m_minMatchCount      = trk.value("min_matches", m_minMatchCount);
             m_matchDistanceRatio = trk.value("match_distance_ratio", m_matchDistanceRatio);
             m_ransacThreshold    = trk.value("ransac_threshold", m_ransacThreshold);
+            m_trackingDownscale  = trk.value("downscale", m_trackingDownscale);
+
+            // Migration: legacy match_distance_ratio values were distance multipliers
+            // (typically 2.0); the new semantics is Lowe's ratio test in [0,1].
+            if (m_matchDistanceRatio >= 1.0) {
+                spdlog::info("Migrating legacy match_distance_ratio {} → Lowe ratio 0.75",
+                             m_matchDistanceRatio);
+                m_matchDistanceRatio = 0.75;
+            }
         }
 
         // Calibration
@@ -166,7 +175,8 @@ bool Config::save(const std::string& path) const
             {"orb_keypoints",        m_orbKeypoints},
             {"min_matches",          m_minMatchCount},
             {"match_distance_ratio", m_matchDistanceRatio},
-            {"ransac_threshold",     m_ransacThreshold}
+            {"ransac_threshold",     m_ransacThreshold},
+            {"downscale",            m_trackingDownscale}
         };
 
         // Calibration

@@ -167,10 +167,11 @@ void SettingsDialog::createTrackingTab(QTabWidget* tabs)
     form->addRow(tr("Min matches:"), m_minMatches);
 
     m_matchRatio = new QDoubleSpinBox;
-    m_matchRatio->setRange(1.0, 10.0);
-    m_matchRatio->setSingleStep(0.5);
-    m_matchRatio->setToolTip(tr("Distance ratio multiplier for match filtering"));
-    form->addRow(tr("Match distance ratio:"), m_matchRatio);
+    m_matchRatio->setRange(0.50, 0.95);
+    m_matchRatio->setSingleStep(0.05);
+    m_matchRatio->setDecimals(2);
+    m_matchRatio->setToolTip(tr("Lowe's ratio test — smaller is stricter (typical 0.7–0.8)"));
+    form->addRow(tr("Lowe ratio:"), m_matchRatio);
 
     m_ransacThreshold = new QDoubleSpinBox;
     m_ransacThreshold->setRange(0.5, 20.0);
@@ -178,6 +179,14 @@ void SettingsDialog::createTrackingTab(QTabWidget* tabs)
     m_ransacThreshold->setSuffix(" px");
     m_ransacThreshold->setToolTip(tr("RANSAC reprojection threshold"));
     form->addRow(tr("RANSAC threshold:"), m_ransacThreshold);
+
+    m_trackingDownscale = new QDoubleSpinBox;
+    m_trackingDownscale->setRange(0.1, 1.0);
+    m_trackingDownscale->setSingleStep(0.1);
+    m_trackingDownscale->setDecimals(2);
+    m_trackingDownscale->setToolTip(tr("Image scale before ORB (1.0 = full res, 0.5 = half). "
+                                        "Smaller = faster but less robust."));
+    form->addRow(tr("Downscale:"), m_trackingDownscale);
 
     tabs->addTab(page, tr("Tracking"));
 }
@@ -236,6 +245,7 @@ void SettingsDialog::loadFromConfig()
     m_minMatches->setValue(m_config.minMatchCount());
     m_matchRatio->setValue(m_config.matchDistanceRatio());
     m_ransacThreshold->setValue(m_config.ransacThreshold());
+    m_trackingDownscale->setValue(static_cast<double>(m_config.trackingDownscale()));
 
     // AI
     m_modelsPath->setText(QString::fromStdString(m_config.modelsPath()));
@@ -272,6 +282,7 @@ void SettingsDialog::accept()
     m_config.setMinMatchCount(m_minMatches->value());
     m_config.setMatchDistanceRatio(m_matchRatio->value());
     m_config.setRansacThreshold(m_ransacThreshold->value());
+    m_config.setTrackingDownscale(static_cast<float>(m_trackingDownscale->value()));
 
     // AI
     m_config.setModelsPath(m_modelsPath->text().toStdString());

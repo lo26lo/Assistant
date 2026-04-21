@@ -93,11 +93,17 @@ public:
     int  minMatchCount() const { return m_minMatchCount; }
     void setMinMatchCount(int n) { m_minMatchCount = n; }
 
+    /// Lowe's ratio test threshold: keep match[0] iff its distance < ratio × match[1].
+    /// Typical values 0.7–0.8; smaller = stricter.
     double matchDistanceRatio() const { return m_matchDistanceRatio; }
     void setMatchDistanceRatio(double r) { m_matchDistanceRatio = r; }
 
     double ransacThreshold() const { return m_ransacThreshold; }
     void setRansacThreshold(double t) { m_ransacThreshold = t; }
+
+    /// Image downscale factor before ORB (0.1–1.0). Smaller = faster, less robust.
+    float trackingDownscale() const { return m_trackingDownscale; }
+    void  setTrackingDownscale(float d) { m_trackingDownscale = d; }
 
     // --- Calibration ---
     int  calibBoardCols() const { return m_calibBoardCols; }
@@ -150,10 +156,11 @@ private:
 
     // Live Tracking
     int    m_trackingIntervalMs = 200;
-    int    m_orbKeypoints       = 500;
+    int    m_orbKeypoints       = 200;    // ORB is called every intervalMs; 200 is enough @ 0.5× downscale
     int    m_minMatchCount      = 8;
-    double m_matchDistanceRatio = 2.0;
+    double m_matchDistanceRatio = 0.75;   // Lowe's ratio (lower = stricter)
     double m_ransacThreshold    = 3.0;
+    float  m_trackingDownscale  = 0.5f;   // 1.0 = full res, 0.5 = half (default)
 
     // Calibration (microscope-friendly defaults: small 5cm card)
     int   m_calibBoardCols  = 7;    // inner corners cols

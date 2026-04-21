@@ -38,6 +38,9 @@ aqtinstall.log
 # Test script
 test_configure.bat
 
+# Claude Code local settings (per-machine)
+.claude/
+
 # OS files
 Thumbs.db
 Desktop.ini

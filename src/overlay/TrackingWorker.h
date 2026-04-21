@@ -34,11 +34,14 @@ public:
 public slots:
     /// Configure detector + matching parameters. Recreates ORB detector
     /// with the requested keypoint count.
+    /// @param loweRatio Lowe's ratio test threshold (typical 0.7–0.8).
+    /// @param downscale Image downscale before ORB, clamped to [0.1, 1.0].
     void configure(int orbKeypoints,
                    int minMatchCount,
-                   double matchDistanceRatio,
+                   double loweRatio,
                    double ransacThreshold,
-                   int intervalMs);
+                   int intervalMs,
+                   float downscale);
 
     /// Set the PCB→reference_image homography. Emitted back combined with
     /// the per-frame delta after each successful tracking update.
@@ -71,7 +74,7 @@ private:
     cv::Mat                   m_baseHomography;
 
     int    m_minMatchCount      = 10;
-    double m_matchDistanceRatio = 2.0;
+    double m_loweRatio          = 0.75;
     double m_ransacThreshold    = 5.0;
     int    m_intervalMs         = 200;
     float  m_downscale          = 0.5f;

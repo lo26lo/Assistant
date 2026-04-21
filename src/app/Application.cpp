@@ -205,7 +205,8 @@ void Application::createSubsystems()
         Q_ARG(int,    m_config->minMatchCount()),
         Q_ARG(double, m_config->matchDistanceRatio()),
         Q_ARG(double, m_config->ransacThreshold()),
-        Q_ARG(int,    m_config->trackingIntervalMs()));
+        Q_ARG(int,    m_config->trackingIntervalMs()),
+        Q_ARG(float,  m_config->trackingDownscale()));
 
     // Main window (owns GUI widgets)
     spdlog::info("Creating MainWindow...");
@@ -652,11 +653,12 @@ void Application::connectSignals()
                 Q_ARG(int,    m_config->minMatchCount()),
                 Q_ARG(double, m_config->matchDistanceRatio()),
                 Q_ARG(double, m_config->ransacThreshold()),
-                Q_ARG(int,    m_config->trackingIntervalMs()));
+                Q_ARG(int,    m_config->trackingIntervalMs()),
+                Q_ARG(float,  m_config->trackingDownscale()));
         }
-        spdlog::info("Settings applied (camera={}, ORB={}, interval={}ms, RANSAC={:.1f})",
+        spdlog::info("Settings applied (camera={}, ORB={}, interval={}ms, RANSAC={:.1f}, downscale={:.2f})",
                      newIdx, m_config->orbKeypoints(), m_config->trackingIntervalMs(),
-                     m_config->ransacThreshold());
+                     m_config->ransacThreshold(), m_config->trackingDownscale());
         // Sync ControlPanel combo to new camera index
         auto* cp = m_mainWindow->controlPanel();
         if (cp && newIdx >= 0)
