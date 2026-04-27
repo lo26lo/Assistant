@@ -10,6 +10,11 @@
 #include <QMediaDevices>
 #include <QCameraDevice>
 #include <QColorDialog>
+#include <QMetaObject>
+#include <thread>
+#ifdef Q_OS_WIN
+#include <objbase.h>
+#endif
 
 SettingsDialog::SettingsDialog(ibom::Config& config, QWidget* parent)
     : QDialog(parent)
@@ -408,23 +413,43 @@ void SettingsDialog::accept()
 
 void SettingsDialog::enumerateCameras()
 {
+    // QMediaDevices::videoInputs() can stall the GUI thread for tens of
+    // seconds on Windows MSMF when the camera service is in a bad state.
+    // Run it on a detached worker (with COM init) and post the result back.
     int previousIndex = m_cameraDevice->currentIndex();
+    if (previousIndex < 0)
+        previousIndex = m_config.cameraIndex();
+
     m_cameraDevice->clear();
+    m_cameraDevice->addItem(tr("Detecting cameras…"));
+    m_cameraDevice->setEnabled(false);
+    if (m_refreshCameras)
+        m_refreshCameras->setEnabled(false);
 
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-
-    const auto cameras = QMediaDevices::videoInputs();
-    if (cameras.isEmpty()) {
-        m_cameraDevice->addItem(tr("No camera detected"));
-    } else {
-        for (int i = 0; i < cameras.size(); ++i) {
-            QString label = QString("%1: %2").arg(i).arg(cameras[i].description());
-            m_cameraDevice->addItem(label, i);
-        }
-    }
-
-    QApplication::restoreOverrideCursor();
-
-    if (previousIndex >= 0 && previousIndex < m_cameraDevice->count())
-        m_cameraDevice->setCurrentIndex(previousIndex);
+    std::thread([this, previousIndex]() {
+#ifdef Q_OS_WIN
+        ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+#endif
+        QStringList names;
+        const auto cameras = QMediaDevices::videoInputs();
+        for (int i = 0; i < cameras.size(); ++i)
+            names << QString("%1: %2").arg(i).arg(cameras[i].description());
+#ifdef Q_OS_WIN
+        ::CoUninitialize();
+#endif
+        QMetaObject::invokeMethod(this, [this, names, previousIndex]() {
+            m_cameraDevice->clear();
+            if (names.isEmpty()) {
+                m_cameraDevice->addItem(tr("No camera detected"));
+            } else {
+                for (int i = 0; i < names.size(); ++i)
+                    m_cameraDevice->addItem(names[i], i);
+            }
+            m_cameraDevice->setEnabled(true);
+            if (m_refreshCameras)
+                m_refreshCameras->setEnabled(true);
+            if (previousIndex >= 0 && previousIndex < m_cameraDevice->count())
+                m_cameraDevice->setCurrentIndex(previousIndex);
+        }, Qt::QueuedConnection);
+    }).detach();
 }
