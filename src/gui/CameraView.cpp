@@ -55,8 +55,53 @@ void CameraView::setZoomLevel(float zoom)
 void CameraView::setMeasurementMode(bool enabled)
 {
     m_measureMode = enabled;
-    m_measuring = false;
+    if (!enabled) {
+        m_measurePoints.clear();
+        m_measureCursorValid = false;
+        m_measureModeKind = -1;
+    }
     update();
+}
+
+void CameraView::setMeasureModeKind(int kind)
+{
+    m_measureModeKind = kind;
+    m_measurePoints.clear();
+    m_measureCursorValid = false;
+    update();
+}
+
+void CameraView::setPixelsPerMm(double v)
+{
+    m_pixelsPerMm = v;
+    update();
+}
+
+void CameraView::appendCompletedMeasure(int mode, const std::vector<QPointF>& pts,
+                                        double valuePixels, double valueMM)
+{
+    m_measureHistory.push_back({mode, pts, valuePixels, valueMM});
+    m_measurePoints.clear();
+    update();
+}
+
+void CameraView::clearMeasureHistory()
+{
+    m_measureHistory.clear();
+    update();
+}
+
+void CameraView::clearCurrentMeasurePoints()
+{
+    m_measurePoints.clear();
+    m_measureCursorValid = false;
+    update();
+}
+
+QPointF CameraView::imageToWidget(QPointF imagePos) const
+{
+    return QPointF(imagePos.x() * m_scale + m_imageRect.x() + m_panOffset.x(),
+                   imagePos.y() * m_scale + m_imageRect.y() + m_panOffset.y());
 }
 
 QPointF CameraView::mapToImage(const QPoint& widgetPos) const
@@ -146,8 +191,8 @@ void CameraView::paintEvent(QPaintEvent* /*event*/)
     if (m_crosshairVisible)
         drawCrosshair(painter);
 
-    // Draw measurement
-    if (m_measureMode && m_measuring)
+    // Draw measurement (current + history)
+    if (m_measureMode || !m_measureHistory.empty())
         drawMeasurement(painter);
 
     // Zoom indicator
@@ -169,24 +214,153 @@ void CameraView::drawCrosshair(QPainter& painter)
 
 void CameraView::drawMeasurement(QPainter& painter)
 {
-    painter.setPen(QPen(QColor(255, 255, 0), 2));
-
-    // Convert image coords to widget
-    QPointF s(m_measureStart.x() * m_scale + m_imageRect.x() + m_panOffset.x(),
-              m_measureStart.y() * m_scale + m_imageRect.y() + m_panOffset.y());
-    QPointF e(m_measureEnd.x()   * m_scale + m_imageRect.x() + m_panOffset.x(),
-              m_measureEnd.y()   * m_scale + m_imageRect.y() + m_panOffset.y());
-
-    painter.drawLine(s, e);
-
-    // Distance in pixels
-    double dx = m_measureEnd.x() - m_measureStart.x();
-    double dy = m_measureEnd.y() - m_measureStart.y();
-    double dist = std::sqrt(dx * dx + dy * dy);
-
-    QPointF mid = (s + e) / 2.0;
+    painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setFont(QFont("Segoe UI", 10, QFont::Bold));
-    painter.drawText(mid + QPointF(5, -5), QString("%1 px").arg(dist, 0, 'f', 1));
+
+    auto drawPointDot = [&](QPointF widgetPt, const QColor& c) {
+        painter.setPen(QPen(QColor(0, 0, 0, 200), 1));
+        painter.setBrush(c);
+        painter.drawEllipse(widgetPt, 4.5, 4.5);
+    };
+
+    auto drawLabel = [&](QPointF widgetPt, const QString& text, const QColor& fg) {
+        QFontMetrics fm(painter.font());
+        QRect r = fm.boundingRect(text).adjusted(-4, -2, 4, 2);
+        r.moveTo(widgetPt.x() + 8, widgetPt.y() - r.height() - 4);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0, 0, 0, 170));
+        painter.drawRoundedRect(r, 3, 3);
+        painter.setPen(fg);
+        painter.drawText(r, Qt::AlignCenter, text);
+    };
+
+    auto formatLength = [&](double valuePx) -> QString {
+        if (m_pixelsPerMm > 0)
+            return QString("%1 px  •  %2 mm")
+                .arg(valuePx, 0, 'f', 1)
+                .arg(valuePx / m_pixelsPerMm, 0, 'f', 3);
+        return QString("%1 px").arg(valuePx, 0, 'f', 1);
+    };
+
+    auto formatArea = [&](double valuePx2) -> QString {
+        if (m_pixelsPerMm > 0)
+            return QString("%1 px²  •  %2 mm²")
+                .arg(valuePx2, 0, 'f', 0)
+                .arg(valuePx2 / (m_pixelsPerMm * m_pixelsPerMm), 0, 'f', 3);
+        return QString("%1 px²").arg(valuePx2, 0, 'f', 0);
+    };
+
+    auto distance = [](QPointF a, QPointF b) {
+        double dx = b.x() - a.x(), dy = b.y() - a.y();
+        return std::sqrt(dx * dx + dy * dy);
+    };
+
+    auto angleDeg = [](QPointF a, QPointF v, QPointF b) {
+        double ax = a.x() - v.x(), ay = a.y() - v.y();
+        double bx = b.x() - v.x(), by = b.y() - v.y();
+        double magA = std::sqrt(ax * ax + ay * ay);
+        double magB = std::sqrt(bx * bx + by * by);
+        if (magA < 1e-9 || magB < 1e-9) return 0.0;
+        double c = std::clamp((ax * bx + ay * by) / (magA * magB), -1.0, 1.0);
+        return std::acos(c) * 180.0 / M_PI;
+    };
+
+    auto polygonAreaPx = [](const std::vector<QPointF>& pts) {
+        double a = 0;
+        int n = static_cast<int>(pts.size());
+        for (int i = 0; i < n; ++i) {
+            int j = (i + 1) % n;
+            a += pts[i].x() * pts[j].y() - pts[j].x() * pts[i].y();
+        }
+        return std::abs(a) / 2.0;
+    };
+
+    auto centroid = [](const std::vector<QPointF>& pts) {
+        QPointF c(0, 0);
+        for (auto& p : pts) c += p;
+        if (!pts.empty()) c /= static_cast<double>(pts.size());
+        return c;
+    };
+
+    auto renderShape = [&](int mode, const std::vector<QPointF>& pts,
+                           bool live, const QColor& strokeCol) {
+        if (pts.empty()) return;
+
+        std::vector<QPointF> w; w.reserve(pts.size());
+        for (auto& p : pts) w.push_back(imageToWidget(p));
+
+        QPen pen(strokeCol, 2);
+        painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
+
+        // Live preview segment from last point to cursor
+        QPointF cursorW;
+        bool hasCursor = live && m_measureCursorValid &&
+                         m_measureMode && mode == m_measureModeKind;
+        if (hasCursor) cursorW = imageToWidget(m_measureCursor);
+
+        if (mode == 0 || mode == 3) { // Distance / PinPitch
+            if (w.size() >= 2) {
+                painter.drawLine(w[0], w[1]);
+                double d = distance(pts[0], pts[1]);
+                drawLabel((w[0] + w[1]) / 2.0, formatLength(d), strokeCol);
+            } else if (w.size() == 1 && hasCursor) {
+                QPen pp = pen; pp.setStyle(Qt::DashLine); painter.setPen(pp);
+                painter.drawLine(w[0], cursorW);
+                double d = distance(pts[0], m_measureCursor);
+                drawLabel((w[0] + cursorW) / 2.0, formatLength(d), strokeCol);
+            }
+        }
+        else if (mode == 1) { // Angle: pts[0]→pts[1] (vertex) →pts[2]
+            if (w.size() >= 2) painter.drawLine(w[0], w[1]);
+            if (w.size() >= 3) {
+                painter.drawLine(w[1], w[2]);
+                double deg = angleDeg(pts[0], pts[1], pts[2]);
+                drawLabel(w[1], QString("%1°").arg(deg, 0, 'f', 1), strokeCol);
+            } else if (hasCursor && w.size() >= 1) {
+                QPen pp = pen; pp.setStyle(Qt::DashLine); painter.setPen(pp);
+                painter.drawLine(w.back(), cursorW);
+                if (w.size() == 2) {
+                    double deg = angleDeg(pts[0], pts[1], m_measureCursor);
+                    drawLabel(w[1], QString("%1°").arg(deg, 0, 'f', 1), strokeCol);
+                }
+            }
+        }
+        else if (mode == 2) { // Area: polyline + closing edge
+            for (size_t i = 0; i + 1 < w.size(); ++i)
+                painter.drawLine(w[i], w[i + 1]);
+            if (live) {
+                if (hasCursor && !w.empty()) {
+                    QPen pp = pen; pp.setStyle(Qt::DashLine); painter.setPen(pp);
+                    painter.drawLine(w.back(), cursorW);
+                    if (w.size() >= 2) painter.drawLine(cursorW, w.front());
+                }
+                if (pts.size() >= 3) {
+                    double a = polygonAreaPx(pts);
+                    drawLabel(imageToWidget(centroid(pts)), formatArea(a), strokeCol);
+                }
+            } else if (w.size() >= 3) {
+                painter.drawLine(w.back(), w.front());
+                double a = polygonAreaPx(pts);
+                drawLabel(imageToWidget(centroid(pts)), formatArea(a), strokeCol);
+            }
+        }
+
+        // Restore solid pen for the dots
+        painter.setPen(pen);
+        for (auto& p : w) drawPointDot(p, strokeCol);
+        if (hasCursor) drawPointDot(cursorW, strokeCol.lighter(150));
+    };
+
+    // History (faded)
+    QColor histCol(255, 220, 0, 110);
+    for (auto& m : m_measureHistory)
+        renderShape(m.mode, m.points, /*live=*/false, histCol);
+
+    // Current (bright)
+    if (m_measureMode && m_measureModeKind >= 0)
+        renderShape(m_measureModeKind, m_measurePoints, /*live=*/true,
+                    QColor(255, 230, 30));
 }
 
 void CameraView::drawZoomIndicator(QPainter& painter)
@@ -210,16 +384,11 @@ void CameraView::mousePressEvent(QMouseEvent* event)
     } else if (event->button() == Qt::LeftButton) {
         QPointF imgPos = mapToImage(event->pos());
 
-        if (m_measureMode) {
-            // Each click in measure mode is a measurement point. The owning
-            // Measurement object decides how many points each mode requires.
-            if (!m_measuring) {
-                m_measureStart = imgPos;
-                m_measureEnd = imgPos;
-                m_measuring = true;
-            } else {
-                m_measureEnd = imgPos;
-            }
+        if (m_measureMode && m_measureModeKind >= 0) {
+            // Append locally for instant rendering; Application's Measurement
+            // is the source of truth for the computed value and will signal
+            // back via appendCompletedMeasure() when the shape closes.
+            m_measurePoints.push_back(imgPos);
             update();
             emit measurePoint(imgPos);
         } else {
@@ -227,7 +396,13 @@ void CameraView::mousePressEvent(QMouseEvent* event)
         }
     } else if (event->button() == Qt::RightButton) {
         QPointF imgPos = mapToImage(event->pos());
-        emit rightClicked(imgPos);
+        if (m_measureMode && m_measureModeKind >= 0 && !m_measurePoints.empty()) {
+            m_measurePoints.clear();
+            update();
+            emit measureCanceled();
+        } else {
+            emit rightClicked(imgPos);
+        }
     }
 }
 
@@ -240,8 +415,9 @@ void CameraView::mouseMoveEvent(QMouseEvent* event)
         update();
     }
 
-    if (m_measureMode && m_measuring) {
-        m_measureEnd = mapToImage(event->pos());
+    if (m_measureMode && m_measureModeKind >= 0) {
+        m_measureCursor = mapToImage(event->pos());
+        m_measureCursorValid = true;
         update();
     }
 
@@ -251,8 +427,14 @@ void CameraView::mouseMoveEvent(QMouseEvent* event)
 
 void CameraView::mouseDoubleClickEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::LeftButton)
-        emit doubleClicked();
+    if (event->button() != Qt::LeftButton) return;
+    // In Area mode with ≥3 points, double-click closes the polygon and
+    // commits the measurement instead of toggling fullscreen.
+    if (m_measureMode && m_measureModeKind == 2 && m_measurePoints.size() >= 3) {
+        emit areaCloseRequested();
+        return;
+    }
+    emit doubleClicked();
 }
 
 void CameraView::mouseReleaseEvent(QMouseEvent* event)

@@ -1067,25 +1067,40 @@ void Application::connectSignals()
             m_pickAndPlace.get(), &features::PickAndPlace::reset);
 
     // Measurement: mode change toggles CameraView measure mode + sets calibration
+    auto* camView = m_mainWindow->cameraView();
     connect(inspPanel, &gui::InspectionPanel::measurementModeChanged,
-            this, [this](int mode) {
+            this, [this, camView](int mode) {
         bool active = (mode >= 0);
-        m_mainWindow->cameraView()->setMeasurementMode(active);
+        camView->setMeasurementMode(active);
         if (active) {
             m_measurement->setCalibration(m_currentPixelsPerMm);
             m_measurement->setMode(static_cast<features::Measurement::Mode>(mode));
             m_measurement->clearPoints();
+            camView->setPixelsPerMm(m_currentPixelsPerMm);
+            camView->setMeasureModeKind(mode);
         }
     });
 
     // CameraView clicks in measure mode → Measurement::addPoint
-    connect(m_mainWindow->cameraView(), &gui::CameraView::measurePoint,
+    connect(camView, &gui::CameraView::measurePoint,
             this, [this](QPointF imagePos) {
         m_measurement->addPoint(imagePos);
     });
 
+    // Right-click during measurement: cancel current shape
+    connect(camView, &gui::CameraView::measureCanceled,
+            this, [this]() {
+        m_measurement->clearPoints();
+    });
+
+    // Double-click in Area mode with ≥3 points: close polygon
+    connect(camView, &gui::CameraView::areaCloseRequested,
+            this, [this]() {
+        m_measurement->commitCurrent();
+    });
+
     connect(m_measurement.get(), &features::Measurement::measurementComplete,
-            inspPanel, [inspPanel](const features::Measurement::MeasureResult& r) {
+            this, [this, inspPanel, camView](const features::Measurement::MeasureResult& r) {
         QString unit;
         switch (r.mode) {
         case features::Measurement::Mode::Distance:
@@ -1094,12 +1109,19 @@ void Application::connectSignals()
         case features::Measurement::Mode::Area:     unit = "mm²"; break;
         }
         inspPanel->onMeasurementResult(r.valuePixels, r.valueMM, unit);
+
+        // Persist into CameraView history (rendered faded)
+        std::vector<QPointF> pts(r.points.begin(), r.points.end());
+        camView->appendCompletedMeasure(static_cast<int>(r.mode), pts,
+                                        r.valuePixels, r.valueMM);
     });
 
     connect(inspPanel, &gui::InspectionPanel::clearMeasurementsClicked,
-            this, [this]() {
+            this, [this, camView]() {
         m_measurement->clearPoints();
         m_measurement->clearHistory();
+        camView->clearMeasureHistory();
+        camView->clearCurrentMeasurePoints();
     });
 
     // Snapshot

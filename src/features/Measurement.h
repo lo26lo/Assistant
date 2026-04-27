@@ -43,6 +43,14 @@ public:
     /// Clear current measurement
     void clearPoints();
 
+    /// Points accumulated for the in-progress measurement (read-only).
+    const std::vector<QPointF>& currentPoints() const { return m_currentPoints; }
+
+    /// Force-complete the in-progress measurement (used for Area "close polygon",
+    /// where the required-point count is unbounded). Returns true if a result was
+    /// produced; false if there are not enough points to compute.
+    bool commitCurrent();
+
     /// Get current measurement result (if enough points)
     std::optional<MeasureResult> currentResult() const;
 

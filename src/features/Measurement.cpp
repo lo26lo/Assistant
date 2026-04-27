@@ -58,6 +58,22 @@ void Measurement::clearPoints()
     m_currentPoints.clear();
 }
 
+bool Measurement::commitCurrent()
+{
+    auto result = currentResult();
+    if (!result) return false;
+    m_history.push_back(*result);
+    emit measurementComplete(*result);
+    spdlog::info("Measurement: {} = {:.2f} px ({:.3f} {}) (committed)",
+                 (m_mode == Mode::Distance ? "distance" :
+                  m_mode == Mode::Angle    ? "angle" :
+                  m_mode == Mode::PinPitch ? "pitch" : "area"),
+                 result->valuePixels, result->valueMM,
+                 (m_mode == Mode::Angle ? "deg" : m_mode == Mode::Area ? "mm^2" : "mm"));
+    clearPoints();
+    return true;
+}
+
 std::optional<Measurement::MeasureResult> Measurement::currentResult() const
 {
     MeasureResult result;

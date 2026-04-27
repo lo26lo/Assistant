@@ -6,6 +6,7 @@
 #include <QTimer>
 #include <opencv2/core.hpp>
 #include <mutex>
+#include <vector>
 
 namespace ibom::gui {
 
@@ -23,6 +24,20 @@ public:
     void setZoomLevel(float zoom);
     void setMeasurementMode(bool enabled);
 
+    /// kind: -1=off, 0=Distance, 1=Angle, 2=Area, 3=PinPitch.
+    /// Setting clears the in-progress points list.
+    void setMeasureModeKind(int kind);
+    int  measureModeKind() const { return m_measureModeKind; }
+
+    /// Live calibration used to render the px/mm label during preview.
+    void setPixelsPerMm(double v);
+
+    /// Push a finished measurement into the rendered history.
+    void appendCompletedMeasure(int mode, const std::vector<QPointF>& pts,
+                                double valuePixels, double valueMM);
+    void clearMeasureHistory();
+    void clearCurrentMeasurePoints();
+
     float zoomLevel() const { return m_zoom; }
     QPointF mapToImage(const QPoint& widgetPos) const;
     QImage  captureView() const;
@@ -34,6 +49,8 @@ signals:
     void hovered(QPointF imagePos);
     void zoomChanged(float zoom);
     void measurePoint(QPointF imagePos);
+    void measureCanceled();
+    void areaCloseRequested();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -50,6 +67,15 @@ private:
     void drawMeasurement(QPainter& painter);
     void drawZoomIndicator(QPainter& painter);
 
+    QPointF imageToWidget(QPointF imagePos) const;
+
+    struct CompletedMeasure {
+        int mode;
+        std::vector<QPointF> points;
+        double valuePixels;
+        double valueMM;
+    };
+
     QImage m_frame;
     QImage m_overlay;
     mutable std::mutex m_frameMutex;
@@ -65,10 +91,13 @@ private:
     bool  m_crosshairVisible = true;
     bool  m_measureMode      = false;
 
-    // Measurement
-    QPointF m_measureStart;
-    QPointF m_measureEnd;
-    bool    m_measuring = false;
+    // Measurement (image-space coords)
+    int     m_measureModeKind   = -1;     // -1=off, 0=Dist, 1=Angle, 2=Area, 3=Pitch
+    double  m_pixelsPerMm       = 0.0;    // 0 = uncalibrated
+    std::vector<QPointF>          m_measurePoints;
+    QPointF                       m_measureCursor;
+    bool                          m_measureCursorValid = false;
+    std::vector<CompletedMeasure> m_measureHistory;
 
     // Computed transform
     QRectF m_imageRect;
