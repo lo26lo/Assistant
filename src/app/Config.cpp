@@ -119,6 +119,18 @@ bool Config::load(const std::string& path)
                 .get<std::vector<std::string>>();
         }
 
+        // Inspection
+        if (j.contains("inspection")) {
+            auto& insp = j["inspection"];
+            m_sortMethod = static_cast<SortMethod>(insp.value("sort_method",
+                                static_cast<int>(m_sortMethod)));
+            m_selectedColorHex     = insp.value("color_selected",      m_selectedColorHex);
+            m_placedColorHex       = insp.value("color_placed",        m_placedColorHex);
+            m_normalColorHex       = insp.value("color_normal",        m_normalColorHex);
+            m_placedOpacity        = insp.value("placed_opacity",      m_placedOpacity);
+            m_selectedOutlineWidth = insp.value("selected_outline_px", m_selectedOutlineWidth);
+        }
+
         spdlog::info("Config loaded from '{}'", filePath);
         return true;
 
@@ -191,6 +203,16 @@ bool Config::save(const std::string& path) const
         // BOM
         j["bom"] = {
             {"checkbox_columns", m_checkboxColumns}
+        };
+
+        // Inspection
+        j["inspection"] = {
+            {"sort_method",         static_cast<int>(m_sortMethod)},
+            {"color_selected",      m_selectedColorHex},
+            {"color_placed",        m_placedColorHex},
+            {"color_normal",        m_normalColorHex},
+            {"placed_opacity",      m_placedOpacity},
+            {"selected_outline_px", m_selectedOutlineWidth}
         };
 
         std::ofstream ofs(filePath);

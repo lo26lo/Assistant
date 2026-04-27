@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QMediaDevices>
 #include <QCameraDevice>
+#include <QColorDialog>
 
 SettingsDialog::SettingsDialog(ibom::Config& config, QWidget* parent)
     : QDialog(parent)
@@ -23,6 +24,7 @@ SettingsDialog::SettingsDialog(ibom::Config& config, QWidget* parent)
     createCameraTab(tabs);
     createOverlayTab(tabs);
     createTrackingTab(tabs);
+    createInspectionTab(tabs);
     createAiTab(tabs);
 
     layout->addWidget(tabs);
@@ -191,6 +193,89 @@ void SettingsDialog::createTrackingTab(QTabWidget* tabs)
     tabs->addTab(page, tr("Tracking"));
 }
 
+void SettingsDialog::updateColorButton(QPushButton* btn, const QColor& c)
+{
+    btn->setText(c.name(QColor::HexRgb).toUpper());
+    QString fg = (c.lightness() > 128) ? "#000" : "#fff";
+    btn->setStyleSheet(QString("QPushButton { background-color: %1; color: %2; "
+                               "border: 1px solid #555; padding: 4px 10px; }")
+                       .arg(c.name()).arg(fg));
+}
+
+void SettingsDialog::pickColor(QPushButton* btn, QColor& target)
+{
+    QColor chosen = QColorDialog::getColor(target, this, tr("Choose color"));
+    if (chosen.isValid()) {
+        target = chosen;
+        updateColorButton(btn, target);
+    }
+}
+
+void SettingsDialog::createInspectionTab(QTabWidget* tabs)
+{
+    auto* page = new QWidget;
+    auto* form = new QFormLayout(page);
+
+    m_sortMethod = new QComboBox;
+    m_sortMethod->addItem(tr("Most numerous group first (recommended)"), 0);
+    m_sortMethod->addItem(tr("Alphabetic by value"),                     1);
+    m_sortMethod->addItem(tr("Load order (matches PCB layout)"),         2);
+    m_sortMethod->addItem(tr("Smallest footprint first"),                3);
+    m_sortMethod->setToolTip(tr(
+        "Order in which components are presented during inspection.\n"
+        "Grouping by quantity minimizes SMD reel changes."));
+    form->addRow(tr("Component order:"), m_sortMethod);
+
+    // ── Colors ────────────────────────────────────────────────
+    auto* colorsGroup = new QGroupBox(tr("Overlay Colors"));
+    auto* colorsForm  = new QFormLayout(colorsGroup);
+
+    m_btnSelectedColor = new QPushButton;
+    m_btnSelectedColor->setToolTip(tr("Color of the component currently being inspected"));
+    connect(m_btnSelectedColor, &QPushButton::clicked, this, [this]() {
+        pickColor(m_btnSelectedColor, m_colorSelected);
+    });
+    colorsForm->addRow(tr("Selected:"), m_btnSelectedColor);
+
+    m_btnPlacedColor = new QPushButton;
+    m_btnPlacedColor->setToolTip(tr("Color of components already placed"));
+    connect(m_btnPlacedColor, &QPushButton::clicked, this, [this]() {
+        pickColor(m_btnPlacedColor, m_colorPlaced);
+    });
+    colorsForm->addRow(tr("Placed:"), m_btnPlacedColor);
+
+    m_btnNormalColor = new QPushButton;
+    m_btnNormalColor->setToolTip(tr("Color of pending components"));
+    connect(m_btnNormalColor, &QPushButton::clicked, this, [this]() {
+        pickColor(m_btnNormalColor, m_colorNormal);
+    });
+    colorsForm->addRow(tr("Pending:"), m_btnNormalColor);
+
+    form->addRow(colorsGroup);
+
+    // ── Visibility tweaks ─────────────────────────────────────
+    auto* opacityRow = new QHBoxLayout;
+    m_placedOpacitySlider = new QSlider(Qt::Horizontal);
+    m_placedOpacitySlider->setRange(5, 100);
+    m_placedOpacityLabel = new QLabel;
+    connect(m_placedOpacitySlider, &QSlider::valueChanged, this, [this](int v) {
+        m_placedOpacityLabel->setText(QString("%1 %").arg(v));
+    });
+    opacityRow->addWidget(m_placedOpacitySlider);
+    opacityRow->addWidget(m_placedOpacityLabel);
+    form->addRow(tr("Placed opacity:"), opacityRow);
+
+    m_selectedOutlineWidth = new QDoubleSpinBox;
+    m_selectedOutlineWidth->setRange(1.0, 8.0);
+    m_selectedOutlineWidth->setSingleStep(0.5);
+    m_selectedOutlineWidth->setDecimals(1);
+    m_selectedOutlineWidth->setSuffix(" px");
+    m_selectedOutlineWidth->setToolTip(tr("Outline thickness for the selected component"));
+    form->addRow(tr("Selected outline:"), m_selectedOutlineWidth);
+
+    tabs->addTab(page, tr("Inspection"));
+}
+
 void SettingsDialog::createAiTab(QTabWidget* tabs)
 {
     auto* page = new QWidget;
@@ -251,6 +336,23 @@ void SettingsDialog::loadFromConfig()
     m_modelsPath->setText(QString::fromStdString(m_config.modelsPath()));
     m_useTensorRT->setChecked(m_config.useTensorRT());
     m_aiConfidence->setValue(static_cast<double>(m_config.detectionConfidence()));
+
+    // Inspection
+    m_sortMethod->setCurrentIndex(
+        m_sortMethod->findData(static_cast<int>(m_config.sortMethod())));
+
+    m_colorSelected = QColor(QString::fromStdString(m_config.selectedColorHex()));
+    m_colorPlaced   = QColor(QString::fromStdString(m_config.placedColorHex()));
+    m_colorNormal   = QColor(QString::fromStdString(m_config.normalColorHex()));
+    if (!m_colorSelected.isValid()) m_colorSelected = QColor(0, 229, 255);
+    if (!m_colorPlaced.isValid())   m_colorPlaced   = QColor(72, 200, 72);
+    if (!m_colorNormal.isValid())   m_colorNormal   = QColor(170, 170, 68);
+    updateColorButton(m_btnSelectedColor, m_colorSelected);
+    updateColorButton(m_btnPlacedColor,   m_colorPlaced);
+    updateColorButton(m_btnNormalColor,   m_colorNormal);
+
+    m_placedOpacitySlider->setValue(static_cast<int>(m_config.placedOpacity() * 100));
+    m_selectedOutlineWidth->setValue(static_cast<double>(m_config.selectedOutlineWidth()));
 }
 
 void SettingsDialog::accept()
@@ -288,6 +390,15 @@ void SettingsDialog::accept()
     m_config.setModelsPath(m_modelsPath->text().toStdString());
     m_config.setUseTensorRT(m_useTensorRT->isChecked());
     m_config.setDetectionConfidence(static_cast<float>(m_aiConfidence->value()));
+
+    // Inspection
+    m_config.setSortMethod(
+        static_cast<ibom::SortMethod>(m_sortMethod->currentData().toInt()));
+    m_config.setSelectedColorHex(m_colorSelected.name(QColor::HexRgb).toStdString());
+    m_config.setPlacedColorHex  (m_colorPlaced  .name(QColor::HexRgb).toStdString());
+    m_config.setNormalColorHex  (m_colorNormal  .name(QColor::HexRgb).toStdString());
+    m_config.setPlacedOpacity(static_cast<float>(m_placedOpacitySlider->value()) / 100.0f);
+    m_config.setSelectedOutlineWidth(static_cast<float>(m_selectedOutlineWidth->value()));
 
     // Persist
     m_config.save();

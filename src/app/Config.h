@@ -13,6 +13,14 @@ enum class ScaleMethod {
     IBomPads    = 2   // Compute from known iBOM pad distances
 };
 
+/// Order in which components are presented during inspection.
+enum class SortMethod {
+    ValueCount       = 0,  // Most numerous value group first — minimizes SMD reel changes
+    ValueAlphabetic  = 1,  // Alphabetic by value, group together
+    Position         = 2,  // Original iBOM load order (often matches PCB layout)
+    FootprintSize    = 3   // Smallest footprint first
+};
+
 /**
  * @brief Persistent application configuration.
  *
@@ -125,6 +133,28 @@ public:
     const std::vector<std::string>& checkboxColumns() const { return m_checkboxColumns; }
     void setCheckboxColumns(const std::vector<std::string>& cols) { m_checkboxColumns = cols; }
 
+    // --- Inspection ---
+    SortMethod sortMethod() const { return m_sortMethod; }
+    void setSortMethod(SortMethod m) { m_sortMethod = m; }
+
+    /// Hex color strings ("#RRGGBB" or "#AARRGGBB") for component overlay states.
+    const std::string& selectedColorHex() const { return m_selectedColorHex; }
+    void setSelectedColorHex(const std::string& s) { m_selectedColorHex = s; }
+
+    const std::string& placedColorHex() const { return m_placedColorHex; }
+    void setPlacedColorHex(const std::string& s) { m_placedColorHex = s; }
+
+    const std::string& normalColorHex() const { return m_normalColorHex; }
+    void setNormalColorHex(const std::string& s) { m_normalColorHex = s; }
+
+    /// Multiplier (0..1) applied to placed components' overlay alpha.
+    float placedOpacity() const { return m_placedOpacity; }
+    void setPlacedOpacity(float o) { m_placedOpacity = o; }
+
+    /// Width (px) of the silkscreen outline for the currently-selected component.
+    float selectedOutlineWidth() const { return m_selectedOutlineWidth; }
+    void setSelectedOutlineWidth(float w) { m_selectedOutlineWidth = w; }
+
 private:
     std::string defaultConfigPath() const;
 
@@ -171,6 +201,14 @@ private:
 
     // BOM
     std::vector<std::string> m_checkboxColumns = {"Sourced", "Placed"};
+
+    // Inspection
+    SortMethod  m_sortMethod          = SortMethod::ValueCount;
+    std::string m_selectedColorHex    = "#00E5FF";  // bright cyan — high contrast vs PCB
+    std::string m_placedColorHex      = "#48C848";  // green — matches placed status
+    std::string m_normalColorHex      = "#AAAA44";  // muted gold (current default)
+    float       m_placedOpacity       = 0.45f;      // dim placed comps to background
+    float       m_selectedOutlineWidth = 3.0f;      // thicker silk border for selected
 };
 
 } // namespace ibom

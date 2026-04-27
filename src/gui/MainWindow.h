@@ -19,6 +19,7 @@ class CameraView;
 class BomPanel;
 class ControlPanel;
 class InspectionWizard;
+class InspectionPanel;
 class StatsPanel;
 
 class MainWindow : public QMainWindow {
@@ -32,6 +33,7 @@ public:
     BomPanel*         bomPanel()         { return m_bomPanel; }
     ControlPanel*     controlPanel()     { return m_controlPanel; }
     InspectionWizard* inspectionWizard() { return m_inspectionWizard; }
+    InspectionPanel*  inspectionPanel()  { return m_inspectionPanel; }
     StatsPanel*       statsPanel()       { return m_statsPanel; }
 
     void setDarkMode(bool dark);
@@ -85,6 +87,7 @@ private:
     BomPanel*         m_bomPanel         = nullptr;
     ControlPanel*     m_controlPanel     = nullptr;
     InspectionWizard* m_inspectionWizard = nullptr;
+    InspectionPanel*  m_inspectionPanel  = nullptr;
     StatsPanel*       m_statsPanel       = nullptr;
 
     // Toolbar & actions

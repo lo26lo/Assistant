@@ -36,6 +36,10 @@ public:
     /// Sort by value grouping (place all 100nF caps together, etc.)
     void sortByValueGroup();
 
+    /// Sort by value grouping with most numerous group first
+    /// (minimizes SMD reel changes)
+    void sortByValueGroupCount();
+
     /// Sort by physical position (top-left to bottom-right)
     void sortByPosition();
 

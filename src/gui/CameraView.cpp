@@ -211,15 +211,17 @@ void CameraView::mousePressEvent(QMouseEvent* event)
         QPointF imgPos = mapToImage(event->pos());
 
         if (m_measureMode) {
+            // Each click in measure mode is a measurement point. The owning
+            // Measurement object decides how many points each mode requires.
             if (!m_measuring) {
                 m_measureStart = imgPos;
+                m_measureEnd = imgPos;
                 m_measuring = true;
             } else {
                 m_measureEnd = imgPos;
-                m_measuring = false;
-                update();
-                emit measurePoint(imgPos);
             }
+            update();
+            emit measurePoint(imgPos);
         } else {
             emit clicked(imgPos);
         }

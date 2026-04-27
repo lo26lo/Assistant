@@ -3,6 +3,7 @@
 #include "BomPanel.h"
 #include "ControlPanel.h"
 #include "InspectionWizard.h"
+#include "InspectionPanel.h"
 #include "StatsPanel.h"
 #include "SettingsDialog.h"
 #include "HelpDialog.h"
@@ -258,6 +259,15 @@ void MainWindow::createDockWidgets()
     statsDock->setMaximumHeight(260);
     addDockWidget(Qt::BottomDockWidgetArea, statsDock);
 
+    // Inspection panel (left dock — persistent workflow)
+    m_inspectionPanel = new InspectionPanel(this);
+    auto* inspDock = new QDockWidget(tr("Inspection"), this);
+    inspDock->setObjectName("InspectionDock");
+    inspDock->setWidget(m_inspectionPanel);
+    inspDock->setMinimumWidth(280);
+    inspDock->setMaximumWidth(360);
+    addDockWidget(Qt::LeftDockWidgetArea, inspDock);
+
     // Inspection wizard (floating, hidden by default)
     m_inspectionWizard = new InspectionWizard(this);
 
@@ -268,6 +278,7 @@ void MainWindow::createDockWidgets()
         viewMenu->addAction(bomDock->toggleViewAction());
         viewMenu->addAction(controlDock->toggleViewAction());
         viewMenu->addAction(statsDock->toggleViewAction());
+        viewMenu->addAction(inspDock->toggleViewAction());
     }
 }
 
@@ -343,22 +354,16 @@ void MainWindow::onCalibrate()
 
 void MainWindow::onStartInspection()
 {
-    if (m_inspectionWizard) {
-        m_inspectionWizard->show();
-        m_inspectionWizard->raise();
-    }
+    // Trigger the inspection panel's start button — Application is wired to it.
+    if (m_inspectionPanel)
+        emit m_inspectionPanel->startInspectionClicked();
 }
 
 void MainWindow::onExportReport()
 {
-    QString path = QFileDialog::getSaveFileName(
-        this, tr("Export Report"), "inspection_report.pdf",
-        tr("PDF Files (*.pdf);;CSV Files (*.csv);;JSON Files (*.json)"));
-
-    if (!path.isEmpty()) {
-        spdlog::info("Export report to: {}", path.toStdString());
-        updateStatusMessage(tr("Report exported: %1").arg(QFileInfo(path).fileName()));
-    }
+    // Default to CSV via the inspection panel's export pipeline.
+    if (m_inspectionPanel)
+        emit m_inspectionPanel->exportRequested("csv");
 }
 
 void MainWindow::onGenerateCheckerboard()

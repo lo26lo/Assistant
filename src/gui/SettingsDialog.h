@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QComboBox>
 #include <QPushButton>
+#include <QColor>
 
 namespace ibom { class Config; }
 
@@ -26,6 +27,7 @@ private:
     void createCameraTab(QTabWidget* tabs);
     void createOverlayTab(QTabWidget* tabs);
     void createTrackingTab(QTabWidget* tabs);
+    void createInspectionTab(QTabWidget* tabs);
     void createAiTab(QTabWidget* tabs);
 
     void loadFromConfig();
@@ -66,4 +68,20 @@ private:
     QLineEdit*      m_modelsPath     = nullptr;
     QCheckBox*      m_useTensorRT    = nullptr;
     QDoubleSpinBox* m_aiConfidence   = nullptr;
+
+    // Inspection
+    QComboBox*      m_sortMethod              = nullptr;
+    QPushButton*    m_btnSelectedColor        = nullptr;
+    QPushButton*    m_btnPlacedColor          = nullptr;
+    QPushButton*    m_btnNormalColor          = nullptr;
+    QSlider*        m_placedOpacitySlider     = nullptr;
+    QLabel*         m_placedOpacityLabel      = nullptr;
+    QDoubleSpinBox* m_selectedOutlineWidth    = nullptr;
+
+    QColor m_colorSelected;
+    QColor m_colorPlaced;
+    QColor m_colorNormal;
+
+    void pickColor(QPushButton* btn, QColor& target);
+    void updateColorButton(QPushButton* btn, const QColor& c);
 };

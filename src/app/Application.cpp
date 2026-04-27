@@ -6,6 +6,7 @@
 #include "gui/StatsPanel.h"
 #include "gui/BomPanel.h"
 #include "gui/InspectionWizard.h"
+#include "gui/InspectionPanel.h"
 #include "camera/CameraCapture.h"
 #include "camera/CameraCalibration.h"
 #include "ai/InferenceEngine.h"
@@ -16,6 +17,10 @@
 #include "overlay/Homography.h"
 #include "overlay/HeatmapRenderer.h"
 #include "overlay/TrackingWorker.h"
+#include "features/PickAndPlace.h"
+#include "features/Measurement.h"
+#include "features/SnapshotHistory.h"
+#include "export/DataExporter.h"
 #include "gui/Theme.h"
 #include "utils/Logger.h"
 
@@ -31,6 +36,8 @@
 #include <QPainter>
 #include <QMediaDevices>
 #include <QCameraDevice>
+#include <QDesktopServices>
+#include <QUrl>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
@@ -208,6 +215,18 @@ void Application::createSubsystems()
         Q_ARG(int,    m_config->trackingIntervalMs()),
         Q_ARG(float,  m_config->trackingDownscale()));
 
+    // Inspection workflow features
+    spdlog::info("Creating inspection workflow features...");
+    m_pickAndPlace    = std::make_unique<features::PickAndPlace>(this);
+    m_measurement     = std::make_unique<features::Measurement>(this);
+    m_snapshotHistory = std::make_unique<features::SnapshotHistory>(this);
+    m_dataExporter    = std::make_unique<exports::DataExporter>(this);
+
+    // Configure storage for snapshots — silent saves under AppData
+    QString snapDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                      + "/snapshots";
+    m_snapshotHistory->setStorageDir(snapDir);
+
     // Main window (owns GUI widgets)
     spdlog::info("Creating MainWindow...");
     m_mainWindow = std::make_unique<gui::MainWindow>(this);
@@ -302,12 +321,44 @@ void Application::connectSignals()
             const bool drawPads = m_config->showPads();
             const bool drawSilk = m_config->showSilkscreen();
             const bool drawFab  = m_config->showFabrication();
+
+            // Resolve per-state base colors from Config (user-customizable via Settings)
+            QColor cSelected = QColor(QString::fromStdString(m_config->selectedColorHex()));
+            QColor cPlaced   = QColor(QString::fromStdString(m_config->placedColorHex()));
+            QColor cNormal   = QColor(QString::fromStdString(m_config->normalColorHex()));
+            if (!cSelected.isValid()) cSelected = QColor(0, 229, 255);
+            if (!cPlaced.isValid())   cPlaced   = QColor(72, 200, 72);
+            if (!cNormal.isValid())   cNormal   = QColor(170, 170, 68);
+
+            const float placedAlphaMul = std::clamp(m_config->placedOpacity(), 0.05f, 1.0f);
+            const float selectedSilkW  = std::max(1.0f, m_config->selectedOutlineWidth());
+
+            auto withAlpha = [](QColor c, int a) { c.setAlpha(a); return c; };
+
             for (const auto& comp : m_ibomProject->components) {
                 if (comp.layer != Layer::Front) continue;
 
-                bool isSelected = (comp.reference == m_selectedRef);
-                QColor padColor = isSelected ? ibom::gui::theme::padSelectedColor() : ibom::gui::theme::padNormalColor();
-                QColor silkColor = isSelected ? ibom::gui::theme::silkSelectedColor() : ibom::gui::theme::silkNormalColor();
+                const bool isSelected = (comp.reference == m_selectedRef);
+                const bool isPlaced   = !isSelected && m_placedRefs.count(comp.reference) > 0;
+
+                // Per-state pad/silk/label colors and stroke widths
+                QColor padColor, silkColor, labelColor;
+                qreal silkWidth = 1.0;
+                if (isSelected) {
+                    padColor   = withAlpha(cSelected, 220);
+                    silkColor  = withAlpha(cSelected, 240);
+                    labelColor = withAlpha(cSelected, 255);
+                    silkWidth  = selectedSilkW;
+                } else if (isPlaced) {
+                    int a = static_cast<int>(180 * placedAlphaMul);
+                    padColor   = withAlpha(cPlaced, a);
+                    silkColor  = withAlpha(cPlaced, std::min(255, a + 30));
+                    labelColor = withAlpha(cPlaced, std::min(255, a + 60));
+                } else {
+                    padColor   = withAlpha(cNormal, 180);
+                    silkColor  = withAlpha(cNormal, 180);
+                    labelColor = ibom::gui::theme::labelNormalColor();
+                }
 
                 // ── Draw pads ──
                 if (drawPads) {
@@ -350,7 +401,7 @@ void Application::connectSignals()
                             cv::Point2f(static_cast<float>(seg.start.x), static_cast<float>(seg.start.y)));
                         cv::Point2f e = m_homography->pcbToImage(
                             cv::Point2f(static_cast<float>(seg.end.x), static_cast<float>(seg.end.y)));
-                        painter.setPen(QPen(silkColor, 1.0));
+                        painter.setPen(QPen(silkColor, silkWidth));
                         painter.drawLine(QPointF(s.x, s.y), QPointF(e.x, e.y));
 
                     } else if (seg.type == DrawingSegment::Type::Rect) {
@@ -362,7 +413,7 @@ void Application::connectSignals()
                         if (rc.size() == 4) {
                             QPolygonF rp;
                             for (auto& c : rc) rp << QPointF(c.x, c.y);
-                            painter.setPen(QPen(silkColor, 1.0));
+                            painter.setPen(QPen(silkColor, silkWidth));
                             painter.drawPolygon(rp);
                         }
 
@@ -374,7 +425,7 @@ void Application::connectSignals()
                             cv::Point2f(static_cast<float>(seg.start.x + seg.radius),
                                         static_cast<float>(seg.start.y)));
                         float r = std::hypot(edge.x - c.x, edge.y - c.y);
-                        painter.setPen(QPen(silkColor, 1.0));
+                        painter.setPen(QPen(silkColor, silkWidth));
                         painter.drawEllipse(QPointF(c.x, c.y), static_cast<qreal>(r), static_cast<qreal>(r));
 
                     } else if (seg.type == DrawingSegment::Type::Polygon && !seg.points.empty()) {
@@ -384,7 +435,7 @@ void Application::connectSignals()
                                 cv::Point2f(static_cast<float>(pt.x), static_cast<float>(pt.y)));
                             polyPts << QPointF(ip.x, ip.y);
                         }
-                        painter.setPen(QPen(silkColor, 1.0));
+                        painter.setPen(QPen(silkColor, silkWidth));
                         painter.drawPolygon(polyPts);
                     }
                 }
@@ -396,8 +447,9 @@ void Application::connectSignals()
                     static_cast<float>((comp.bbox.minX + comp.bbox.maxX) / 2.0),
                     static_cast<float>((comp.bbox.minY + comp.bbox.maxY) / 2.0));
                 cv::Point2f imgPt = m_homography->pcbToImage(bboxCenter);
-                painter.setPen(isSelected ? ibom::gui::theme::labelSelectedColor() : ibom::gui::theme::labelNormalColor());
-                painter.setFont(QFont("Segoe UI", 7));
+                painter.setPen(labelColor);
+                painter.setFont(QFont("Segoe UI", isSelected ? 9 : 7,
+                                       isSelected ? QFont::Bold : QFont::Normal));
                 painter.drawText(QPointF(imgPt.x, imgPt.y - 3),
                                  QString::fromStdString(comp.reference));
                 } // drawSilk || isSelected
@@ -953,6 +1005,119 @@ void Application::connectSignals()
         }
     });
 
+    // ── Inspection workflow wiring ──────────────────────────────
+    auto* inspPanel = m_mainWindow->inspectionPanel();
+    auto* bomPanel  = m_mainWindow->bomPanel();
+
+    // ibomLoaded → enable inspection panel
+    connect(this, &Application::ibomLoaded,
+            inspPanel, &gui::InspectionPanel::onIBomLoaded);
+
+    // Start inspection: load components into PickAndPlace
+    connect(inspPanel, &gui::InspectionPanel::startInspectionClicked,
+            this, &Application::startInspection);
+
+    // PickAndPlace → InspectionPanel UI + overlay highlight + BomPanel state
+    connect(m_pickAndPlace.get(), &features::PickAndPlace::currentStepChanged,
+            this, [this, inspPanel, bomPanel](const features::PickAndPlace::PlacementStep& step) {
+        m_selectedRef = step.reference;
+        if (m_overlayRenderer)
+            m_overlayRenderer->setHighlightedRefs({step.reference});
+        if (bomPanel)
+            bomPanel->highlightComponent(step.reference);
+        inspPanel->onStepChanged(
+            QString::fromStdString(step.reference),
+            QString::fromStdString(step.value),
+            QString::fromStdString(step.footprint),
+            step.layer == Layer::Front ? tr("Top") : tr("Bottom"),
+            m_pickAndPlace->currentIndex() + 1,
+            m_pickAndPlace->totalSteps());
+    });
+
+    connect(m_pickAndPlace.get(), &features::PickAndPlace::progressChanged,
+            inspPanel, &gui::InspectionPanel::onProgress);
+    connect(m_pickAndPlace.get(), &features::PickAndPlace::progressChanged,
+            bomPanel, &gui::BomPanel::setProgress);
+
+    connect(m_pickAndPlace.get(), &features::PickAndPlace::stepPlaced,
+            this, [this, bomPanel](const std::string& ref) {
+        m_placedRefs.insert(ref);
+        if (bomPanel) bomPanel->setComponentState(ref, tr("Placed"));
+    });
+
+    connect(m_pickAndPlace.get(), &features::PickAndPlace::allPlaced,
+            inspPanel, &gui::InspectionPanel::onAllPlaced);
+
+    // InspectionPanel buttons → PickAndPlace
+    connect(inspPanel, &gui::InspectionPanel::placedClicked,
+            m_pickAndPlace.get(), &features::PickAndPlace::markPlaced);
+    connect(inspPanel, &gui::InspectionPanel::skipClicked,
+            this, [this, bomPanel]() {
+        if (bomPanel && m_pickAndPlace->currentIndex() < m_pickAndPlace->totalSteps()) {
+            const auto& step = m_pickAndPlace->currentStep();
+            bomPanel->setComponentState(step.reference, tr("Skipped"));
+        }
+        m_pickAndPlace->skip();
+    });
+    connect(inspPanel, &gui::InspectionPanel::backClicked,
+            m_pickAndPlace.get(), &features::PickAndPlace::goBack);
+    connect(inspPanel, &gui::InspectionPanel::resetClicked,
+            this, [this]() { m_placedRefs.clear(); });
+    connect(inspPanel, &gui::InspectionPanel::resetClicked,
+            m_pickAndPlace.get(), &features::PickAndPlace::reset);
+
+    // Measurement: mode change toggles CameraView measure mode + sets calibration
+    connect(inspPanel, &gui::InspectionPanel::measurementModeChanged,
+            this, [this](int mode) {
+        bool active = (mode >= 0);
+        m_mainWindow->cameraView()->setMeasurementMode(active);
+        if (active) {
+            m_measurement->setCalibration(m_currentPixelsPerMm);
+            m_measurement->setMode(static_cast<features::Measurement::Mode>(mode));
+            m_measurement->clearPoints();
+        }
+    });
+
+    // CameraView clicks in measure mode → Measurement::addPoint
+    connect(m_mainWindow->cameraView(), &gui::CameraView::measurePoint,
+            this, [this](QPointF imagePos) {
+        m_measurement->addPoint(imagePos);
+    });
+
+    connect(m_measurement.get(), &features::Measurement::measurementComplete,
+            inspPanel, [inspPanel](const features::Measurement::MeasureResult& r) {
+        QString unit;
+        switch (r.mode) {
+        case features::Measurement::Mode::Distance:
+        case features::Measurement::Mode::PinPitch: unit = "mm";  break;
+        case features::Measurement::Mode::Angle:    unit = "deg"; break;
+        case features::Measurement::Mode::Area:     unit = "mm²"; break;
+        }
+        inspPanel->onMeasurementResult(r.valuePixels, r.valueMM, unit);
+    });
+
+    connect(inspPanel, &gui::InspectionPanel::clearMeasurementsClicked,
+            this, [this]() {
+        m_measurement->clearPoints();
+        m_measurement->clearHistory();
+    });
+
+    // Snapshot
+    connect(inspPanel, &gui::InspectionPanel::snapshotClicked,
+            this, &Application::onSnapshot);
+    connect(m_snapshotHistory.get(), &features::SnapshotHistory::snapshotTaken,
+            inspPanel, &gui::InspectionPanel::onSnapshotTaken);
+    connect(inspPanel, &gui::InspectionPanel::openSnapshotsFolderClicked,
+            this, [this]() {
+        QString dir = m_snapshotHistory->storageDir();
+        if (!dir.isEmpty())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    });
+
+    // Export
+    connect(inspPanel, &gui::InspectionPanel::exportRequested,
+            this, &Application::onExport);
+
     spdlog::info("Signal/slot connections established, FPS timer started.");
 }
 
@@ -1015,6 +1180,145 @@ void Application::loadIBomFile(const QString& path)
 
     m_mainWindow->updateStatusMessage(
         tr("iBOM loaded: %1 components").arg(m_ibomProject->components.size()));
+
+    emit ibomLoaded(static_cast<int>(m_ibomProject->components.size()));
+}
+
+// ── Inspection workflow ────────────────────────────────────────────
+
+void Application::startInspection()
+{
+    if (!m_ibomProject) {
+        QMessageBox::information(m_mainWindow.get(), tr("Inspection"),
+            tr("Load an iBOM file first."));
+        return;
+    }
+    m_placedRefs.clear();
+    m_pickAndPlace->loadComponents(m_ibomProject->components);
+
+    // Apply user-configured sort method (overrides the default sort done in loadComponents)
+    switch (m_config->sortMethod()) {
+    case SortMethod::ValueCount:      m_pickAndPlace->sortByValueGroupCount(); break;
+    case SortMethod::ValueAlphabetic: m_pickAndPlace->sortByValueGroup();      break;
+    case SortMethod::Position:        m_pickAndPlace->sortByPosition();        break;
+    case SortMethod::FootprintSize:   m_pickAndPlace->sortByFootprintSize();   break;
+    }
+
+    // Re-emit current step so InspectionPanel shows the first item of the new order
+    if (m_pickAndPlace->totalSteps() > 0)
+        m_pickAndPlace->reset();
+
+    m_mainWindow->updateStatusMessage(
+        tr("Inspection started: %1 components").arg(m_pickAndPlace->totalSteps()));
+}
+
+void Application::onSnapshot()
+{
+    QImage img = m_mainWindow->cameraView()->captureView();
+    if (img.isNull()) {
+        m_mainWindow->updateStatusMessage(tr("No frame to snapshot"));
+        return;
+    }
+    QString ref = QString::fromStdString(m_selectedRef);
+    int id = m_snapshotHistory->takeSnapshot(img, "inspection", ref);
+    if (id > 0)
+        m_mainWindow->updateStatusMessage(tr("Snapshot saved (#%1)").arg(id));
+}
+
+void Application::onExport(const QString& format)
+{
+    if (!m_ibomProject) {
+        QMessageBox::information(m_mainWindow.get(), tr("Export"),
+            tr("Load an iBOM file first."));
+        return;
+    }
+
+    // Build records from PickAndPlace state, looking up positions from iBOM components.
+    std::vector<exports::DataExporter::ComponentRecord> records;
+    records.reserve(m_ibomProject->components.size());
+
+    // Index components by reference for fast lookup
+    std::map<std::string, const Component*> byRef;
+    for (const auto& c : m_ibomProject->components)
+        byRef[c.reference] = &c;
+
+    const auto& steps = m_pickAndPlace->steps();
+    if (steps.empty()) {
+        // No inspection in progress — export all components as "pending"
+        for (const auto& c : m_ibomProject->components) {
+            exports::DataExporter::ComponentRecord rec;
+            rec.reference = c.reference;
+            rec.value     = c.value;
+            rec.footprint = c.footprint;
+            rec.layer     = c.layer;
+            rec.status    = "pending";
+            rec.posX      = c.position.x;
+            rec.posY      = c.position.y;
+            rec.rotation  = c.rotation;
+            records.push_back(std::move(rec));
+        }
+    } else {
+        for (const auto& step : steps) {
+            exports::DataExporter::ComponentRecord rec;
+            rec.reference = step.reference;
+            rec.value     = step.value;
+            rec.footprint = step.footprint;
+            rec.layer     = step.layer;
+            rec.status    = step.placed ? "placed" : "pending";
+            if (auto it = byRef.find(step.reference); it != byRef.end()) {
+                rec.posX     = it->second->position.x;
+                rec.posY     = it->second->position.y;
+                rec.rotation = it->second->rotation;
+            }
+            records.push_back(std::move(rec));
+        }
+    }
+
+    m_dataExporter->setRecords(records);
+
+    // Determine extension + filter from format
+    QString ext, filter, defaultName;
+    if (format == "csv") {
+        ext = "csv";  filter = tr("CSV (*.csv)");
+        defaultName = "inspection_report.csv";
+    } else if (format == "json") {
+        ext = "json"; filter = tr("JSON (*.json)");
+        defaultName = "inspection_report.json";
+    } else if (format == "placement") {
+        ext = "pos";  filter = tr("Placement (*.pos)");
+        defaultName = "placement.pos";
+    } else if (format == "bom") {
+        ext = "csv";  filter = tr("BOM CSV (*.csv)");
+        defaultName = "bom.csv";
+    } else if (format == "defects") {
+        ext = "csv";  filter = tr("Defects CSV (*.csv)");
+        defaultName = "defects.csv";
+    } else {
+        spdlog::warn("Unknown export format: {}", format.toStdString());
+        return;
+    }
+
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                  + "/MicroscopeIBOM";
+    QDir().mkpath(dir);
+    QString path = QFileDialog::getSaveFileName(
+        m_mainWindow.get(), tr("Export %1").arg(format.toUpper()),
+        dir + "/" + defaultName, filter);
+    if (path.isEmpty()) return;
+
+    bool ok = false;
+    if (format == "csv")            ok = m_dataExporter->exportCSV(path);
+    else if (format == "json")      ok = m_dataExporter->exportJSON(path, true);
+    else if (format == "placement") ok = m_dataExporter->exportPlacement(path);
+    else if (format == "bom")       ok = m_dataExporter->exportBOM(path);
+    else if (format == "defects")   ok = m_dataExporter->exportDefectsCSV(path);
+
+    if (ok) {
+        m_mainWindow->updateStatusMessage(
+            tr("Exported %1: %2").arg(format.toUpper(), QFileInfo(path).fileName()));
+    } else {
+        m_mainWindow->updateStatusMessage(tr("Export failed"));
+    }
 }
 
 // ── Calibration ────────────────────────────────────────────────────

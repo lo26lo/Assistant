@@ -2,6 +2,7 @@
 #include "../ibom/IBomData.h"
 
 #include <algorithm>
+#include <unordered_map>
 #include <spdlog/spdlog.h>
 
 namespace ibom::features {
@@ -48,6 +49,25 @@ void PickAndPlace::sortByValueGroup()
     for (int i = 0; i < static_cast<int>(m_steps.size()); ++i) {
         m_steps[i].order = i;
     }
+}
+
+void PickAndPlace::sortByValueGroupCount()
+{
+    // Count how many components share each value
+    std::unordered_map<std::string, int> counts;
+    for (const auto& s : m_steps) counts[s.value]++;
+
+    std::stable_sort(m_steps.begin(), m_steps.end(),
+        [&counts](const auto& a, const auto& b) {
+            int ca = counts[a.value];
+            int cb = counts[b.value];
+            if (ca != cb)              return ca > cb;          // bigger group first
+            if (a.value != b.value)    return a.value < b.value;
+            return a.reference < b.reference;
+        });
+
+    for (int i = 0; i < static_cast<int>(m_steps.size()); ++i)
+        m_steps[i].order = i;
 }
 
 void PickAndPlace::sortByPosition()

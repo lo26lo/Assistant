@@ -5,6 +5,8 @@
 #include <opencv2/videoio/registry.hpp>
 #include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
+#include <thread>
+#include <chrono>
 
 namespace ibom::camera {
 
@@ -165,16 +167,45 @@ void CameraCapture::captureLoop()
         static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT)),
         static_cast<int>(cap.get(cv::CAP_PROP_FPS)));
 
+    // Warmup: MSMF may need a few frames to initialize the pipeline
+    constexpr int kWarmupAttempts = 60;  // up to 3 seconds at 50ms each
+    bool warmupOk = false;
+    for (int i = 0; i < kWarmupAttempts && m_capturing.load(); ++i) {
+        cv::Mat warmupFrame;
+        if (cap.read(warmupFrame) && !warmupFrame.empty()) {
+            spdlog::info("Camera warmup OK after {} attempt(s)", i + 1);
+            warmupOk = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (!warmupOk) {
+        spdlog::error("Camera warmup failed: no frame after {} attempts", kWarmupAttempts);
+        emit captureError(QString("Camera failed to provide frames (device %1, %2x%3)")
+            .arg(m_deviceIndex).arg(m_width).arg(m_height));
+        m_capturing.store(false);
+        emit captureStateChanged(false);
+        cap.release();
+        return;
+    }
+
+    int consecutiveFailures = 0;
     while (m_capturing.load()) {
         // Fresh cv::Mat each iteration — prevents cap.read() from writing
         // into a buffer that is still shared with downstream consumers.
         cv::Mat frame;
-        if (!cap.read(frame)) {
-            spdlog::warn("Failed to read frame from camera.");
+        if (!cap.read(frame) || frame.empty()) {
+            ++consecutiveFailures;
+            if (consecutiveFailures >= 30) {
+                spdlog::error("Camera: 30 consecutive read failures, stopping capture");
+                emit captureError(QString("Camera stopped: sustained read failures on device %1")
+                    .arg(m_deviceIndex));
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(33));
             continue;
         }
-
-        if (frame.empty()) continue;
+        consecutiveFailures = 0;
 
         // Wrap in shared_ptr<const cv::Mat> — pixel buffer is NOT copied;
         // cv::Mat's internal refcount + shared_ptr give us zero-copy fan-out.

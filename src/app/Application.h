@@ -8,6 +8,7 @@
 #include <string>
 #include <atomic>
 #include <chrono>
+#include <unordered_set>
 
 namespace ibom {
 
@@ -36,6 +37,16 @@ class HeatmapRenderer;
 class TrackingWorker;
 }
 
+namespace features {
+class PickAndPlace;
+class Measurement;
+class SnapshotHistory;
+}
+
+namespace exports {
+class DataExporter;
+}
+
 /**
  * @brief Main application controller.
  *
@@ -61,6 +72,7 @@ public:
 
 signals:
     void shutdownRequested();
+    void ibomLoaded(int componentCount);
 
 private:
     void setupLogging();
@@ -72,6 +84,9 @@ private:
     void runCalibration();
     void takeScreenshot();
     void updateDynamicScale();
+    void startInspection();
+    void onExport(const QString& format);
+    void onSnapshot();
 
     QApplication&                               m_qapp;
     std::unique_ptr<Config>                    m_config;
@@ -92,6 +107,12 @@ private:
     // Camera calibration
     std::unique_ptr<camera::CameraCalibration> m_calibration;
 
+    // Inspection workflow features
+    std::unique_ptr<features::PickAndPlace>     m_pickAndPlace;
+    std::unique_ptr<features::Measurement>      m_measurement;
+    std::unique_ptr<features::SnapshotHistory>  m_snapshotHistory;
+    std::unique_ptr<exports::DataExporter>      m_dataExporter;
+
     // FPS tracking
     QTimer* m_fpsTimer = nullptr;
     std::atomic<int> m_frameCount{0};
@@ -102,6 +123,10 @@ private:
 
     // Selected component ref for overlay highlight
     std::string m_selectedRef;
+
+    // Components already placed during the current inspection — used to render
+    // them in a faded "done" color in the overlay.
+    std::unordered_set<std::string> m_placedRefs;
 
     // Heatmap visibility
     bool m_showHeatmap = false;
