@@ -16,12 +16,32 @@ static LONG WINAPI crashHandler(EXCEPTION_POINTERS* ep)
     spdlog::default_logger()->flush();
     return EXCEPTION_EXECUTE_HANDLER;
 }
+#else
+#include <csignal>
+#include <execinfo.h>
+#include <unistd.h>
+extern "C" void posixCrashHandler(int sig)
+{
+    void* buf[32];
+    int n = backtrace(buf, 32);
+    spdlog::critical("UNHANDLED SIGNAL {} ({})", sig, strsignal(sig));
+    spdlog::default_logger()->flush();
+    backtrace_symbols_fd(buf, n, STDERR_FILENO);
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
 #endif
 
 int main(int argc, char* argv[])
 {
 #ifdef _WIN32
     SetUnhandledExceptionFilter(crashHandler);
+#else
+    std::signal(SIGSEGV, posixCrashHandler);
+    std::signal(SIGABRT, posixCrashHandler);
+    std::signal(SIGFPE,  posixCrashHandler);
+    std::signal(SIGILL,  posixCrashHandler);
+    std::signal(SIGBUS,  posixCrashHandler);
 #endif
 
     // Initialize logging first

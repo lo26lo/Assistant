@@ -8,14 +8,19 @@
     {
       "name": "opencv4",
       "default-features": false,
-      "features": ["dnn", "highgui", "calib3d", "msmf"]
+      "features": [
+        "dnn",
+        "highgui",
+        "calib3d",
+        { "name": "msmf", "platform": "windows" }
+      ]
     },
     "nlohmann-json",
     "spdlog",
     "catch2",
     {
       "name": "onnxruntime-gpu",
-      "platform": "x64"
+      "platform": "windows & x64"
     },
     "cpr",
     "nu-book-zxing-cpp",

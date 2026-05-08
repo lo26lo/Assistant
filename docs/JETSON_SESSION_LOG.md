@@ -15,6 +15,8 @@
 
 ### Phase courante
 **Phase 0 — Conteneurisation** : ✅ code livré, ❌ pas encore testé sur le Jetson.
+**Phase 1a — Portage Linux pur** : ✅ code livré (vcpkg.json + main.cpp signal handler).
+**Tooling** : ✅ journaux + hook PreCompact configurés.
 
 ### Branches & tags
 | Ref | Pointe sur | Statut |
@@ -42,7 +44,7 @@
 - [ ] **Tester `docker compose build base`** sur le Jetson (~90-120 min première fois)
 - [ ] **Tester `docker compose build dev`** + lancer le container interactif
 - [ ] **Tester le build C++** dans le container : `bash scripts/build_jetson.sh`
-- [ ] Phase 1 : nettoyer les `#ifdef IBOM_PLATFORM_WINDOWS` au cas par cas (uniquement si bloque le build)
+- [ ] Phase 1b : corrections ciblées au cas par cas selon retours du compilateur (notamment ONNX Runtime ARM, voir [JETSON_ERREURS.md](JETSON_ERREURS.md) entrée anticipée)
 - [ ] Phase 2 : refactor `FrameBuffer` pour mémoire unifiée (zero-copy)
 - [ ] Phase 3 (si nécessaire) : DLA + INT8 pour le ComponentDetector
 
@@ -157,6 +159,97 @@ Commit `40be3fd feat(docker): Phase 0 conteneurisation Jetson AGX Orin`
 ---
 
 <!-- AJOUTER LES NOUVELLES SESSIONS AU-DESSUS DE CETTE LIGNE -->
+
+## Session 2026-05-08 (suite) — Outillage journaux + Phase 1a
+
+### Objectif
+Mettre en place l'infrastructure de journalisation pour permettre la reprise facile, puis attaquer la Phase 1 (portage Linux pur) maintenant que la Phase 0 est livrée.
+
+### Contexte de départ
+Phase 0 livrée et pushée. L'utilisateur veut :
+- un journal de session pour suivre/reprendre
+- un journal des erreurs distinct
+- une garantie que les journaux sont à jour même si la session est interrompue (pas de signal "92% contexte" disponible)
+
+### Ce qui a été fait
+
+#### Outillage de journalisation
+- Création de [docs/JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) (ce fichier)
+- Création de [docs/JETSON_ERREURS.md](JETSON_ERREURS.md)
+- Ajout d'une **règle stricte dans [CLAUDE.md](../CLAUDE.md)** : mise à jour obligatoire du journal avant tout `git push` (le journal doit refléter l'état pushé en permanence pour garantir la robustesse aux interruptions)
+- Configuration d'un **hook PreCompact** dans `~/.claude/settings.json` (matcher `auto`) : envoie un message rappel "[PRECOMPACT HOOK - JETSON DISCIPLINE]" quand la compression auto du contexte va se déclencher, comme filet de sécurité
+
+#### Synchronisation de la branche `claude/rework-readme-0TDMk`
+- Cherry-pick du commit `571a116` (rework README) sur main → nouveau commit `8ae9f2e`
+- Suppression de la branche remote
+- `git remote prune origin` exécuté
+
+#### Audit du code C++ (avant Phase 1)
+Grep complet des `#ifdef _WIN32`, `#ifdef IBOM_PLATFORM_WINDOWS`, `#include <windows.h>` :
+
+| Fichier:ligne | Macro | Branche Windows | Branche Linux |
+|---------------|-------|-----------------|---------------|
+| `main.cpp:9-19` | `_WIN32` | SEH crash handler | (vide) ⚠️ |
+| `main.cpp:23-25` | `_WIN32` | `SetUnhandledExceptionFilter` | (vide) ⚠️ |
+| `ai/InferenceEngine.cpp:68` | `_WIN32` | `wstring` UTF-16 | `string` UTF-8 ✅ |
+| `camera/CameraCapture.cpp:95` | `IBOM_PLATFORM_WINDOWS` | CAP_MSMF | CAP_V4L2 ✅ |
+| `camera/CameraCapture.cpp:114` | idem | MSMF/DSHOW | V4L2 ✅ |
+| `app/Config.cpp:16` | idem | `%APPDATA%` | `~/.config/` ✅ |
+
+**Conclusion audit** : le code est **déjà cross-platform** — toutes les branches `#else` Linux sont fonctionnelles. Seul `main.cpp` n'avait pas de handler de crash POSIX (pas bloquant pour le build, juste pour la qualité du diagnostic en cas de crash).
+
+#### Phase 1a — Portage Linux pur (modifications non-régressives)
+Modifications minimales pour préparer le build Jetson sans casser le build Windows :
+
+1. **[vcpkg.json](../vcpkg.json)** : conditionner les paquets Windows-only :
+   - Feature `msmf` d'opencv4 → `"platform": "windows"`
+   - `onnxruntime-gpu` → `"platform": "windows & x64"`
+   - Sur Jetson on utilisera TensorRT JetPack système (pas vcpkg)
+
+2. **[src/main.cpp](../src/main.cpp)** : ajout du handler POSIX SIGSEGV/SIGABRT/SIGFPE/SIGILL/SIGBUS dans la branche `#else` :
+   - `posixCrashHandler()` log via spdlog + backtrace_symbols_fd vers stderr
+   - Appelé via `std::signal()` dans `main()`
+   - Re-raise du signal pour générer un core dump après log
+   - La branche Windows (SEH) reste inchangée
+
+3. **[CMakeLists.txt](../CMakeLists.txt)** : pas modifié — déjà OK avec les branches `if(WIN32) ... elseif(UNIX)`. Les éventuels problèmes find_package() sur Jetson seront traités en Phase 1b après le premier retour de compilation.
+
+#### Pièges anticipés ajoutés dans [JETSON_ERREURS.md](JETSON_ERREURS.md)
+- ONNX Runtime non packagé en apt sur Ubuntu 22.04 ARM64 → solutions à explorer (binaire NVIDIA pré-compilé, build from source, ou refactor Phase 2 vers TRT direct)
+
+### Décisions prises
+| Sujet | Décision | Pourquoi |
+|-------|----------|----------|
+| Stratégie journal | Couplage commit↔journal (mise à jour avant push obligatoire) | Robuste à 100% face aux interruptions |
+| Hook PreCompact | Filet de sécurité supplémentaire | Compense l'absence de signal "92% contexte" |
+| Phase 1 stratégie | Conservative : adapter seulement ce qui est sûrement nécessaire | Le code est déjà cross-platform, pas besoin de big bang |
+| `.bat` Windows | Garder en place pendant Phase 1 | Référence pratique, suppression progressive en Phase 1c |
+| `#ifdef WIN32` dans C++ | Garder | Branches Linux déjà fonctionnelles, support Windows possible plus tard |
+| Handler POSIX dans main.cpp | Ajouté en Phase 1a | Petite valeur ajoutée immédiate, pas de risque |
+
+### À faire prochaine session
+1. **Sur le Jetson** : `git pull` + `docker compose -f docker/compose.yml build base`
+2. Reporter les erreurs dans [JETSON_ERREURS.md](JETSON_ERREURS.md)
+3. Phase 1b : corrections ciblées selon retours compilateur (probablement ONNX Runtime à régler)
+
+### Commits poussés (cumulé pour le 2026-05-08)
+| Hash | Message |
+|------|---------|
+| `93765fa` | docs: add Jetson AGX Orin migration plan |
+| `40be3fd` | feat(docker): Phase 0 conteneurisation Jetson AGX Orin |
+| `8ae9f2e` | docs: rework README — structure, précision, lisibilité (cherry-pick) |
+| `7ca9c89` | docs: add Jetson session and error logs |
+| `34e112e` | docs(claude): mandatory session log discipline |
+| `fb76f64` | docs: update session log with logging discipline + complete commit list |
+| (commit suivant) | feat(linux): Phase 1a portage — vcpkg conditions + POSIX crash handler |
+
+### Notes / observations
+- Le hook PreCompact est configuré côté global utilisateur (`~/.claude/settings.json`), donc actif aussi en dehors de ce projet — comportement souhaité pour la discipline de journal.
+- Si le hook ne se déclenche pas à la première compression auto (caveat watcher), ouvrir `/hooks` pour reload la config ou redémarrer Claude Code.
+
+---
+
+<!-- AJOUTER LES NOUVELLES SESSIONS AU-DESSUS DE CETTE LIGNE NE LE FAIT PAS, ELLE EST AU-DESSUS DE LA SESSION 2026-05-08 D'ORIGINE -->
 
 ## Modèle pour nouvelle session
 

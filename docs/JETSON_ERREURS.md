@@ -15,7 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
-| _Aucune entrée pour l'instant — en attente du premier test sur Jetson_ |
+| 1 | 2026-05-08 | ONNX Runtime / apt ARM64 | 📝 INFO (anticipé) | [libonnxruntime-dev absent en apt Ubuntu 22.04 ARM64](#erreur-1--libonnxruntime-dev-absent-en-apt-ubuntu-2204-arm64) |
 
 **Statuts possibles** :
 - 🔴 OUVERT — pas encore résolu
@@ -98,3 +98,55 @@ Ces points sont **anticipés** mais pas encore observés. À convertir en vraie 
 ---
 
 <!-- AJOUTER LES NOUVELLES ERREURS AU-DESSUS DE CETTE LIGNE -->
+
+## ERREUR 1 — libonnxruntime-dev absent en apt Ubuntu 22.04 ARM64
+
+**Date :** 2026-05-08
+**Composant :** ONNX Runtime / build base.Dockerfile
+**Statut :** 📝 INFO (anticipé, pas encore observé en run)
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-05-08 (suite)
+
+### Symptôme attendu
+Au build de `microscope-ibom:base`, l'instruction suivante dans `docker/base.Dockerfile` :
+
+```dockerfile
+RUN apt-get install -y libonnxruntime-dev || true
+```
+
+va silencieusement échouer (le `|| true` masque l'erreur) car le paquet **n'existe pas** dans les dépôts Ubuntu 22.04 ARM64. Conséquence : au build C++, `find_package(onnxruntime CONFIG REQUIRED)` dans `CMakeLists.txt:75` va échouer :
+
+```
+CMake Error at CMakeLists.txt:75 (find_package):
+  Could not find a package configuration file provided by "onnxruntime"
+```
+
+### Contexte
+- Sur Windows : ONNX Runtime fourni par vcpkg (`onnxruntime-gpu`)
+- Sur Jetson ARM64 : pas de paquet apt officiel, pas dans vcpkg pour ARM
+- JetPack 6.2 inclut TensorRT 10.3 mais **pas ONNX Runtime** par défaut
+
+### Solutions possibles (à choisir au moment du fix)
+
+**Option A — Binaires NVIDIA pré-compilés pour Jetson (recommandé)**
+NVIDIA fournit des wheels Python ET des binaires C++ ONNX Runtime optimisés pour Jetson :
+https://elinux.org/Jetson_Zoo#ONNX_Runtime
+
+Ajouter dans `base.Dockerfile` :
+```dockerfile
+RUN wget https://nvidia.box.com/.../onnxruntime-linux-aarch64-X.Y.Z.tgz && \
+    tar -xzf onnxruntime-linux-aarch64-*.tgz -C /usr/local --strip-components=1 && \
+    ldconfig
+```
+
+**Option B — Build from source dans le Dockerfile**
+Long (~1-2h sur Jetson) mais 100% reproductible. Stage dédié dans le multi-stage.
+
+**Option C — Refactor C++ : utiliser TensorRT directement**
+Court-circuiter ONNX Runtime, charger le `.engine` TRT directement via l'API C++ TensorRT (déjà disponible via JetPack). C'est ce qui est prévu en Phase 2/3 de la migration.
+
+### Solution provisoire (Phase 1a)
+Aucune — on attend de voir l'erreur exacte au premier build pour choisir. Le `|| true` actuel laisse le build aller jusqu'à l'erreur cmake explicite.
+
+### Notes / prévention
+- À régler en Phase 1b dès le premier retour de build du Jetson.
+- Documenter le choix de version (compatibilité TRT 10.3 + CUDA 12.6) avant download.
