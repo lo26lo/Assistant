@@ -15,7 +15,31 @@ Le projet est en cours de portage sur **Jetson AGX Orin 32GB** dans Docker. La v
 3. [docs/JETSON_ERREURS.md](docs/JETSON_ERREURS.md) — bugs déjà rencontrés
 4. [docker/README.md](docker/README.md) — workflow Docker
 
-**À faire en fin de chaque session** : mettre à jour le bloc "État actuel" + ajouter une nouvelle entrée de session dans `JETSON_SESSION_LOG.md`. Logger toute erreur rencontrée dans `JETSON_ERREURS.md`.
+### 🔒 Obligation de tenue des journaux (règles strictes)
+
+Claude n'a **pas** de signal fiable du % de contexte utilisé pendant une session. Pour garantir qu'aucun travail ne soit perdu, ces règles sont **obligatoires** :
+
+1. **Avant tout `git push`** : mettre à jour `docs/JETSON_SESSION_LOG.md` :
+   - Ajouter/compléter l'entrée de session du jour (sous "Sessions" dans l'ordre antichronologique)
+   - Mettre à jour le bloc "État actuel" en haut du fichier
+   - Inclure les fichiers modifiés et le commit hash dans la session si déjà connu
+   - **Le journal doit faire partie du même commit** que le travail qu'il documente (ou d'un commit `docs:` immédiatement après)
+
+2. **À chaque erreur rencontrée** : ouvrir une entrée dans `docs/JETSON_ERREURS.md`
+   - Ajouter une ligne dans l'index en tête
+   - Statut initial 🔴 OUVERT, à passer en ✅ RÉSOLU une fois fixé
+   - Ne **jamais** résoudre silencieusement un bug sans le logger
+
+3. **Avant toute action longue (>5 min) ou risquée** : commit du journal courant en l'état, même incomplet
+   - Exemples : build Docker (~90 min), refactor multi-fichier, génération engines TRT
+   - Évite la perte de contexte si la session est interrompue pendant l'action
+
+4. **À chaque reprise de session** : commencer par lire dans cet ordre :
+   - Bloc "État actuel" de `JETSON_SESSION_LOG.md`
+   - Dernière entrée de session
+   - Entrées 🔴 OUVERT de `JETSON_ERREURS.md`
+
+Ces règles **priment** sur la concision : il vaut mieux un journal verbeux et redondant qu'un journal lacunaire. Le but est qu'un Claude futur (ou l'utilisateur après une pause) puisse reprendre **sans avoir besoin de relire toute la conversation**.
 
 Les pièges Windows ci-dessous restent valides pour `windows-legacy` mais peuvent ne plus s'appliquer au build Jetson Linux.
 
