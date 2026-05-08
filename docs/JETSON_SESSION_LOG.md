@@ -35,6 +35,8 @@
 - Stack Docker complet dans [docker/](../docker/)
 - Script de build Jetson : [scripts/build_jetson.sh](../scripts/build_jetson.sh)
 - Configuration cross-platform .gitattributes + .dockerignore
+- Journaux de session + erreurs : [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md), [JETSON_ERREURS.md](JETSON_ERREURS.md)
+- Règles strictes de tenue de journaux dans [CLAUDE.md](../CLAUDE.md) (mise à jour avant chaque push obligatoire)
 
 ### Ce qui reste à faire
 - [ ] **Tester `docker compose build base`** sur le Jetson (~90-120 min première fois)
@@ -142,6 +144,8 @@ Commit `40be3fd feat(docker): Phase 0 conteneurisation Jetson AGX Orin`
 | `93765fa` | docs: add Jetson AGX Orin migration plan |
 | `40be3fd` | feat(docker): Phase 0 conteneurisation Jetson AGX Orin |
 | `8ae9f2e` | docs: rework README — structure, précision, lisibilité (cherry-pick) |
+| (commit suivant) | docs: add Jetson session and error logs |
+| (commit suivant) | docs(claude): mandatory session log discipline |
 | `v0.1.0-windows-final` (tag) | Archive Windows |
 | `windows-legacy` (branche) | Archive Windows |
 
