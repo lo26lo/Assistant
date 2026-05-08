@@ -1,0 +1,70 @@
+# Build outputs
+build/
+out/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/CTestTestfile.cmake
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Qt generated
+*_autogen/
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# Compiled binaries
+*.exe
+*.dll
+*.lib
+*.pdb
+*.obj
+*.o
+
+# Logs
+*.log
+logs/
+build_log*.txt
+
+# Models (montés en volume au runtime)
+models/*.onnx
+models/*.engine
+models/*.trt
+
+# Git (inutile dans le container)
+.git/
+.gitignore
+.gitattributes
+
+# Claude / outils
+.claude/
+
+# OS
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# Docker (éviter récursion)
+docker/
+.dockerignore
+
+# Documentation (pas nécessaire pour build)
+docs/
+*.md
+README.md
+
+# Tests (rebuild dans le container)
+build_windows.bat
+test_configure.bat
+
+# vcpkg local
+build/vcpkg_installed/
+
+# Cache TensorRT (regénéré au runtime)
+tensorrt-cache/

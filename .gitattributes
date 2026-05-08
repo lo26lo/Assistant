@@ -1,0 +1,25 @@
+# Force LF line endings for shell scripts and Dockerfiles
+# (avoids broken scripts when checked out on Windows then run on Linux/Jetson)
+*.sh           text eol=lf
+*.bash         text eol=lf
+Dockerfile     text eol=lf
+*.Dockerfile   text eol=lf
+docker-compose.yml text eol=lf
+compose.yml    text eol=lf
+*.yml          text eol=lf
+*.yaml         text eol=lf
+
+# Default: auto-detect
+* text=auto
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text
+*.onnx binary
+*.engine binary
+*.trt binary
+*.pdf binary

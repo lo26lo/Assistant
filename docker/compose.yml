@@ -1,0 +1,117 @@
+# =============================================================================
+#  Docker Compose — MicroscopeIBOM sur Jetson AGX Orin 32GB
+#  JetPack 6.2 / L4T R36.4 / Ubuntu 22.04
+# =============================================================================
+#
+#  Usage :
+#    Build base puis dev :
+#      docker compose -f docker/compose.yml build base
+#      docker compose -f docker/compose.yml build dev
+#
+#    Lancer dev (interactif) :
+#      docker compose -f docker/compose.yml up -d dev
+#      docker compose -f docker/compose.yml exec dev bash
+#
+#    Lancer runtime :
+#      docker compose -f docker/compose.yml up runtime
+#
+# =============================================================================
+
+services:
+
+  # ===========================================================================
+  #  BASE — image avec stack complet (Qt6, OpenCV CUDA, TensorRT, librealsense)
+  #  Ne se lance pas, sert de FROM pour dev et runtime
+  # ===========================================================================
+  base:
+    build:
+      context: ..
+      dockerfile: docker/base.Dockerfile
+      args:
+        L4T_VERSION: r36.4.0
+        OPENCV_VERSION: 4.10.0
+        REALSENSE_VERSION: v2.55.1
+        CUDA_ARCH_BIN: "8.7"
+    image: microscope-ibom:base
+    profiles: ["build-only"]   # ne demarre pas avec "compose up"
+
+  # ===========================================================================
+  #  DEV — environnement de developpement avec X11 + GPU + cameras
+  # ===========================================================================
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/dev.Dockerfile
+    image: microscope-ibom:dev
+    container_name: microscope-ibom-dev
+    runtime: nvidia
+    network_mode: host
+    devices:
+      - /dev/video0:/dev/video0       # camera microscope USB
+      # decommenter si plusieurs cameras :
+      # - /dev/video1:/dev/video1
+      # - /dev/video2:/dev/video2
+      - /dev/bus/usb:/dev/bus/usb     # hot-plug USB (RealSense, autres)
+      - /dev/input:/dev/input         # clavier, souris, ecran tactile
+      - /dev/dri:/dev/dri             # GPU display
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - XAUTHORITY=/tmp/.docker.xauth
+      - QT_QPA_PLATFORM=xcb
+      - QT_X11_NO_MITSHM=1
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /tmp/.docker.xauth:/tmp/.docker.xauth:rw
+      - ..:/opt/microscope-ibom:rw          # source code en volume (live edit)
+      - dev-cache:/root/.cache              # cache build
+      - dev-ccache:/root/.ccache            # cache ccache
+    group_add:
+      - video
+      - plugdev
+      - dialout
+    stdin_open: true
+    tty: true
+    working_dir: /opt/microscope-ibom
+    command: /bin/bash
+
+  # ===========================================================================
+  #  RUNTIME — image production minimale
+  # ===========================================================================
+  runtime:
+    build:
+      context: ..
+      dockerfile: docker/runtime.Dockerfile
+    image: microscope-ibom:runtime
+    container_name: microscope-ibom-runtime
+    runtime: nvidia
+    network_mode: host
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/bus/usb:/dev/bus/usb
+      - /dev/input:/dev/input
+      - /dev/dri:/dev/dri
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - XAUTHORITY=/tmp/.docker.xauth
+      - QT_QPA_PLATFORM=xcb
+      - QT_QPA_GENERIC_PLUGINS=evdevtouch:/dev/input/touch0
+      - QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS=rotate=0
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /tmp/.docker.xauth:/tmp/.docker.xauth:rw
+      - ../config:/opt/microscope-ibom/config:rw
+      - ../logs:/opt/microscope-ibom/logs:rw
+      - ../models:/opt/microscope-ibom/models:ro
+      - ../tensorrt-cache:/opt/microscope-ibom/tensorrt-cache:rw
+    group_add:
+      - video
+      - plugdev
+    restart: unless-stopped
+
+volumes:
+  dev-cache:
+  dev-ccache:
