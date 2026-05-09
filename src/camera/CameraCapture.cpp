@@ -1,5 +1,5 @@
 #include "CameraCapture.h"
-#include "FrameBuffer.h"
+#include "UnifiedAllocator.h"
 
 #include <opencv2/videoio.hpp>
 #include <opencv2/videoio/registry.hpp>
@@ -13,7 +13,6 @@ namespace ibom::camera {
 CameraCapture::CameraCapture(int deviceIndex, QObject* parent)
     : QObject(parent)
     , m_deviceIndex(deviceIndex)
-    , m_frameBuffer(std::make_unique<FrameBuffer>(3)) // Triple buffering
 {
 }
 
@@ -58,11 +57,6 @@ FrameRef CameraCapture::latestFrame() const
 {
     std::lock_guard<std::mutex> lock(m_frameMutex);
     return m_latestFrame;
-}
-
-FrameBuffer& CameraCapture::frameBuffer()
-{
-    return *m_frameBuffer;
 }
 
 void CameraCapture::setDeviceIndex(int index)
@@ -162,10 +156,13 @@ void CameraCapture::captureLoop()
     cap.set(cv::CAP_PROP_FPS, m_fps);
     cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
 
-    spdlog::info("Camera opened: {}x{} @ {} fps",
+    spdlog::info("Camera opened: {}x{} @ {} fps (unified memory: {})",
         static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH)),
         static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT)),
-        static_cast<int>(cap.get(cv::CAP_PROP_FPS)));
+        static_cast<int>(cap.get(cv::CAP_PROP_FPS)),
+        unifiedMemoryAvailable() ? "yes" : "no");
+
+    cv::MatAllocator* alloc = unifiedAllocator();
 
     // Warmup: MSMF may need a few frames to initialize the pipeline
     constexpr int kWarmupAttempts = 60;  // up to 3 seconds at 50ms each
@@ -193,7 +190,10 @@ void CameraCapture::captureLoop()
     while (m_capturing.load()) {
         // Fresh cv::Mat each iteration — prevents cap.read() from writing
         // into a buffer that is still shared with downstream consumers.
+        // The custom allocator backs the pixel buffer with CUDA Unified
+        // Memory on Jetson (no-op fallback to malloc on Windows/desktop).
         cv::Mat frame;
+        frame.allocator = alloc;
         if (!cap.read(frame) || frame.empty()) {
             ++consecutiveFailures;
             if (consecutiveFailures >= 30) {
@@ -216,10 +216,6 @@ void CameraCapture::captureLoop()
             std::lock_guard<std::mutex> lock(m_frameMutex);
             m_latestFrame = shared;
         }
-
-        // Ring buffer still takes cv::Mat — internally it copyTo's, which is
-        // acceptable (bounded capacity, isolates AI pipeline timing).
-        m_frameBuffer->push(*shared);
 
         // Notify listeners — Qt copies the shared_ptr (refcount bump only).
         emit frameReady(shared);

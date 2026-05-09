@@ -36,6 +36,7 @@ option(IBOM_ENABLE_VOICE      "Enable voice control (requires portaudio)" OFF)
 option(IBOM_ENABLE_REMOTE     "Enable remote view streaming"           ON)
 option(IBOM_ENABLE_TESTS      "Build unit tests"                       ON)
 option(IBOM_ENABLE_ASAN       "Enable AddressSanitizer (debug)"        OFF)
+option(IBOM_ENABLE_UMA        "Back camera frames with CUDA Unified Memory (Jetson)" OFF)
 
 # ============================================================================
 # Custom CMake modules
@@ -112,7 +113,7 @@ set(SOURCES
     # Camera
     src/camera/CameraCapture.cpp
     src/camera/CameraCalibration.cpp
-    src/camera/FrameBuffer.cpp
+    src/camera/UnifiedAllocator.cpp
 
     # iBOM
     src/ibom/IBomParser.cpp
@@ -171,7 +172,7 @@ set(HEADERS
     # Camera
     src/camera/CameraCapture.h
     src/camera/CameraCalibration.h
-    src/camera/FrameBuffer.h
+    src/camera/UnifiedAllocator.h
 
     # iBOM
     src/ibom/IBomParser.h
@@ -290,6 +291,17 @@ if(CUDAToolkit_FOUND)
     target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_HAS_CUDA)
 endif()
 
+# Unified Memory allocator (Jetson) — requires CUDA. The allocator falls back
+# to std::malloc transparently when this define is absent, so the wiring is
+# identical on every platform.
+if(IBOM_ENABLE_UMA)
+    if(NOT CUDAToolkit_FOUND)
+        message(FATAL_ERROR "IBOM_ENABLE_UMA=ON requires CUDA, but CUDAToolkit was not found.")
+    endif()
+    target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_USE_UMA_ALLOCATOR)
+    message(STATUS "  UMA allocator: ENABLED (cudaMallocManaged)")
+endif()
+
 # ============================================================================
 # Compiler flags (must be after target creation)
 # ============================================================================
@@ -354,6 +366,7 @@ message(STATUS "  Build type:   ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Qt6:          ${Qt6_VERSION}")
 message(STATUS "  OpenCV:       ${OpenCV_VERSION}")
 message(STATUS "  CUDA:         ${CUDAToolkit_FOUND}")
+message(STATUS "  UMA:          ${IBOM_ENABLE_UMA}")
 message(STATUS "  TensorRT:     ${IBOM_ENABLE_TENSORRT}")
 message(STATUS "  Tests:        ${IBOM_ENABLE_TESTS}")
 message(STATUS "  Voice:        ${IBOM_ENABLE_VOICE}")

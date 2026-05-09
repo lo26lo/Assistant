@@ -10,8 +10,6 @@
 
 namespace ibom::camera {
 
-class FrameBuffer;
-
 /// Shared, immutable frame view. Pixel buffer is reference-counted — copying
 /// the shared_ptr does not copy pixels. Multiple consumers (GUI, tracking
 /// worker, calibration) can hold a reference concurrently without clones.
@@ -21,8 +19,9 @@ using FrameRef = std::shared_ptr<const cv::Mat>;
  * @brief Captures frames from a USB camera (microscope).
  *
  * Runs capture in a dedicated thread for minimal latency.
- * Frames are pushed into a FrameBuffer for consumption by
- * the rendering / AI pipeline.
+ * Each frame is published as a FrameRef (shared_ptr<const cv::Mat>) — the
+ * pixel buffer is shared zero-copy with all downstream consumers via
+ * Qt signals and latestFrame().
  */
 class CameraCapture : public QObject {
     Q_OBJECT
@@ -46,9 +45,6 @@ public:
     /// Get the latest frame (thread-safe, zero-copy shared view).
     /// Returns an empty FrameRef (null) if no frame has been captured yet.
     FrameRef latestFrame() const;
-
-    /// Get the shared frame buffer.
-    FrameBuffer& frameBuffer();
 
     // --- Settings ---
     void setDeviceIndex(int index);
@@ -80,7 +76,6 @@ private:
 
     std::atomic<bool>           m_capturing{false};
     std::unique_ptr<std::thread> m_thread;
-    std::unique_ptr<FrameBuffer> m_frameBuffer;
 
     mutable std::mutex m_frameMutex;
     FrameRef           m_latestFrame;

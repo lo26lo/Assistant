@@ -11,17 +11,18 @@
 
 ---
 
-## État actuel — au 2026-05-08
+## État actuel — au 2026-05-09
 
 ### Phase courante
 **Phase 0 — Conteneurisation** : ✅ code livré, ❌ pas encore testé sur le Jetson.
 **Phase 1a — Portage Linux pur** : ✅ code livré (vcpkg.json + main.cpp signal handler).
+**Phase 2a/b/c — Mémoire unifiée (foundation)** : ✅ code livré (FrameBuffer supprimé, UnifiedAllocator + captureLoop branché), ❌ pas encore validé runtime sur Jetson.
 **Tooling** : ✅ journaux + hook PreCompact + bootstrap one-liner configurés.
 
 ### Branches & tags
 | Ref | Pointe sur | Statut |
 |-----|------------|--------|
-| `main` | `7ce8fea` (bootstrap_jetson.sh) | actif, dev Jetson |
+| `main` | (commit Phase 2 à venir) | actif, dev Jetson |
 | `windows-legacy` | `3174dad` (last commit Windows) | gelée, pour repli |
 | `v0.1.0-windows-final` (tag) | `3174dad` | archive permanente |
 
@@ -42,13 +43,15 @@
 
 ### Ce qui reste à faire
 - [ ] **Lancer le bootstrap** sur le Jetson : `curl -fsSL https://raw.githubusercontent.com/lo26lo/Assistant/main/scripts/bootstrap_jetson.sh | bash` (~2h cumulé)
-- [ ] **Tester le build C++** dans le container dev : `bash scripts/build_jetson.sh`
+- [ ] **Tester le build C++** dans le container dev : `bash scripts/build_jetson.sh` (avec `IBOM_ENABLE_UMA=ON` activé par défaut dans le script)
+- [ ] **Valider runtime UMA** : log `unified memory: yes` à l'ouverture caméra, `nsys profile` <1ms copies host↔device par frame
 - [ ] Phase 1b : corrections ciblées au cas par cas selon retours du compilateur (notamment ONNX Runtime ARM, voir [JETSON_ERREURS.md](JETSON_ERREURS.md) entrée anticipée)
-- [ ] Phase 2 : refactor `FrameBuffer` pour mémoire unifiée (zero-copy)
+- [ ] Phase 2d : `InferenceEngine` zero-copy preprocess (à faire quand l'inférence sera instanciée et qu'on pourra valider sur Jetson)
+- [ ] Phase 2.5 (gros morceau) : V4L2 DMABUF direct (hors `cv::VideoCapture`) si la caméra microscope le supporte
 - [ ] Phase 3 (si nécessaire) : DLA + INT8 pour le ComponentDetector
 
 ### Blocages connus
-Aucun pour l'instant — en attente du premier test sur Jetson.
+Aucun pour l'instant — en attente du premier test sur Jetson. Le code Phase 2 a été écrit sans pouvoir tester runtime ; à valider sur Jetson dès que possible.
 
 ### Comment reprendre à la prochaine session
 1. Lire ce bloc "État actuel" + la dernière entrée de session ci-dessous
@@ -158,6 +161,103 @@ Commit `40be3fd feat(docker): Phase 0 conteneurisation Jetson AGX Orin`
 ---
 
 <!-- AJOUTER LES NOUVELLES SESSIONS AU-DESSUS DE CETTE LIGNE -->
+
+## Session 2026-05-09 — Phase 2a/b/c : mémoire unifiée (foundation)
+
+### Objectif
+Avancer la Phase 2 (mémoire unifiée Tegra) côté code C++ pendant que le test Jetson n'est pas encore lancé. Préparer la fondation du zero-copy pour qu'à la première itération sur le Jetson, la pipeline soit déjà UMA-aware.
+
+### Contexte de départ
+- Phase 0 + Phase 1a livrées et pushées sur `main`.
+- Pas d'accès matériel Jetson dans cette session — refactor purement code, validable green sur Windows et compile-only sur Jetson tant que pas testé.
+
+### Constat avant refactor
+**`FrameBuffer` est du code mort dans le flux principal** : `push()` est appelé à chaque frame ([CameraCapture.cpp:222](../src/camera/CameraCapture.cpp#L222) avant refactor) mais aucun `pop()`/`tryPop()` n'est appelé nulle part dans la base de code. Vérification : `grep -r "frameBuffer()|\.pop\(|\.tryPop\(" src/` → 0 résultats hors définition. La pipeline réelle utilise `FrameRef = shared_ptr<const cv::Mat>` (zero-copy CPU déjà en place depuis avril 2026). Le `frame.copyTo` du `push` était donc une copie pure perte (~190 MB/s à 1080p×3ch×30fps).
+
+### Décisions prises
+| Sujet | Décision | Pourquoi |
+|-------|----------|----------|
+| Que faire de `FrameBuffer` | Supprimer | Dead code, aucun consumer. Si besoin futur de découplage AI, on construira un ring de `FrameRef` (zero-copy même côté ring) plutôt que de cloner des pixels. |
+| Approche UMA | Custom `cv::MatAllocator` global, branche `IBOM_USE_UMA_ALLOCATOR` | Plus simple qu'un wrapper `UnifiedFrame` — utilise le hook `cv::Mat::allocator` public. `cap.read(frame)` alloue alors directement dans la mémoire unifiée. |
+| Compile flag | `IBOM_ENABLE_UMA=OFF` par défaut, `ON` dans `scripts/build_jetson.sh` | Zéro changement de comportement sur Windows, zéro régression. Sur Jetson : `cudaMallocManaged` actif. |
+| Périmètre session | Étapes 2a/b/c (foundation) ; 2d (`InferenceEngine` zero-copy) reportée | Pas de modèle ONNX à tester, pas pertinent sans Jetson tournant. |
+| V4L2 DMABUF | Reporté en Phase 2.5 | Gros morceau (remplacer `cv::VideoCapture` par wrapper V4L2), dépend du support caméra. |
+
+### Ce qui a été fait
+
+#### 2a — Suppression `FrameBuffer`
+- Supprimé `src/camera/FrameBuffer.h` et `src/camera/FrameBuffer.cpp`
+- Retiré `m_frameBuffer`, `frameBuffer()`, le forward-decl et l'`#include` de [src/camera/CameraCapture.h](../src/camera/CameraCapture.h) et [src/camera/CameraCapture.cpp](../src/camera/CameraCapture.cpp)
+- Retiré `m_frameBuffer->push(*shared)` du `captureLoop`
+- Retiré les deux entrées `FrameBuffer.{h,cpp}` de [CMakeLists.txt](../CMakeLists.txt)
+- Pas de test associé à supprimer (FrameBuffer n'avait pas de test)
+
+#### 2b — Nouveau `UnifiedAllocator`
+- Créé [src/camera/UnifiedAllocator.h/.cpp](../src/camera/UnifiedAllocator.h)
+- `cv::MatAllocator` custom :
+  - `allocate(dims, sizes, type, ...)` calcule la taille totale + step (mirror du `StdAllocator` OpenCV) puis alloue via `allocateRaw()`
+  - `deallocate()` libère via `deallocateRaw()` qui détecte si le pointeur est managé via `cudaPointerGetAttributes` (gère le cas où UMA flippe off mid-session)
+- `allocateRaw()` :
+  - Si `IBOM_USE_UMA_ALLOCATOR` défini : `cudaMallocManaged`. Sur échec → bascule définitive vers `std::malloc` (un seul warning, pas de spam)
+  - Sinon : `std::malloc` direct
+- Singleton via `static UnifiedMatAllocator alloc;` + probe one-shot au premier appel
+- `unifiedMemoryAvailable()` : retourne `true` ssi build avec UMA + probe runtime OK
+
+#### 2c — `captureLoop` branché
+- [src/camera/CameraCapture.cpp:165](../src/camera/CameraCapture.cpp#L165) : `cv::MatAllocator* alloc = unifiedAllocator();` après ouverture caméra
+- Boucle de capture : `frame.allocator = alloc;` AVANT `cap.read(frame)` → la mémoire pixel allouée par OpenCV passe par notre allocator
+- Log d'ouverture caméra étendu : `unified memory: yes/no` pour le diagnostic
+- Sémantique inchangée côté consumers : `FrameRef = shared_ptr<const cv::Mat>`, fan-out zero-copy via `make_shared<const cv::Mat>(std::move(frame))`
+
+#### CMakeLists
+- Nouvelle option `IBOM_ENABLE_UMA` (default OFF)
+- Si activé sans `CUDAToolkit_FOUND` → `FATAL_ERROR` explicite
+- Define `IBOM_USE_UMA_ALLOCATOR` propagé au target principal sous condition
+- Ajout des sources/headers `UnifiedAllocator.{cpp,h}`
+- [scripts/build_jetson.sh](../scripts/build_jetson.sh) : `IBOM_ENABLE_UMA=ON` ajouté aux `CMAKE_ARGS`
+
+#### Tests
+- Nouveau [tests/test_unified_allocator.cpp](../tests/test_unified_allocator.cpp) — 6 cas Catch2 :
+  - Singleton non-null et stable
+  - Allocation Mat 720p×3ch via `m.allocator = unifiedAllocator(); m.create(...)`
+  - Round-trip pixels (write/read via `at<Vec3b>`)
+  - Cycle copy/release (refcount partagé entre `cv::Mat` clones légers, deep copy fonctionne)
+  - Compatibilité avec opérations OpenCV (`cv::cvtColor` sur Mat allouée via UMA)
+  - Cohérence `unifiedMemoryAvailable()` vs build flag
+- [tests/CMakeLists.txt](../tests/CMakeLists.txt) : nouveau target `test_unified_allocator` avec propagation conditionnelle du define `IBOM_USE_UMA_ALLOCATOR` + link `CUDA::cudart` si actif (lecture des `COMPILE_DEFINITIONS` du target principal)
+
+### Pourquoi ce design plutôt qu'un autre
+
+**Pourquoi un `cv::MatAllocator` global plutôt qu'un wrapper `UnifiedFrame`** : OpenCV expose `cv::Mat::allocator` comme membre public, ce qui permet de switcher l'allocator d'une `cv::Mat` SANS toucher à `cv::VideoCapture` (qui appelle en interne `frame.create(rows, cols, type)`). Wrapper aurait forcé une copie après capture (perdant le bénéfice). L'approche allocator est invisible côté caller.
+
+**Pourquoi `cudaMallocManaged` plutôt que `cudaHostAlloc(cudaHostAllocMapped)`** : sur Tegra, les deux donnent un pointeur lisible CPU+GPU sans copie, mais `cudaMallocManaged` est l'API moderne et future-proof (UVM). Sur desktop avec dGPU il y a migration de pages, sur Jetson SoC c'est juste du mapping (pas de migration). L'API `cudaMalloc(... Mapped)` est legacy.
+
+**Pourquoi singleton plutôt que par-instance** : `cv::Mat::allocator` est un pointeur — pas de propriété. Un singleton process-wide simplifie la durée de vie. L'allocator est stateless (pas de pool, pas de state mutable, juste deux fonctions).
+
+### À tester côté Jetson dès que possible
+1. `bash scripts/build_jetson.sh` doit produire un binaire avec `UMA: ON` dans le summary CMake
+2. À l'ouverture caméra, log doit afficher `unified memory: yes` et `UnifiedAllocator: CUDA Unified Memory active`
+3. `ctest` doit passer `test_unified_allocator` (6 cas)
+4. `nsys profile` sur une frame de capture → vérifier <1ms en copies host↔device (critère du plan)
+
+### Risques connus / pièges anticipés
+- **OpenCV 4.x** : la signature de `cv::MatAllocator::allocate` peut différer entre versions (4.5 vs 4.8 vs 4.12). On a écrit pour 4.x avec `cv::AccessFlag` + `cv::UMatUsageFlags`. Si erreur de compilation côté Jetson (OpenCV 4.8 du Dockerfile), ajuster la signature et logger dans [JETSON_ERREURS.md](JETSON_ERREURS.md).
+- **Probe `cudaMallocManaged` peut échouer** si le container Docker est lancé sans `--runtime nvidia` ou si la lib CUDA n'est pas mappée. Dans ce cas l'allocator fallback silencieusement à `std::malloc` (warning unique). Comportement = équivalent à OpenCV par défaut.
+- **`cv::Mat::allocator` est un membre public depuis OpenCV 4.0** — si une version future d'OpenCV le rend privé, il faudra utiliser `cv::Mat::setDefaultAllocator` (global, plus invasif).
+- **Test `test_unified_allocator`** : sur Windows sans `IBOM_ENABLE_UMA`, le test build sans CUDA (juste opencv_core/imgproc + spdlog), comportement = vérifie le wiring fallback std::malloc.
+
+### À faire prochaine session (Jetson)
+1. Sur le Jetson : `git pull && bash scripts/build_jetson.sh`
+2. Vérifier `UMA: ON` dans le résumé CMake
+3. `cd build && ctest --output-on-failure -R unified_allocator`
+4. Lancer le binaire, ouvrir la caméra, vérifier le log `unified memory: yes`
+5. Si OK : enchaîner sur Phase 2d (`InferenceEngine` preprocess en-place sur Mat unifiée) — mais d'abord il faudra brancher l'inférence dans `Application` et avoir un `.onnx` réel
+6. Si erreurs de compilation OpenCV 4.8 : ajuster signatures `MatAllocator`, logger dans `JETSON_ERREURS.md`
+
+### Commits poussés cette session
+| Hash | Message |
+|------|---------|
+| (à venir) | feat(camera): Phase 2a/b/c — UnifiedAllocator UMA + suppression FrameBuffer dead code |
 
 ## Session 2026-05-08 (suite) — Outillage journaux + Phase 1a
 

@@ -166,7 +166,7 @@ Zero-copy : `FrameRef = std::shared_ptr<const cv::Mat>`. La frame allouée dans 
 | Module | Fichiers clés | Connecté |
 |--------|--------------|----------|
 | `app/` | `Application.h/.cpp`, `Config.h/.cpp` | ✅ |
-| `camera/` | `CameraCapture.h/.cpp`, `CameraCalibration.h/.cpp`, `FrameBuffer.h/.cpp` | ✅ |
+| `camera/` | `CameraCapture.h/.cpp`, `CameraCalibration.h/.cpp`, `UnifiedAllocator.h/.cpp` | ✅ |
 | `ibom/` | `IBomData.h`, `IBomParser.h/.cpp`, `ComponentMap.h/.cpp` | ✅ |
 | `overlay/` | `Homography.h/.cpp`, `OverlayRenderer.h/.cpp`, `ComponentOverlay.h/.cpp`, `HeatmapRenderer.h/.cpp`, `TrackingWorker.h/.cpp` | ✅ |
 | `gui/` | `MainWindow`, `CameraView`, `BomPanel`, `ControlPanel`, `StatsPanel`, `SettingsDialog`, `HelpDialog`, `InspectionWizard`, `Theme.h` | ✅ |

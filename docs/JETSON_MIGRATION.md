@@ -265,10 +265,13 @@ cmake --build build -j$(nproc)
 ### Phase 2 — Mémoire unifiée (zero-copy) — 1-2 semaines
 **Objectif** : exploiter la mémoire partagée CPU/GPU du Jetson pour matcher (ou dépasser) les perfs RTX 5070 desktop.
 
+**Statut Phase 2a/b/c — livré 2026-05-09** : `FrameBuffer` (dead code) supprimé, nouvel allocateur OpenCV `UnifiedAllocator` (`cudaMallocManaged` sous `IBOM_USE_UMA_ALLOCATOR`, fallback `std::malloc`), `CameraCapture::captureLoop` capture désormais directement dans une `cv::Mat` UMA. Reste à valider runtime sur Jetson.
+
 **Fichiers concernés** :
-- [src/camera/FrameBuffer.cpp/.h](../src/camera/FrameBuffer.cpp) — refactor pour `cudaMallocManaged` ou `cudaHostAlloc(cudaHostAllocMapped)`
-- [src/ai/InferenceEngine.cpp](../src/ai/InferenceEngine.cpp) — supprimer copies `cv::Mat` host intermédiaires
-- [src/camera/CameraCapture.cpp](../src/camera/CameraCapture.cpp) — activer V4L2 DMABUF si supporté par la caméra microscope
+- ~~`src/camera/FrameBuffer.cpp/.h`~~ — supprimé (dead code, jamais consommé). Remplacé par l'approche allocator-per-Mat.
+- [src/camera/UnifiedAllocator.h/.cpp](../src/camera/UnifiedAllocator.h) — nouveau, `cv::MatAllocator` basé sur `cudaMallocManaged`
+- [src/camera/CameraCapture.cpp](../src/camera/CameraCapture.cpp) — capture loop branche `frame.allocator = unifiedAllocator()` (✅ fait). Activation V4L2 DMABUF restant pour Phase 2.5 (gros morceau, hors `cv::VideoCapture`).
+- [src/ai/InferenceEngine.cpp](../src/ai/InferenceEngine.cpp) — supprimer copies `cv::Mat` host intermédiaires (Phase 2d, à faire quand l'inférence sera instanciée et qu'on pourra valider sur Jetson)
 
 **Pattern cible** :
 ```

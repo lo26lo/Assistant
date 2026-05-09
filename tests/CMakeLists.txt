@@ -44,3 +44,21 @@ add_ibom_test(test_component_matching
             ${CMAKE_SOURCE_DIR}/src/ibom/ComponentMap.cpp
     LIBS    nlohmann_json::nlohmann_json
 )
+
+# Unified allocator test — needs UnifiedAllocator.cpp (depends on opencv core,
+# spdlog, and CUDA when IBOM_USE_UMA_ALLOCATOR is propagated from the parent).
+add_ibom_test(test_unified_allocator
+    SOURCES test_unified_allocator.cpp
+            ${CMAKE_SOURCE_DIR}/src/camera/UnifiedAllocator.cpp
+    LIBS    opencv_core opencv_imgproc spdlog::spdlog
+)
+# Mirror the parent's UMA define so the allocator picks the right backend.
+get_target_property(_ibom_defs MicroscopeIBOM COMPILE_DEFINITIONS)
+if(_ibom_defs)
+    foreach(_d IN LISTS _ibom_defs)
+        if(_d STREQUAL "IBOM_USE_UMA_ALLOCATOR")
+            target_compile_definitions(test_unified_allocator PRIVATE IBOM_USE_UMA_ALLOCATOR)
+            target_link_libraries(test_unified_allocator PRIVATE CUDA::cudart)
+        endif()
+    endforeach()
+endif()

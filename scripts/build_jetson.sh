@@ -54,6 +54,7 @@ CMAKE_ARGS=(
     -DIBOM_ENABLE_VOICE=OFF
     -DIBOM_ENABLE_REMOTE=ON
     -DIBOM_ENABLE_TESTS=ON
+    -DIBOM_ENABLE_UMA=ON
 )
 
 # vcpkg uniquement si VCPKG_ROOT defini ET fichier toolchain present
