@@ -134,11 +134,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ONNX Runtime v1.19.2 exige CMake 3.26+ (Jammy ne fournit que 3.22.1).
-# pip3 install place cmake dans /usr/local/bin qui passe devant /usr/bin
-# dans PATH — le build.sh d'ORT (qui invoque "cmake" sans chemin absolu)
-# utilisera donc cette version recente.
-RUN pip3 install --no-cache-dir "cmake>=3.28" psutil \
+# ONNX Runtime v1.19.2 exige CMake >= 3.26 (Jammy ne fournit que 3.22.1).
+# MAIS on doit aussi rester < 4.x : CMake 4.0 a supprime le support des
+# cmake_minimum_required(VERSION <3.5), et certains deps tires en
+# FetchContent par ORT (google_nsync notamment) ont des headers <3.5 et
+# plantent avec CMake 4.x. La fenetre safe est [3.26, 4) = la serie 3.31.x.
+RUN pip3 install --no-cache-dir "cmake>=3.28,<4" psutil \
     && cmake --version
 
 WORKDIR /tmp
