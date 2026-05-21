@@ -135,7 +135,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp
-RUN git clone --depth 1 --branch ${ONNXRUNTIME_VERSION} --recursive https://github.com/microsoft/onnxruntime.git
+# Clone en 2 etapes pour eviter "HTTP/2 stream was not closed cleanly: CANCEL"
+# observe quand on tire ~3-4 GB en un coup via git clone --recursive sur ARM64 :
+#   1. postBuffer 512MB pour les gros packs
+#   2. low-speed timeouts desactives (GitHub peut throttle pendant 30s+ sur un sous-fichier)
+#   3. clone principal seul (rapide, ~30 MB pour ORT v1.19.2 --depth 1)
+#   4. submodules en parallele (--jobs 4) et shallow (--depth 1) avec 3 tentatives
+RUN git config --global http.postBuffer 524288000 \
+ && git config --global http.lowSpeedLimit 0 \
+ && git config --global http.lowSpeedTime 999999 \
+ && git clone --depth 1 --branch ${ONNXRUNTIME_VERSION} \
+        https://github.com/microsoft/onnxruntime.git \
+ && cd onnxruntime \
+ && for i in 1 2 3; do \
+        git submodule update --init --recursive --depth 1 --jobs 4 && break ; \
+        echo "[onnx-clone] submodules attempt $i/3 failed, retry in 10s..." ; \
+        sleep 10 ; \
+    done \
+ && git submodule status
 
 WORKDIR /tmp/onnxruntime
 RUN ./build.sh \
