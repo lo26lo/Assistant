@@ -15,12 +15,19 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 13 | 2026-05-21 | OpenCV 4.10 / camera | ✅ RÉSOLU | [`CV_AUTOSTEP` pas exposé transitivement sur OpenCV 4.10 Linux](#erreur-13--cv_autostep-pas-expose-transitivement-sur-opencv-410-linux) |
+| 12 | 2026-05-21 | apt / Catch2 | ✅ RÉSOLU | [Catch2 v3 requis mais apt Jammy fournit v2.13 — compile from source](#erreur-12--catch2-v3-requis-mais-apt-jammy-fournit-v213--compile-from-source) |
+| 11 | 2026-05-21 | CMakeLists.txt / Linux | ✅ RÉSOLU | [`CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY` casse `FindOpenGL` sur Linux](#erreur-11--cmake_try_compile_target_type-static_library-casse-findopengl-sur-linux) |
+| 10 | 2026-05-21 | apt / OpenGL pour Qt6 | ✅ RÉSOLU | [Qt6Gui ne trouve pas OpenGL — paquets `lib*-dev` manquants](#erreur-10--qt6gui-ne-trouve-pas-opengl--paquets-lib-dev-manquants) |
+| 9 | 2026-05-21 | ONNX Runtime build from source | ✅ RÉSOLU | [Build ONNX Runtime ARM64 — 4 sous-pièges (CMake, clone, Eigen hash)](#erreur-9--build-onnx-runtime-arm64--4-sous-pieges-cmake-clone-eigen-hash) |
+| 8 | 2026-05-21 | build_jetson.sh / Qt6 multiarch | ✅ RÉSOLU | [Qt6 introuvable côté CMake — `CMAKE_PREFIX_PATH` sans multiarch](#erreur-8--qt6-introuvable-cote-cmake--cmake_prefix_path-sans-multiarch) |
+| 7 | 2026-05-21 | CMakeLists.txt / Jammy | ✅ RÉSOLU | [`cmake_minimum_required(VERSION 3.28)` cassait Jammy CMake 3.22.1](#erreur-7--cmake_minimum_requiredversion-328-cassait-jammy-cmake-3221) |
 | 6 | 2026-05-21 | compose.yml / devices | ✅ RÉSOLU | [`/dev/video0` map empêche le container de démarrer sans caméra branchée](#erreur-6--devvideo0-map-empeche-le-container-de-demarrer-sans-camera-branchee) |
 | 5 | 2026-05-21 | dev.Dockerfile / vcpkg | ✅ RÉSOLU | [`bootstrap-vcpkg.sh` échoue sur ARM64 — vcpkg désactivé par défaut](#erreur-5--bootstrap-vcpkgsh-echoue-sur-arm64--vcpkg-desactive-par-defaut) |
 | 4 | 2026-05-21 | apt / Qt6 base.Dockerfile | ✅ RÉSOLU | [`qt6-virtualkeyboard` n'est qu'un nom de paquet source sur Jammy](#erreur-4--qt6-virtualkeyboard-nest-quun-nom-de-paquet-source-sur-jammy) |
 | 3 | 2026-05-21 | Docker / kernel Tegra | ✅ RÉSOLU | [Docker 29.x sur JP6.2 — `iptable_raw` manquant dans le kernel Tegra](#erreur-3--docker-29x-sur-jp62--iptable_raw-manquant-dans-le-kernel-tegra) |
 | 2 | 2026-05-21 | Docker / image base | ✅ RÉSOLU | [Repo `dustynv/l4t-jetpack` n'existe pas sur Docker Hub](#erreur-2--repo-dustynvl4t-jetpack-nexiste-pas-sur-docker-hub) |
-| 1 | 2026-05-08 | ONNX Runtime / apt ARM64 | 📝 INFO (anticipé) | [libonnxruntime-dev absent en apt Ubuntu 22.04 ARM64](#erreur-1--libonnxruntime-dev-absent-en-apt-ubuntu-2204-arm64) |
+| 1 | 2026-05-08 | ONNX Runtime / apt ARM64 | ✅ RÉSOLU | [libonnxruntime-dev absent en apt Ubuntu 22.04 ARM64 — résolu via compile from source dans le base.Dockerfile (cf #9)](#erreur-1--libonnxruntime-dev-absent-en-apt-ubuntu-2204-arm64) |
 
 **Statuts possibles** :
 - 🔴 OUVERT — pas encore résolu
@@ -103,6 +110,241 @@ Ces points sont **anticipés** mais pas encore observés. À convertir en vraie 
 ---
 
 <!-- AJOUTER LES NOUVELLES ERREURS AU-DESSUS DE CETTE LIGNE -->
+
+## ERREUR 13 — `CV_AUTOSTEP` pas exposé transitivement sur OpenCV 4.10 Linux
+
+**Date :** 2026-05-21
+**Composant :** UnifiedAllocator.cpp / OpenCV 4.10
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-05-21
+
+### Symptôme
+```
+src/camera/UnifiedAllocator.cpp:95:41: error: 'CV_AUTOSTEP' was not declared in this scope
+```
+
+### Cause
+`CV_AUTOSTEP` est une sentinelle de l'API C legacy d'OpenCV (valeur `0x7fffffff`) utilisée par `cv::MatAllocator::allocate` pour signaler "step auto-calcule". Définie dans `opencv2/core/types_c.h`. Sur Windows OpenCV 4.12 (vcpkg) ce header est exposé transitivement via `<opencv2/core.hpp>`, mais sur Linux OpenCV 4.10 (apt jammy / compile from source dans base.Dockerfile) ce n'est pas le cas.
+
+### Solution appliquée ✅
+[src/camera/UnifiedAllocator.cpp](../src/camera/UnifiedAllocator.cpp) : include explicite + fallback define :
+```cpp
+#include <opencv2/core/types_c.h>
+#include <opencv2/core/mat.hpp>
+
+#ifndef CV_AUTOSTEP
+#define CV_AUTOSTEP ((size_t)0x7fffffff)
+#endif
+```
+
+Le fallback garantit la compilation même si un futur OpenCV deprecate le header.
+
+
+## ERREUR 12 — Catch2 v3 requis mais apt Jammy fournit v2.13 — compile from source
+
+**Date :** 2026-05-21
+**Composant :** apt / Catch2 / base.Dockerfile
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-05-21
+
+### Symptôme
+```
+CMake Error: Could not find a configuration file for package "Catch2" compatible with version "3".
+/usr/lib/cmake/Catch2/Catch2Config.cmake, version: 2.13.8
+```
+
+### Cause
+Les tests du projet (`tests/test_unified_allocator.cpp` etc.) incluent `catch2/catch_test_macros.hpp` — API v3, pas compatible avec v2.13 fournie par le paquet `catch2` Jammy.
+
+### Solution appliquée ✅
+[docker/base.Dockerfile](../docker/base.Dockerfile) :
+- Retire `catch2` de l'apt install (qui installe v2)
+- Ajoute un RUN qui compile Catch2 v3.5.4 from source (pattern identique à ZXing-cpp, ~3 min)
+
+```dockerfile
+RUN cd /tmp \
+    && git clone --depth 1 --branch v3.5.4 https://github.com/catchorg/Catch2.git \
+    && cd Catch2 && cmake -B build -G Ninja \
+       -DCMAKE_BUILD_TYPE=Release \
+       -DBUILD_TESTING=OFF \
+       -DCMAKE_INSTALL_PREFIX=/usr/local \
+    && cmake --build build -j$(nproc) \
+    && cmake --install build
+```
+
+
+## ERREUR 11 — `CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY` casse `FindOpenGL` sur Linux
+
+**Date :** 2026-05-21
+**Composant :** CMakeLists.txt / Linux + Ninja
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-05-21
+
+### Symptôme
+Au configure CMake du projet (alors qu'`OpenGL`, `Qt6` etc. sont bien installés) :
+```
+-- Could NOT find OpenGL (missing: OPENGL_opengl_LIBRARY OPENGL_glx_LIBRARY)
+-- Could NOT find WrapOpenGL (missing: WrapOpenGL_FOUND)
+Qt6Gui could not be found because dependency WrapOpenGL could not be found.
+```
+**Mais** un test isolé `find_package(Qt6)` dans un mini-CMakeLists trouve `OpenGL: /usr/lib/aarch64-linux-gnu/libOpenGL.so` parfaitement.
+
+### Cause
+[CMakeLists.txt:6](../CMakeLists.txt#L6) posait `set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)` inconditionnellement. C'était un workaround pour un bug CMake 4.x + Ninja sur Windows (`rules.ninja` pas généré pendant try_compile). **Sur Linux**, ce flag empêche les `try_compile` de **linker** — `FindOpenGL` ne peut plus valider la présence des libs (qui requiert un test de lien effectif), donc retourne "NOT FOUND".
+
+### Solution appliquée ✅
+[CMakeLists.txt:6-13](../CMakeLists.txt#L6) : conditionner à Windows uniquement.
+```cmake
+if(WIN32)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+endif()
+```
+
+### Notes / prévention
+Si on revient un jour à Windows avec CMake 4.x + Ninja, ce flag reste actif. Sur tout autre setup, il est neutralisé.
+
+
+## ERREUR 10 — Qt6Gui ne trouve pas OpenGL — paquets `lib*-dev` manquants
+
+**Date :** 2026-05-21
+**Composant :** apt / OpenGL / Qt6
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-05-21
+
+### Symptôme
+Même symptôme que #11 (`Could NOT find OpenGL`) mais cause différente — apparaît même avec `CMAKE_TRY_COMPILE_TARGET_TYPE` correctement conditionné. `libqt6opengl6-dev` est installé mais Qt6 cherche aussi les libs OpenGL système sous-jacentes (`.so` + headers).
+
+### Solution appliquée ✅
+[docker/base.Dockerfile](../docker/base.Dockerfile) — ajout au RUN apt install du stage final :
+```
+libgl-dev libglx-dev libegl-dev libgles-dev libopengl-dev libglu1-mesa-dev libvulkan-dev
+```
+
+Cascade évitée : sans ces paquets, **Qt6Gui** échoue, et par dépendance **Qt6Widgets, Qt6OpenGL, Qt6OpenGLWidgets, Qt6Multimedia, Qt6MultimediaWidgets, Qt6PrintSupport** échouent aussi → `find_package(Qt6)` global KO.
+
+
+## ERREUR 9 — Build ONNX Runtime ARM64 — 4 sous-pièges (CMake, clone, Eigen hash)
+
+**Date :** 2026-05-21
+**Composant :** docker / base.Dockerfile / onnxruntime-builder stage
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-05-21
+
+### Contexte
+Compilation d'ONNX Runtime v1.19.2 ARM64 from source dans un stage Docker (`onnxruntime-builder`) avec CUDA 12.6 + TensorRT 10.3 EP. Étape critique d'Option C choisie pour résoudre ERREUR #1 (pas de paquet `libonnxruntime-dev` sur Jammy ARM64). **~37 min de compile NVCC** au total.
+
+### Sous-piège 9a — CMake version exigée par ORT vs Jammy
+**Symptôme** : `CMake Error: CMake 3.26 or higher is required. You are running version 3.22.1` (Jammy fournit 3.22).
+
+**Fix** : `pip3 install "cmake>=3.28,<4"` dans le stage onnxruntime-builder. Le binaire pip-installé `/usr/local/bin/cmake` passe devant `/usr/bin/cmake` dans PATH.
+
+**ATTENTION CMake 4.x** : on borne `<4` parce que CMake 4.0 a supprimé le support de `cmake_minimum_required(VERSION <3.5)`, et plusieurs deps ORT fetched via FetchContent (google_nsync notamment) ont des vieux headers `<3.5`. CMake 4.x → "Compatibility with CMake < 3.5 has been removed" → build échoue. La fenêtre safe est `[3.26, 4)` = série 3.31.x.
+
+### Sous-piège 9b — `git clone --recursive` timeout sur GitHub
+**Symptôme** : `git clone --depth 1 --branch v1.19.2 --recursive ...` plante après 17 min :
+```
+error: RPC failed; curl 92 HTTP/2 stream 0 was not closed cleanly: CANCEL
+fetch-pack: unexpected disconnect while reading sideband packet
+```
+ONNX Runtime + ~30 submodules ≈ 3-4 GB d'un coup, GitHub throttle/timeout.
+
+**Fix** : décomposition + retry :
+```dockerfile
+RUN git config --global http.postBuffer 524288000 \
+ && git config --global http.lowSpeedLimit 0 \
+ && git config --global http.lowSpeedTime 999999 \
+ && git clone --depth 1 --branch ${ONNXRUNTIME_VERSION} https://github.com/microsoft/onnxruntime.git \
+ && cd onnxruntime \
+ && for i in 1 2 3; do \
+        git submodule update --init --recursive --depth 1 --jobs 4 && break ; \
+        sleep 10 ; \
+    done
+```
+
+### Sous-piège 9c — Eigen download hash mismatch (upstream bug)
+**Symptôme** : 6 retries puis :
+```
+SHA1 hash of eigen-....zip does not match expected value
+expected: be8be39fdbc6e60e94fa7870b280707069b5b81a
+  actual: 32b145f525a8308d7ab1c09388b2e288312d8eba
+CMake Error: Each download failed!
+```
+Bug **upstream documenté** : [microsoft/onnxruntime#26707](https://github.com/microsoft/onnxruntime/issues/26707). GitLab régénère les zip archives dynamiquement, le SHA1 hardcodé devient invalide. Touche **v1.17.1, v1.19.2, v1.20.1, v1.21.0, v1.22.0** — bumper la version ne résout rien.
+
+**Fix** : patcher `cmake/deps.txt` (PAS `cmake/external/eigen.cmake` qui ne contient pas le hash) :
+```dockerfile
+RUN sed -i 's|be8be39fdbc6e60e94fa7870b280707069b5b81a|32b145f525a8308d7ab1c09388b2e288312d8eba|g' \
+        cmake/deps.txt
+```
+
+À re-patcher si GitLab change à nouveau le contenu (rare).
+
+### Sous-piège 9d — `build.sh` exigences pip
+**Symptôme** initial : `Failed to import psutil. Please pip install psutil`. Pas bloquant mais améliore la parallélisation NVCC.
+
+**Fix** : `pip3 install psutil` ajouté au même RUN que cmake.
+
+### Résultat final
+~37 min de compile, image base finale contient :
+```
+/usr/local/lib/libonnxruntime.so.1
+/usr/local/lib/libonnxruntime_providers_cuda.so
+/usr/local/lib/libonnxruntime_providers_tensorrt.so
+/usr/local/lib/libonnxruntime_providers_shared.so
+/usr/local/include/onnxruntime/*.h
+/usr/local/lib/cmake/onnxruntime/onnxruntimeConfig.cmake
+```
+`find_package(onnxruntime CONFIG REQUIRED)` passe ✅.
+
+
+## ERREUR 8 — Qt6 introuvable côté CMake — `CMAKE_PREFIX_PATH` sans multiarch
+
+**Date :** 2026-05-21
+**Composant :** scripts/build_jetson.sh
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-05-21
+
+### Symptôme
+```
+By not providing "FindQt6.cmake" in CMAKE_MODULE_PATH this project has
+asked CMake to find a package configuration file provided by "Qt6", but
+CMake did not find one.
+```
+Pourtant `qmake6 -query QT_VERSION` retourne `6.2.4` dans le container et `qt6-base-dev` est installé.
+
+### Cause
+Sur Ubuntu Jammy arm64, les fichiers CMake de Qt6 sont dans `/usr/lib/aarch64-linux-gnu/cmake/Qt6/Qt6Config.cmake` (path multiarch Debian/Ubuntu). Le `ENV CMAKE_PREFIX_PATH=/usr/local` posé par base.Dockerfile ne couvre pas ce path.
+
+### Solution appliquée ✅
+[scripts/build_jetson.sh](../scripts/build_jetson.sh) — export du path multiarch détecté via `dpkg-architecture` :
+```bash
+MULTIARCH=$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo aarch64-linux-gnu)
+export CMAKE_PREFIX_PATH="/usr/lib/${MULTIARCH}/cmake:${CMAKE_PREFIX_PATH:-}"
+```
+
+Généralisé pour x86_64 aussi via le triplet détecté.
+
+
+## ERREUR 7 — `cmake_minimum_required(VERSION 3.28)` cassait Jammy CMake 3.22.1
+
+**Date :** 2026-05-21
+**Composant :** CMakeLists.txt / Jammy
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-05-21
+
+### Symptôme
+```
+CMake Error at CMakeLists.txt:1 (cmake_minimum_required):
+  CMake 3.28 or higher is required.  You are running version 3.22.1
+```
+
+### Cause
+Jammy fournit `cmake 3.22.1` via apt. Le projet exigeait `3.28` hérité du setup Windows (CMake 4.2.3 installé là-bas).
+
+### Solution appliquée ✅
+[CMakeLists.txt](../CMakeLists.txt) + [tests/CMakeLists.txt](../tests/CMakeLists.txt) : `cmake_minimum_required(VERSION 3.28)` → `(VERSION 3.22)`.
+
+Le projet n'utilise aucune feature 3.23+ (pas de modules C++23, Qt 6.2 min CMake 3.16, `CMAKE_TRY_COMPILE_TARGET_TYPE` depuis 3.6). Rétrocompatible avec Windows CMake 4.2.3 (>= 3.22).
 
 ## ERREUR 6 — `/dev/video0` map empêche le container de démarrer sans caméra branchée
 
@@ -375,10 +617,10 @@ SKIP_PERFMODE=1 bash scripts/bootstrap_jetson.sh
 
 ## ERREUR 1 — libonnxruntime-dev absent en apt Ubuntu 22.04 ARM64
 
-**Date :** 2026-05-08
+**Date :** 2026-05-08 (anticipé) / 2026-05-21 (résolu)
 **Composant :** ONNX Runtime / build base.Dockerfile
-**Statut :** 📝 INFO (anticipé, pas encore observé en run)
-**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-05-08 (suite)
+**Statut :** ✅ RÉSOLU — Option C (compile from source) retenue, voir [ERREUR 9](#erreur-9--build-onnx-runtime-arm64--4-sous-pieges-cmake-clone-eigen-hash) pour le détail des 4 sous-pièges et le fix final.
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) sessions 2026-05-08 (suite) + 2026-05-21
 
 ### Symptôme attendu
 Au build de `microscope-ibom:base`, l'instruction suivante dans `docker/base.Dockerfile` :

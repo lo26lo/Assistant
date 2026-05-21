@@ -11,12 +11,13 @@
 
 ---
 
-## État actuel — au 2026-05-21
+## État actuel — au 2026-05-21 (fin de session)
 
 ### Phase courante
-**Phase 0 — Conteneurisation** : 🟡 code livré + premier essai bootstrap sur Jetson aujourd'hui. Bloqué étape 3/8 (test runtime nvidia) à cause du mauvais tag image — fix poussé, en attente de relance.
-**Phase 1a — Portage Linux pur** : ✅ code livré (vcpkg.json + main.cpp signal handler).
-**Phase 2a/b/c — Mémoire unifiée (foundation)** : ✅ code livré (FrameBuffer supprimé, UnifiedAllocator + captureLoop branché), ❌ pas encore validé runtime sur Jetson.
+**Phase 0 — Conteneurisation** : ✅ **COMPLÈTE** — images `microscope-ibom:base` (avec ONNX Runtime ARM64 compilé from source, CUDA 12.6 + TensorRT 10.3 EP) et `:dev` (avec outils dev) opérationnelles sur Jetson AGX Orin 32GB JP6.2.
+**Phase 1a — Portage Linux pur** : ✅ code livré.
+**Phase 1b — Build C++ Linux** : ✅ **VALIDÉE** — binaire `build/bin/MicroscopeIBOM` (1.1 MB) généré, link contre Qt6.2 + OpenCV 4.10 CUDA + ONNX Runtime + CUDA cudart, démarrage runtime OK (`GPU: Orin (30698 MB, CUDA 8.7), CUDA 12.6, TensorRT 10.3.0`).
+**Phase 2a/b/c — Mémoire unifiée** : ✅ **VALIDÉE RUNTIME** — `test_unified_allocator` ctest pass 6/6 cas, define `IBOM_USE_UMA_ALLOCATOR` actif dans les flags du binaire, probe `cudaMallocManaged` OK.
 **Tooling** : ✅ journaux + hook PreCompact + bootstrap one-liner configurés.
 
 ### Branches & tags
@@ -42,16 +43,17 @@
 - Règles strictes de tenue de journaux dans [CLAUDE.md](../CLAUDE.md) (mise à jour avant chaque push obligatoire)
 
 ### Ce qui reste à faire
-- [ ] **Lancer le bootstrap** sur le Jetson : `curl -fsSL https://raw.githubusercontent.com/lo26lo/Assistant/main/scripts/bootstrap_jetson.sh | bash` (~2h cumulé)
-- [ ] **Tester le build C++** dans le container dev : `bash scripts/build_jetson.sh` (avec `IBOM_ENABLE_UMA=ON` activé par défaut dans le script)
-- [ ] **Valider runtime UMA** : log `unified memory: yes` à l'ouverture caméra, `nsys profile` <1ms copies host↔device par frame
-- [ ] Phase 1b : corrections ciblées au cas par cas selon retours du compilateur (notamment ONNX Runtime ARM, voir [JETSON_ERREURS.md](JETSON_ERREURS.md) entrée anticipée)
-- [ ] Phase 2d : `InferenceEngine` zero-copy preprocess (à faire quand l'inférence sera instanciée et qu'on pourra valider sur Jetson)
-- [ ] Phase 2.5 (gros morceau) : V4L2 DMABUF direct (hors `cv::VideoCapture`) si la caméra microscope le supporte
-- [ ] Phase 3 (si nécessaire) : DLA + INT8 pour le ComponentDetector
+- [ ] **Brancher la caméra microscope USB** et décommenter les `devices:` dans `docker/compose.yml` pour le service `runtime` (et `dev` si besoin)
+- [ ] **Tester `nsys profile`** sur une frame de capture pour confirmer <1ms en copies host↔device (critère Phase 2)
+- [ ] **Brancher l'écran tactile Minix SF16T** + tester le X11 forwarding (`xhost +local:docker`)
+- [ ] Phase 1c : suppression du code Windows résiduel (`build_windows.bat`, branches `_WIN32` dans le code)
+- [ ] Phase 2d : `InferenceEngine` zero-copy preprocess (à faire quand on aura un `.onnx` réel à valider)
+- [ ] Phase 2.5 (gros morceau, optionnel) : V4L2 DMABUF direct (hors `cv::VideoCapture`) si la caméra microscope le supporte
+- [ ] Phase 3 (optionnel) : DLA + INT8 pour le ComponentDetector
+- [ ] Entraîner / exporter un YOLOv8m ONNX pour le ComponentDetector
 
 ### Blocages connus
-Aucun pour l'instant — en attente du premier test sur Jetson. Le code Phase 2 a été écrit sans pouvoir tester runtime ; à valider sur Jetson dès que possible.
+Aucun. Tous les obstacles Phase 0/1/2 sont résolus et documentés dans [JETSON_ERREURS.md](JETSON_ERREURS.md) (13 entrées résolues).
 
 ### Comment reprendre à la prochaine session
 1. Lire ce bloc "État actuel" + la dernière entrée de session ci-dessous
@@ -267,6 +269,34 @@ tail -f /tmp/bootstrap.out
 
 17. [JETSON_ERREURS.md](JETSON_ERREURS.md) entrée #6 ouverte et fermée en ✅ RÉSOLU dans la même session.
 
+### Suite — Phase 1b (build C++) + Phase 2 (validation runtime UMA)
+
+18. Build C++ premier essai → cascades d'erreurs résolues une à une (13 entrées au total dans JETSON_ERREURS) :
+    - **#7** : CMake 3.28 trop récent pour Jammy → baisse à 3.22
+    - **#8** : Qt6 introuvable → multiarch dans `CMAKE_PREFIX_PATH`
+    - **#9** : Option C (ONNX Runtime from source) — 4 sous-pièges : cmake>=3.26 & <4, clone décomposé+retry, hash Eigen GitLab regen (bug upstream ORT#26707), psutil
+    - **#10** : Qt6Gui sans OpenGL → ajout `libgl-dev`, `libegl-dev`, etc.
+    - **#11** : `CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY` cassait FindOpenGL sur Linux → conditionnel WIN32
+    - **#12** : Catch2 v3 requis (Jammy n'a que v2.13) → compile from source
+    - **#13** : `CV_AUTOSTEP` pas exposé transitivement OpenCV 4.10 Linux → include explicite
+
+19. **Validation Phase 2 UMA runtime** :
+    ```
+    Test #5: test_unified_allocator ........... Passed 0.13 sec
+    100% tests passed, 0 tests failed out of 1
+    ```
+    + binaire link `libonnxruntime.so.1`, `libcudart.so.12`, `libopencv_*.so.410`, `libQt6*.so.6`
+    + smoke test : `GPU: Orin (30698 MB, CUDA 8.7, 14 SMs, TensorCores: yes)` + `CUDA: 12.6, TensorRT: 10.3.0`
+
+20. **Phase 0 + 1a + 1b + 2 OFFICIELLEMENT VALIDÉES SUR JETSON.**
+
+### Bilan de la journée
+- **~37 commits poussés** (5 fixes Phase 0 + 7 fixes Phase 1b/2 + commits intermédiaires)
+- **~5h de travail effectif** (compute Jetson) + ~1h30 d'attente compile ORT
+- **13 entrées d'erreurs documentées** dans JETSON_ERREURS.md, toutes ✅ RÉSOLUES
+- Images Docker pérennes : `microscope-ibom:base` (5.91 GB), `microscope-ibom:dev` (6.08 GB)
+- Binaire C++ : `build/bin/MicroscopeIBOM` 1.1 MB avec UMA actif
+
 ### Commits poussés cette session
 | Hash | Message |
 |------|---------|
@@ -274,7 +304,20 @@ tail -f /tmp/bootstrap.out
 | `7d16168` | fix(docker): force --network host pour contourner iptable_raw |
 | `7145bf0` | fix(docker): qt6-virtualkeyboard → qt6-virtualkeyboard-plugin + qml6 module |
 | `847402e` | fix(docker): vcpkg desactive par defaut sur Jetson (opt-in via build-arg) |
-| (à venir) | fix(docker): devices commentes par defaut (camera/USB opt-in pour le runtime) |
+| `64a3b13` | fix(docker): devices commentes par defaut (camera/USB opt-in pour le runtime) |
+| `cff0567` | fix(cmake): cmake_minimum_required 3.28 → 3.22 pour compat Ubuntu Jammy |
+| `d68f975` | fix(build): ajouter le path multiarch au CMAKE_PREFIX_PATH (Qt6 sur apt Jammy) |
+| `8fed6e0` | feat(docker): stage onnxruntime-builder — ONNX Runtime ARM64 from source |
+| `5f8061b` | fix(docker): clone ONNX Runtime en 2 etapes + retry (anti CANCEL HTTP/2) |
+| `68602b9` | fix(docker): pip install cmake>=3.28 dans le stage onnxruntime-builder |
+| `3e2a12e` | fix(docker): borner cmake a < 4.x (CMake 4 casse les deps fetched par ORT) |
+| `3309895` | fix(docker): patch hash Eigen pour workaround GitLab archive regen (ORT#26707) |
+| `34305c2` | fix(docker): cibler cmake/deps.txt au lieu de eigen.cmake pour le sed |
+| `19233e2` | fix(docker): ajouter les paquets OpenGL/EGL/Vulkan dev pour Qt6Gui |
+| `c9a215d` | fix(cmake): conditionner CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY a Windows |
+| `a9149ec` | fix(docker): compile Catch2 v3 from source (apt jammy n'a que v2.13) |
+| `3fff57c` | fix(camera): include opencv2/core/cvdef.h pour CV_AUTOSTEP |
+| (en cours) | docs: cloture session 2026-05-21 — Phase 0+1+2 validees Jetson, 13 erreurs documentees |
 
 ---
 
