@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 3.22)
 
 # Fix: CMake 4.x + Ninja on Windows — rules.ninja not generated during try_compile
 # Root cause: path normalization issue with short DOS paths (COMMON~1) in CMAKE_MAKE_PROGRAM
