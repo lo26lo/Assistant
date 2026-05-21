@@ -45,6 +45,14 @@ JOBS=$(( NPROC > 6 ? 6 : NPROC ))
 
 echo "[build] Configuration (-j${JOBS})..."
 
+# Ajouter le path multiarch Debian/Ubuntu au CMAKE_PREFIX_PATH pour que
+# find_package(Qt6), find_package(OpenCV), etc. trouvent les paquets apt
+# systeme. Sur Jammy arm64 : /usr/lib/aarch64-linux-gnu/cmake/Qt6/
+# (et idem pour x86_64 : /usr/lib/x86_64-linux-gnu/cmake/).
+MULTIARCH=$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || echo aarch64-linux-gnu)
+export CMAKE_PREFIX_PATH="/usr/lib/${MULTIARCH}/cmake:${CMAKE_PREFIX_PATH:-}"
+echo "[build] CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}"
+
 CMAKE_ARGS=(
     -B "${BUILD_DIR}"
     -G Ninja
