@@ -158,7 +158,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qt6-l10n-tools \
     qt6-shader-baker \
     qt6-declarative-dev \
-    qt6-virtualkeyboard \
+    qt6-virtualkeyboard-plugin \
+    qml6-module-qtquick-virtualkeyboard \
     libqt6opengl6-dev \
     libqt6openglwidgets6 \
     libqt6websockets6-dev \

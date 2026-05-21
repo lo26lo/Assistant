@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 4 | 2026-05-21 | apt / Qt6 base.Dockerfile | ✅ RÉSOLU | [`qt6-virtualkeyboard` n'est qu'un nom de paquet source sur Jammy](#erreur-4--qt6-virtualkeyboard-nest-quun-nom-de-paquet-source-sur-jammy) |
 | 3 | 2026-05-21 | Docker / kernel Tegra | ✅ RÉSOLU | [Docker 29.x sur JP6.2 — `iptable_raw` manquant dans le kernel Tegra](#erreur-3--docker-29x-sur-jp62--iptable_raw-manquant-dans-le-kernel-tegra) |
 | 2 | 2026-05-21 | Docker / image base | ✅ RÉSOLU | [Repo `dustynv/l4t-jetpack` n'existe pas sur Docker Hub](#erreur-2--repo-dustynvl4t-jetpack-nexiste-pas-sur-docker-hub) |
 | 1 | 2026-05-08 | ONNX Runtime / apt ARM64 | 📝 INFO (anticipé) | [libonnxruntime-dev absent en apt Ubuntu 22.04 ARM64](#erreur-1--libonnxruntime-dev-absent-en-apt-ubuntu-2204-arm64) |
@@ -100,6 +101,46 @@ Ces points sont **anticipés** mais pas encore observés. À convertir en vraie 
 ---
 
 <!-- AJOUTER LES NOUVELLES ERREURS AU-DESSUS DE CETTE LIGNE -->
+
+## ERREUR 4 — `qt6-virtualkeyboard` n'est qu'un nom de paquet source sur Jammy
+
+**Date :** 2026-05-21
+**Composant :** apt / base.Dockerfile / Qt6
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-05-21
+
+### Symptôme
+À l'étape 6/8 du bootstrap (build de l'image `microscope-ibom:base`), l'install Qt6 dans le Dockerfile plante :
+
+```
+8.021 E: Unable to locate package qt6-virtualkeyboard
+failed to solve: process "/bin/sh -c apt-get update && apt-get install -y --no-install-recommends ..." exit code: 100
+[ERROR] Build base echec
+```
+
+### Cause
+Sur Ubuntu 22.04 (Jammy) arm64, `qt6-virtualkeyboard` est un nom de paquet **source** uniquement — il n'y a pas de paquet binaire de ce nom. Les binaires sont éclatés en plusieurs paquets (cf. [packages.ubuntu.com/jammy/qml6-module-qtquick-virtualkeyboard](https://packages.ubuntu.com/jammy/qml6-module-qtquick-virtualkeyboard)) :
+- `qt6-virtualkeyboard-plugin` — le plugin Qt chargé automatiquement
+- `qml6-module-qtquick-virtualkeyboard` — les composants QML
+- `libqt6virtualkeyboard6-dev` — headers (uniquement si on compile contre l'API)
+
+### Solution appliquée ✅
+[docker/base.Dockerfile](../docker/base.Dockerfile) — bloc Qt6 patché :
+```diff
+-    qt6-virtualkeyboard \
++    qt6-virtualkeyboard-plugin \
++    qml6-module-qtquick-virtualkeyboard \
+```
+
+Pas besoin de `libqt6virtualkeyboard6-dev` : on ne compile pas contre l'API publique du virtual keyboard, on l'utilise juste comme plugin pour l'écran tactile Minix SF16T.
+
+### Validation préalable
+Avant de relancer le build (90 min), tous les autres paquets Qt6 de la liste du Dockerfile ont été vérifiés via `apt-cache show` sur le host Jetson Jammy → ✅ tous présents (`qt6-shader-baker`, `qml6-module-qtquick`, `qml6-module-qtquick-controls`, etc.). Pas de risque d'autre échec sur cette étape `apt install`.
+
+### Notes / prévention
+- Toujours vérifier l'existence des paquets via `apt-cache show` AVANT de lancer un build long (les paquets `*-dev` source vs binaires différents = piège fréquent côté Ubuntu).
+- Le piège était anticipé en haut de ce document ("`qt6-virtualkeyboard` non disponible sur Ubuntu 22.04"). Confirmé en pratique.
+- Le cache Docker préserve le travail du stage `opencv-builder` qui avait déjà avancé — le rebuild ne repartira pas de zéro.
 
 ## ERREUR 3 — Docker 29.x sur JP6.2 — `iptable_raw` manquant dans le kernel Tegra
 

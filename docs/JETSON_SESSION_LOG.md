@@ -243,11 +243,20 @@ tail -f /tmp/bootstrap.out
 - 6/8 build base (~90 min en MAXN, OpenCV CUDA from source) — premier vrai test du `network: host` au build
 - 7/8 build dev (~5-10 min)
 
+### Suite — fix paquet Qt6 introuvable
+
+9. Bootstrap relancé avec les 2 fix précédents (image NVIDIA + `--network host`) — passe 3/8 ✅, échoue 6/8 sur `E: Unable to locate package qt6-virtualkeyboard` (piège anticipé en haut de `JETSON_ERREURS.md`).
+
+10. Vérification de **tous** les paquets Qt6 du Dockerfile via `apt-cache show` sur le host Jetson (Jammy arm64) avant de re-patcher : seul `qt6-virtualkeyboard` est introuvable, tous les autres OK. Patch ciblé : remplacé par `qt6-virtualkeyboard-plugin` + `qml6-module-qtquick-virtualkeyboard` (les vrais paquets binaires).
+
+11. [JETSON_ERREURS.md](JETSON_ERREURS.md) entrée #4 ouverte et fermée en ✅ RÉSOLU dans la même session.
+
 ### Commits poussés cette session
 | Hash | Message |
 |------|---------|
 | `ddb4c30` | fix(docker): remplace dustynv/l4t-jetpack par nvcr.io/nvidia/l4t-jetpack |
-| (à venir) | fix(docker): force --network host pour contourner iptable_raw manquant sur kernel Tegra JP6.2 |
+| `7d16168` | fix(docker): force --network host pour contourner iptable_raw |
+| (à venir) | fix(docker): qt6-virtualkeyboard → qt6-virtualkeyboard-plugin + qml6 module |
 
 ---
 
