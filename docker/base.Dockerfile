@@ -220,6 +220,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libv4l-0 v4l-utils \
     libusb-1.0-0 \
     libssl3 \
+    # OpenGL/EGL/GLX dev (requis par Qt6Gui/Qt6OpenGL — Qt6 echoue CMake sans)
+    libgl-dev libglx-dev libegl-dev libgles-dev libopengl-dev libglu1-mesa-dev \
+    libvulkan-dev \
     udev \
     locales \
     tzdata \
