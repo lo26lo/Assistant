@@ -165,14 +165,16 @@ RUN git config --global http.postBuffer 524288000 \
 WORKDIR /tmp/onnxruntime
 
 # Workaround upstream bug (microsoft/onnxruntime#26707) : GitLab regenere les
-# zip archives dynamiquement, donc le SHA1 hardcode pour Eigen dans
-# cmake/external/eigen.cmake devient invalide cote serveur. Touche v1.17.1,
-# v1.19.2, v1.20.1, v1.21.0, v1.22.0 (bumper ne resout pas).
-# On remplace le hash attendu par celui que GitLab sert actuellement.
+# zip archives dynamiquement, donc le SHA1 hardcode pour Eigen devient
+# invalide cote serveur. Touche v1.17.1, v1.19.2, v1.20.1, v1.21.0, v1.22.0
+# (bumper ne resout pas). Le hash est dans cmake/deps.txt (format
+# "eigen;URL;SHA1") — PAS dans cmake/external/eigen.cmake comme on pourrait
+# le penser. On remplace par le hash que GitLab sert actuellement.
 # A re-patcher si GitLab change a nouveau le contenu (rare).
 RUN sed -i 's|be8be39fdbc6e60e94fa7870b280707069b5b81a|32b145f525a8308d7ab1c09388b2e288312d8eba|g' \
-        cmake/external/eigen.cmake \
- && grep -E "URL_HASH SHA1=" cmake/external/eigen.cmake
+        cmake/deps.txt \
+ && echo "=== eigen line apres patch ===" \
+ && grep "^eigen;" cmake/deps.txt
 
 RUN ./build.sh \
         --config Release \
