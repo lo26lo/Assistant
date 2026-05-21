@@ -263,7 +263,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libspdlog-dev libfmt-dev \
     nlohmann-json3-dev \
     libhpdf-dev \
-    catch2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# -----------------------------------------------------------------------------
+#  Catch2 v3 from source — le paquet apt jammy fournit la v2.13 qui n'a plus
+#  la meme API que la v3 utilisee dans les tests (tests/*.cpp incluent
+#  catch2/catch_test_macros.hpp qui est v3). Compile rapide ~3 min.
+# -----------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake build-essential git ninja-build \
+    && cd /tmp \
+    && git clone --depth 1 --branch v3.5.4 https://github.com/catchorg/Catch2.git \
+    && cd Catch2 && cmake -B build -G Ninja \
+       -DCMAKE_BUILD_TYPE=Release \
+       -DBUILD_TESTING=OFF \
+       -DCATCH_INSTALL_DOCS=OFF \
+       -DCATCH_INSTALL_EXTRAS=ON \
+       -DCMAKE_INSTALL_PREFIX=/usr/local \
+    && cmake --build build -j$(nproc) \
+    && cmake --install build \
+    && cd / && rm -rf /tmp/Catch2 \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
