@@ -70,6 +70,35 @@ Aucun. Tous les obstacles Phase 0/1/2 sont résolus et documentés dans [JETSON_
 
 ---
 
+## Session 2026-06-10 (suite 3) — Plan Dataset Creator (capture + annotation auto)
+
+### Objectif
+L'utilisateur veut un outil de constitution de dataset rapide (capture variée automatique + annotation automatique des composants, ~800 images), en réutilisant l'esprit de son projet `Pokemon-Dataset-Creator`. Livrable demandé : un plan exhaustif.
+
+### Ce qui a été fait
+- **Nouveau document : [DATASET_CREATOR_PLAN.md](DATASET_CREATOR_PLAN.md)** — plan complet en 4 phases :
+  - **Idée centrale** : l'iBOM + l'homographie live = vérité terrain gratuite. Chaque frame où le tracking est verrouillé donne les bboxes de tous les composants projetées dans l'image (via `Homography::transformRect` + `ComponentMap::allComponents()`) → labels YOLO sans annotation manuelle.
+  - **Phase A** (cœur) : mode capture intégré à l'app (`features/DatasetCreator` + `gui/DatasetPanel`) — gates qualité (inliers RANSAC ≥ 25, reproj ≤ 3 px, netteté Laplacien, exposition, fraîcheur homographie), anti-doublon de pose, projection + clipping + mapping footprint→classe (`footprint_classes.json`), writer YOLO, aperçu live des boxes.
+  - **Phase B** : assistant de variété (carte de couverture via HeatmapRenderer, quotas zoom×éclairage, manifest.jsonl).
+  - **Phase C** : outillage Python (validation visuelle, **split train/val par session** — jamais par image, review 5-10 % via Label Studio, augmentation offline optionnelle).
+  - **Phase D** : boucle d'amélioration (hard-example mining = divergence modèle vs projection iBOM ; pré-annotation des cartes sans iBOM).
+  - Risques/parades, ordre d'exécution chiffré, questions ouvertes (OBB, JPEG, résolution).
+- **Préalable technique identifié** : `TrackingWorker::homographyUpdated` ne publie pas inliers/erreur de reprojection (log debug seulement) — signal à étendre en Phase A.
+
+### Bloqueur d'analyse
+`Pokemon-Dataset-Creator` est **privé** et hors du scope GitHub de la session (limité à `lo26lo/assistant`, outil d'ajout de repo indisponible) → section §8 du plan = hypothèses de réutilisation à confirmer quand l'utilisateur donnera accès au repo.
+
+### Fichiers
+- **Créé** : `docs/DATASET_CREATOR_PLAN.md`
+- **Modifié** : `docs/JETSON_SESSION_LOG.md` (cette entrée)
+
+### Prochaines étapes
+1. (toujours en attente) **Valider le build Jetson** des itérations 2-3 (`build_jetson.sh` + ctest)
+2. Décisions utilisateur sur §10 du plan (OBB ? JPEG ? résolution ?)
+3. Implémenter la Phase A
+
+---
+
 ## Session 2026-06-10 (suite 2) — Phase 1c + pipeline IA + runtime minimal
 
 ### Objectif
