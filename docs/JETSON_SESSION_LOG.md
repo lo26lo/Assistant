@@ -70,6 +70,30 @@ Aucun. Tous les obstacles Phase 0/1/2 sont résolus et documentés dans [JETSON_
 
 ---
 
+## Session 2026-06-10 (suite 5) — Plan PCB Dataset Studio (wizard Windows)
+
+### Objectif
+L'utilisateur choisit de commencer par le **wizard Windows** (avant la Phase A Jetson). Conformément à la règle "plan avant action" : analyse du code réel de Pokemon-Dataset-Creator (désormais public, cloné en lecture) + plan détaillé.
+
+### Analyse Pokemon-Dataset-Creator (code réel, pas le README)
+- `core/` modulaire et largement **générique YOLO** : `training_manager.py` (412 l., TrainingConfig + callback log GUI), `dataset_validator.py` (507 l., rapport HTML), `auto_balancer_optimized.py` (356 l.), `dataset_exporter.py` (COCO/VOC), `utils.py` (safe_print Windows) → **réutilisés quasi tels quels** (vendor + attribution)
+- Écarté : downloader/API cartes, holographic, mosaic (compositing cartes), prix
+- Réécrit : GUI (8 642 lignes, trop spécifique — wizard neuf ~800 l. Tkinter) et **split** (le leur est aléatoire par image → interdit ici, fuite train/val entre frames d'une même session → `session_split.py` par session)
+
+### Plan livré : [DATASET_STUDIO_PLAN.md](DATASET_STUDIO_PLAN.md)
+- Wizard 6 étapes : Projet → Import (scp Jetson ou dossier) → Validation → Split/équilibrage → Entraînement (presets) → Test/Export ONNX/Déploiement Jetson
+- Emplacement : `tools/dataset_studio/` ; 3 lots d'implémentation testables séparément
+- ⚠️ Piège anticipé : **RTX 5070 Ti = Blackwell sm_120 → PyTorch ≥ 2.7 / CUDA 12.8** obligatoire (INSTALL.bat + check au démarrage)
+- Indépendant de la Phase A (fonctionne sur tout dataset YOLO) → développable dès maintenant
+
+### Fichiers
+- **Créé** : `docs/DATASET_STUDIO_PLAN.md`
+
+### Prochaine étape
+GO utilisateur sur le plan → implémentation Lot 1 (squelette + import local + validation)
+
+---
+
 ## Session 2026-06-10 (suite 4) — Fix caméra (devices container) + décisions dataset
 
 ### Contexte (retour utilisateur avec photo)
