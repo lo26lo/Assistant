@@ -1,0 +1,5 @@
+# PCB Dataset Studio — dependances de base (Lot 1)
+# L'entrainement (Lot 2) ajoutera torch cu128 + ultralytics (voir INSTALL.bat)
+numpy
+opencv-python
+pillow

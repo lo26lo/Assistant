@@ -1,0 +1,13 @@
+{
+  "training_presets": {
+    "rapide":   { "model": "yolov8n.pt", "epochs": 50,  "batch": 32, "patience": 25 },
+    "standard": { "model": "yolov8m.pt", "epochs": 120, "batch": 16, "patience": 50 },
+    "precis":   { "model": "yolov8m.pt", "epochs": 300, "batch": 16, "patience": 80 }
+  },
+  "augmentation_pcb": {
+    "_comment": "Un PCB sous microscope n'a pas d'orientation privilegiee",
+    "degrees": 180.0, "flipud": 0.5, "fliplr": 0.5, "mosaic": 1.0, "hsv_v": 0.4
+  },
+  "image_size": 640,
+  "val_ratio": 0.2
+}

@@ -70,6 +70,37 @@ Aucun. Tous les obstacles Phase 0/1/2 sont résolus et documentés dans [JETSON_
 
 ---
 
+## Session 2026-06-10 (suite 6) — Implémentation Lot 1 PCB Dataset Studio
+
+### Décisions
+- **Langage : Python confirmé** (question Rust posée par l'utilisateur → refusé avec argumentaire : ultralytics/PyTorch est Python-only, l'intérêt = réutiliser training_manager/validator existants ; Rust = tout réécrire + embarquer Python quand même)
+- Test à blanc : **générateur de dataset factice** retenu
+
+### Livré — `tools/dataset_studio/` (Lot 1 complet)
+- `app.py` (~420 l.) : wizard Tkinter 6 étapes (0-2 actives, 3-5 placeholders), thème sombre, journal live (queue + after), opérations en thread (`_run_bg`)
+- `studio/project.py` : config persistée `~/.pcb_dataset_studio/project.json` (workdir, accès Jetson pour Lot 3)
+- `studio/import_manager.py` : scan/copie de sessions (`images/`+`labels/`), anti-écrasement
+- `studio/fake_dataset.py` : générateur factice (faux PCB + composants rectangulaires, labels YOLO exacts par construction, manifest.jsonl avec tags)
+- `studio/validation.py` : orchestre le validator par session, agrège les classes, rapports HTML, **mosaïque d'aperçu avec bboxes dessinées**
+- `studio/vendor/` : `dataset_validator.py` (512 l.) + `safe_print` vendorisés de Pokemon-Dataset-Creator avec en-têtes d'attribution
+- `config/pcb_classes.json` (14 classes, ⚠️ même liste ordonnée que la future Phase A), `config/defaults.json` (presets entraînement pour Lot 2)
+- `INSTALL.bat`/`START.bat` (CRLF) avec avertissement **PyTorch ≥ 2.7/cu128 pour Blackwell sm_120**, `requirements.txt`, `README.md`
+
+### Tests effectués (dans l'environnement d'analyse, hors GUI)
+✅ py_compile de tous les modules · ✅ bout-en-bout : génération 2 sessions × 8 images → scan → import → ré-import ignoré → validation (0 erreur, 16 images, 14 classes) → 2 rapports HTML + mosaïque vérifiée visuellement (boxes alignées).
+⚠️ **La GUI Tkinter n'a pas pu être lancée ici** (pas de display) — premier lancement réel = test utilisateur sur le PC Windows.
+
+### À tester par l'utilisateur (PC fixe Windows)
+1. `git pull` puis ouvrir `tools/dataset_studio/`, double-clic `INSTALL.bat` puis `START.bat`
+2. Étape 0 : choisir le dossier de travail → Enregistrer
+3. Étape 1 : « Générer » (dataset factice) · Étape 2 : « Lancer la validation » → ouvrir rapport + aperçu
+4. Remonter tout problème (la GUI n'a jamais tourné)
+
+### Prochaine étape
+Retours utilisateur sur Lot 1 → **Lot 2** (split par session + entraînement, plan §6 du DATASET_STUDIO_PLAN)
+
+---
+
 ## Session 2026-06-10 (suite 5) — Plan PCB Dataset Studio (wizard Windows)
 
 ### Objectif

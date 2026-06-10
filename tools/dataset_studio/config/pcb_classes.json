@@ -1,0 +1,19 @@
+{
+  "_comment": "Classes du detecteur PCB - MEME LISTE ORDONNEE que resources/footprint_classes.json (Phase A Jetson). Ne pas reordonner: les ids YOLO en dependent.",
+  "classes": [
+    "resistor",
+    "capacitor",
+    "inductor",
+    "diode",
+    "led",
+    "transistor_sot",
+    "ic_soic",
+    "ic_qfp",
+    "ic_qfn",
+    "ic_bga",
+    "connector",
+    "crystal",
+    "button",
+    "other"
+  ]
+}
