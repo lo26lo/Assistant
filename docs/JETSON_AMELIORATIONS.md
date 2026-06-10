@@ -26,15 +26,16 @@ La majorité des recommandations ont été **implémentées** dans la foulée de
 | 3.2 | Persistance unifiée `IBOM_DATA_DIR` | ✅ Fait (`src/utils/Paths.*`, Config/Application/InferenceEngine, compose, entrypoint) |
 | 3.3 | Arch CPU configurable (`IBOM_TARGET_CPU`) | ✅ Fait |
 | 3.5 | `test_tracking_worker.cpp` | ✅ Fait |
-| 4.2 | CI GitHub Actions | 🟡 Partiel — shell + compose verts ; build C++ no-GPU reporté (nécessite ONNX optionnel, cf. ci-dessous) |
-| 1.3 | Image runtime réellement minimale | ⏸ Reporté (refactor multi-stage, non urgent) |
+| 4.2 | CI GitHub Actions | 🟡 Partiel — shell + compose verts ; pour le C++, voir note ci-dessous |
+| 1.3 | Image runtime réellement minimale | ✅ Fait (multi-stage l4t-jetpack + libs runtime, **jamais buildée — à valider**) |
+| 3.6 | Nettoyage résidus Windows (Phase 1c) | ✅ Fait — plus aucun `#ifdef` Windows dans src/, `.bat` supprimés, CMake Linux-only |
+| — | **Activation pipeline IA** (hors audit, demandé ensuite) | ✅ Fait — init en thread d'arrière-plan si `.onnx` présent ; cf [AI_PIPELINE.md](AI_PIPELINE.md) |
 | 1.5 | User non-root + GID numériques | ⏸ Reporté (à faire avec le mode kiosque) |
 | 1.8 | Tags d'images datés | ⏸ Process (à appliquer au prochain build) |
-| 3.6 | Nettoyage résidus Windows | ⏸ Reporté (Phase 1c) |
 
 > ⚠️ **Important — à valider sur le Jetson** : ces changements (notamment le helper `IBOM_DATA_DIR` et le test Qt/MOC) **n'ont pas pu être compilés** dans l'environnement d'analyse (pas de CUDA/Qt/OpenCV). Faire un `bash scripts/build_jetson.sh` + `ctest` sur le Jetson pour confirmer avant de s'appuyer dessus. La 1ère exécution déplacera la config/calibration vers `~/.local/share/MicroscopeIBOM` (ou `$IBOM_DATA_DIR`) — récupérer manuellement un éventuel `calibration.yml` existant si besoin.
 
-> **CI build no-GPU (4.2, reste à faire)** : bloqué par deux points — (a) le projet `find_package(onnxruntime)` inconditionnel et instancie `ModelManager`/`InferenceEngine` dans `Application` ; (b) `tests/CMakeLists.txt` référence la cible `MicroscopeIBOM`. Pré-requis : introduire une option `IBOM_ENABLE_ONNX=OFF` qui `#ifdef`-garde l'IA, puis un job CI Ubuntu 22.04 + Qt6 apt buildant `-DIBOM_ENABLE_TENSORRT=OFF -DIBOM_ENABLE_UMA=OFF -DIBOM_ENABLE_ONNX=OFF` et exécutant les tests sans GPU.
+> **CI build C++ (4.2, reste à faire)** : décision utilisateur 2026-06-10 — **ONNX ne sera jamais optionnel** (c'est le cœur du projet Jetson), donc pas de build no-GPU appauvri. La voie retenue pour une vraie CI C++ : **runner GitHub Actions self-hosted sur le Jetson** qui builde dans le container dev et lance `ctest` avec le stack complet (CUDA/ONNX/TensorRT). À mettre en place quand souhaité.
 
 ---
 

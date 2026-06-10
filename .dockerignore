@@ -59,10 +59,6 @@ docs/
 *.md
 README.md
 
-# Tests (rebuild dans le container)
-build_windows.bat
-test_configure.bat
-
 # vcpkg local
 build/vcpkg_installed/
 

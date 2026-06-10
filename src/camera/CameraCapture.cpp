@@ -86,11 +86,7 @@ std::vector<std::string> CameraCapture::listDevices()
 
     for (int i = 0; i < 10; ++i) {
         cv::VideoCapture cap;
-#ifdef IBOM_PLATFORM_WINDOWS
-        cap.open(i, cv::CAP_MSMF);
-#else
         cap.open(i, cv::CAP_V4L2);
-#endif
         if (cap.isOpened()) {
             devices.push_back("Camera " + std::to_string(i));
             cap.release();
@@ -104,19 +100,11 @@ void CameraCapture::captureLoop()
 {
     cv::VideoCapture cap;
 
-    // Try multiple backends on Windows for maximum compatibility
-#ifdef IBOM_PLATFORM_WINDOWS
-    std::vector<std::pair<int, const char*>> backends = {
-        {cv::CAP_MSMF,  "Media Foundation"},
-        {cv::CAP_DSHOW, "DirectShow"},
-        {cv::CAP_ANY,   "Auto"}
-    };
-#else
+    // V4L2 first, generic fallback if the V4L2 open fails (e.g. GStreamer source)
     std::vector<std::pair<int, const char*>> backends = {
         {cv::CAP_V4L2, "V4L2"},
         {cv::CAP_ANY,  "Auto"}
     };
-#endif
 
     // Log available OpenCV videoio backends
     auto availBackends = cv::videoio_registry::getBackends();
@@ -182,7 +170,7 @@ void CameraCapture::captureLoop()
 
     cv::MatAllocator* alloc = unifiedAllocator();
 
-    // Warmup: MSMF may need a few frames to initialize the pipeline
+    // Warmup: some UVC cameras need a few frames before the pipeline settles
     constexpr int kWarmupAttempts = 60;  // up to 3 seconds at 50ms each
     bool warmupOk = false;
     for (int i = 0; i < kWarmupAttempts && m_capturing.load(); ++i) {

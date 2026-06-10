@@ -11,6 +11,7 @@
 #include "camera/CameraCalibration.h"
 #include "ai/InferenceEngine.h"
 #include "ai/ModelManager.h"
+#include "ai/ComponentDetector.h"
 #include "ibom/IBomParser.h"
 #include "ibom/IBomData.h"
 #include "overlay/OverlayRenderer.h"
@@ -55,6 +56,11 @@ Application::Application(QApplication& qapp)
 
 Application::~Application()
 {
+    // The AI init thread owns no Qt objects; joining is safe and bounded by
+    // the ONNX session creation (cannot be cancelled mid-flight anyway).
+    if (m_aiInitThread.joinable())
+        m_aiInitThread.join();
+
     if (m_trackingThread) {
         m_trackingThread->quit();
         m_trackingThread->wait();
@@ -92,6 +98,10 @@ bool Application::initialize()
 
     // Wire signals between subsystems
     connectSignals();
+
+    // AI pipeline — off the GUI thread: first launch with TensorRT compiles
+    // the engine (minutes); the app is fully usable without it meanwhile.
+    initializeAI();
 
     // Enumerate cameras and populate ControlPanel
     {
@@ -232,6 +242,65 @@ void Application::createSubsystems()
     spdlog::info("Creating MainWindow...");
     m_mainWindow = std::make_unique<gui::MainWindow>(this);
     spdlog::info("All subsystems created.");
+}
+
+void Application::initializeAI()
+{
+    if (!m_config->aiEnabled()) {
+        spdlog::info("AI pipeline disabled in config (ai.enabled=false)");
+        return;
+    }
+
+    const auto models = m_modelManager->availableModels();
+    if (models.empty()) {
+        spdlog::info("AI pipeline idle: no .onnx model in '{}' — drop a model "
+                     "there and restart to enable detection (see docs/AI_PIPELINE.md)",
+                     m_modelManager->modelsDirectory());
+        return;
+    }
+
+    // Preferred model from config, else first model found by the scan.
+    std::string name = m_config->detectorModel();
+    if (m_modelManager->modelPath(name).empty()) {
+        spdlog::warn("AI: detector model '{}' not found, falling back to '{}'",
+                     name, models.front());
+        name = models.front();
+    }
+    const std::string path   = m_modelManager->modelPath(name);
+    const bool        useTrt = m_config->useTensorRT();
+    const float       conf   = m_config->detectionConfidence();
+
+    spdlog::info("AI pipeline: initializing in background (model '{}', TensorRT={})",
+                 name, useTrt);
+    emit aiStatusChanged(false, tr("Loading AI model %1…")
+                                    .arg(QString::fromStdString(name)));
+
+    // Session creation + first TensorRT engine compilation can take minutes on
+    // first launch — run it off the GUI thread. Emitting signals from here is
+    // safe: cross-thread connections are queued by Qt. m_componentDetector is
+    // only published to the GUI through the m_aiReady flag.
+    m_aiInitThread = std::thread([this, path, name, useTrt, conf]() {
+        if (!m_inferenceEngine->initialize(useTrt)) {
+            spdlog::error("AI pipeline: inference engine initialization failed");
+            emit aiStatusChanged(false, tr("AI engine initialization failed"));
+            return;
+        }
+
+        auto detector = std::make_unique<ai::ComponentDetector>(*m_inferenceEngine);
+        if (!detector->loadModel(path)) {
+            spdlog::error("AI pipeline: failed to load model '{}'", path);
+            emit aiStatusChanged(false, tr("Failed to load AI model %1")
+                                            .arg(QString::fromStdString(name)));
+            return;
+        }
+        detector->setConfidenceThreshold(conf);
+
+        m_componentDetector = std::move(detector);
+        m_aiReady.store(true);
+        spdlog::info("AI pipeline ready: model '{}' loaded (TensorRT={})", name, useTrt);
+        emit aiStatusChanged(true, tr("AI ready: %1")
+                                       .arg(QString::fromStdString(name)));
+    });
 }
 
 void Application::connectSignals()

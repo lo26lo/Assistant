@@ -76,13 +76,7 @@ bool InferenceEngine::loadModel(const std::string& modelPath)
     try {
         spdlog::info("Loading model: {}", modelPath);
 
-#ifdef _WIN32
-        // ONNX Runtime on Windows needs wide strings
-        std::wstring wpath(modelPath.begin(), modelPath.end());
-        m_session = std::make_unique<Ort::Session>(*m_env, wpath.c_str(), *m_sessionOptions);
-#else
         m_session = std::make_unique<Ort::Session>(*m_env, modelPath.c_str(), *m_sessionOptions);
-#endif
 
         Ort::AllocatorWithDefaultOptions allocator;
 

@@ -8,6 +8,7 @@
 #include <string>
 #include <atomic>
 #include <chrono>
+#include <thread>
 #include <unordered_set>
 
 namespace ibom {
@@ -28,6 +29,7 @@ class CameraCalibration;
 namespace ai {
 class InferenceEngine;
 class ModelManager;
+class ComponentDetector;
 }
 
 namespace overlay {
@@ -70,15 +72,29 @@ public:
     Config& config();
     const Config& config() const;
 
+    /// Component detector, or nullptr while AI is disabled / still
+    /// initializing / no model found. Only valid once aiStatusChanged(true)
+    /// has been emitted; call from the GUI thread only.
+    ai::ComponentDetector* componentDetector() const
+    {
+        return m_aiReady.load() ? m_componentDetector.get() : nullptr;
+    }
+
 signals:
     void shutdownRequested();
     void ibomLoaded(int componentCount);
+
+    /// AI pipeline state. ready=true once the ONNX session is created and the
+    /// detector model is loaded (first launch with TensorRT compiles the
+    /// engine — can take minutes; runs off the GUI thread).
+    void aiStatusChanged(bool ready, QString message);
 
 private:
     void setupLogging();
     void parseCommandLine();
     void createSubsystems();
     void connectSignals();
+    void initializeAI();
 
     void loadIBomFile(const QString& path);
     void runCalibration();
@@ -94,6 +110,9 @@ private:
     std::unique_ptr<camera::CameraCapture>     m_camera;
     std::unique_ptr<ai::InferenceEngine>       m_inferenceEngine;
     std::unique_ptr<ai::ModelManager>          m_modelManager;
+    std::unique_ptr<ai::ComponentDetector>     m_componentDetector;
+    std::thread                                m_aiInitThread;   // joined in dtor
+    std::atomic<bool>                          m_aiReady{false};
 
     // iBOM data pipeline
     std::unique_ptr<IBomParser>                m_ibomParser;

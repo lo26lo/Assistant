@@ -11,11 +11,14 @@
 
 ---
 
-## État actuel — au 2026-06-10 (fin de session, 2e itération)
+## État actuel — au 2026-06-10 (fin de session, 3e itération)
 
-> **Nouveau** : l'app **se lance sur l'écran local du Jetson** (GUI Qt via `run_local_gui.sh`). Audit complet → [docs/JETSON_AMELIORATIONS.md](JETSON_AMELIORATIONS.md), puis **implémentation de la majorité des recommandations** (persistance unifiée `IBOM_DATA_DIR`, FOURCC MJPG, fixes Docker/compose/scripts, test TrackingWorker, CI shell/compose). Fix `group_add` dupliqués (erreur #14).
+> **Nouveau aujourd'hui** (3 itérations) :
+> 1. App **lancée sur l'écran local du Jetson** ✅ + audit complet → [JETSON_AMELIORATIONS.md](JETSON_AMELIORATIONS.md)
+> 2. Implémentation des recommandations (persistance `IBOM_DATA_DIR`, FOURCC MJPG, fixes Docker/scripts, test TrackingWorker, CI shell/compose)
+> 3. **Phase 1c terminée** (plus aucun code Windows dans le tronc), **pipeline IA câblé** (init auto en arrière-plan si `.onnx` présent — [AI_PIPELINE.md](AI_PIPELINE.md) + `scripts/export_yolov8_onnx.py`), **image runtime minimale** réécrite (multi-stage, jamais buildée).
 >
-> ⚠️ **À FAIRE en priorité sur le Jetson** : `bash scripts/build_jetson.sh` + `cd build && ctest` pour **valider la compilation** — ces changements n'ont pas pu être compilés dans l'environnement d'analyse (pas de CUDA/Qt/OpenCV). Voir §0 de JETSON_AMELIORATIONS.md.
+> ⚠️ **À FAIRE en priorité sur le Jetson** : `git checkout docker/compose.local.yml && git pull`, puis `bash scripts/build_jetson.sh` + `cd build && ctest` pour **valider la compilation** — rien de tout ça n'a pu être compilé dans l'environnement d'analyse (pas de CUDA/Qt/OpenCV). Décision utilisateur : **ONNX ne sera jamais optionnel** (pas de build no-GPU).
 
 ### Phase courante
 **Phase 0 — Conteneurisation** : ✅ **COMPLÈTE** — images `microscope-ibom:base` (avec ONNX Runtime ARM64 compilé from source, CUDA 12.6 + TensorRT 10.3 EP) et `:dev` (avec outils dev) opérationnelles sur Jetson AGX Orin 32GB JP6.2.
@@ -64,6 +67,48 @@ Aucun. Tous les obstacles Phase 0/1/2 sont résolus et documentés dans [JETSON_
 2. Vérifier le statut de [JETSON_ERREURS.md](JETSON_ERREURS.md) pour les bugs ouverts
 3. Sur le Jetson : `cd ~/Assistant-git && git pull && git status`
 4. Continuer là où la dernière session s'est arrêtée
+
+---
+
+## Session 2026-06-10 (suite 2) — Phase 1c + pipeline IA + runtime minimal
+
+### Objectif
+Suite au choix utilisateur (« ONNX ne sera jamais enlevé, que proposes-tu ? » → sélection : pipeline IA, Phase 1c, image runtime minimale) : implémenter ces trois chantiers.
+
+### Décision actée
+**ONNX Runtime ne sera jamais optionnel** — pas de build CI no-GPU. Pour une vraie CI C++, la voie retenue (non implémentée) est un runner GitHub Actions self-hosted sur le Jetson (build dans le container dev + ctest avec le stack complet).
+
+### 1. Phase 1c — suppression du code Windows ✅
+Plus **aucune** référence `_WIN32`/`Q_OS_WIN`/`IBOM_PLATFORM_WINDOWS`/MSVC dans `src/`, `cmake/`, `CMakeLists.txt` (repli = branche `windows-legacy`) :
+- `main.cpp` : crash handler POSIX uniquement (SetUnhandledExceptionFilter supprimé)
+- `CameraCapture.cpp` : backends V4L2+Auto uniquement (MSMF/DSHOW supprimés, 2 endroits)
+- `InferenceEngine.cpp` : suppression de la conversion wstring Windows
+- `SettingsDialog.cpp` : suppression init COM (3 blocs `Q_OS_WIN`)
+- `utils/Paths.{h,cpp}` : branche `%APPDATA%` supprimée
+- `CMakeLists.txt` : bloc `CMAKE_TRY_COMPILE_TARGET_TYPE` (piège Windows) supprimé ; bloc platform → `IBOM_PLATFORM_LINUX` inconditionnel
+- `cmake/CompilerFlags.cmake` : branche MSVC supprimée
+- Supprimés : `build_windows.bat`, `scripts/install_prerequisites.bat` (+ refs `.dockerignore`)
+
+### 2. Pipeline IA câblé ✅ (nouveau doc : [AI_PIPELINE.md](AI_PIPELINE.md))
+- `Config` : `ai.enabled` (défaut true) + `ai.detector_model` (défaut `component_detector`) — load/save JSON
+- `Application::initializeAI()` (appelé depuis `initialize()`) : si un `.onnx` est trouvé par `ModelManager`, init ONNX Runtime + chargement modèle + création `ComponentDetector` **sur un `std::thread` dédié** (la compilation de l'engine TRT au 1er lancement prend des minutes — la GUI n'est pas bloquée). Sans modèle : log info, app 100 % fonctionnelle.
+- Publication thread-safe : `m_aiReady` atomic ; accesseur `componentDetector()` (nullptr tant que pas prêt) ; signal `aiStatusChanged(bool, QString)` (à consommer par la GUI plus tard — pas encore affiché)
+- Thread joiné dans `~Application()`
+- `scripts/export_yolov8_onnx.py` : export YOLOv8 .pt → ONNX aligné sur le contrat de `InferenceEngine::preprocess` (640×640 FP32 statique, opset 17, FP16 délégué au TRT EP) + génération du `.txt` de classes
+- `docs/AI_PIPELINE.md` : dataset (snapshots), annotation, entraînement YOLOv8m, export, déploiement, critères d'acceptation
+
+### 3. Image runtime minimale ✅ (⚠️ jamais buildée)
+`runtime.Dockerfile` réécrit : `FROM l4t-jetpack` (plus `FROM base`) + paquets **runtime uniquement** (libqt6*, gstreamer, libtbb12, OpenGL runtime…) + `COPY --from=microscope-ibom:base /usr/local/lib` (OpenCV CUDA, ORT, realsense, ZXing) + check `ldd | grep "not found"` qui **fail le build** si une dépendance manque. Les noms de paquets Jammy arm64 sont à valider au premier build (noté en tête du Dockerfile — logger tout écart dans JETSON_ERREURS.md).
+
+### Fichiers (cette itération)
+- **Créés** : `docs/AI_PIPELINE.md`, `scripts/export_yolov8_onnx.py`
+- **Supprimés** : `build_windows.bat`, `scripts/install_prerequisites.bat`
+- **Modifiés** : `src/main.cpp`, `src/camera/CameraCapture.cpp`, `src/ai/InferenceEngine.cpp`, `src/gui/SettingsDialog.cpp`, `src/utils/Paths.{h,cpp}`, `src/app/{Config.h,Config.cpp,Application.h,Application.cpp}`, `CMakeLists.txt`, `cmake/CompilerFlags.cmake`, `docker/runtime.Dockerfile`, `.dockerignore`, `CLAUDE.md` (statut ai/), `docs/JETSON_AMELIORATIONS.md` (§0)
+
+### À valider sur le Jetson (rien compilé ici)
+1. `git checkout docker/compose.local.yml && git pull`
+2. `bash scripts/build_jetson.sh` puis `cd build && ctest --output-on-failure`
+3. Optionnel : `docker compose -f docker/compose.yml build runtime` (première vraie tentative — s'attendre à devoir ajuster 1-2 noms de paquets)
 
 ---
 

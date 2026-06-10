@@ -59,6 +59,16 @@ public:
     const std::string& modelsPath() const { return m_modelsPath; }
     void setModelsPath(const std::string& path) { m_modelsPath = path; }
 
+    /// Master switch: when false, the inference engine is never initialized
+    /// (no ONNX session, no TensorRT engine compilation at startup).
+    bool aiEnabled() const { return m_aiEnabled; }
+    void setAiEnabled(bool enable) { m_aiEnabled = enable; }
+
+    /// Preferred detector model name (stem of the .onnx in modelsPath).
+    /// If absent from the scan, the first available model is used.
+    const std::string& detectorModel() const { return m_detectorModel; }
+    void setDetectorModel(const std::string& name) { m_detectorModel = name; }
+
     bool useTensorRT() const { return m_useTensorRT; }
     void setUseTensorRT(bool enable) { m_useTensorRT = enable; }
 
@@ -169,6 +179,8 @@ private:
 
     // AI
     std::string m_modelsPath = "models";
+    bool  m_aiEnabled          = true;
+    std::string m_detectorModel = "component_detector";
     bool  m_useTensorRT        = true;
     float m_detectionConfidence = 0.5f;
 

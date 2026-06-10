@@ -13,10 +13,8 @@ namespace ibom::utils {
  *
  * Resolution order:
  *   1. $IBOM_DATA_DIR if set (used by the Docker images — see compose.yml).
- *   2. Platform-conventional per-user location:
- *        - Windows: %APPDATA%/MicroscopeIBOM
- *        - Linux:   ~/.local/share/MicroscopeIBOM
- *          (matches Qt's QStandardPaths::AppDataLocation on Linux).
+ *   2. ~/.local/share/MicroscopeIBOM — matches Qt's
+ *      QStandardPaths::AppDataLocation on Linux.
  *   3. Current working directory as a last resort.
  *
  * The directory is created if it does not exist.

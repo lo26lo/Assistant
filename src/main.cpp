@@ -6,17 +6,6 @@
 #include <spdlog/spdlog.h>
 #include <iostream>
 
-#ifdef _WIN32
-#include <windows.h>
-static LONG WINAPI crashHandler(EXCEPTION_POINTERS* ep)
-{
-    spdlog::critical("UNHANDLED EXCEPTION 0x{:08X} at address 0x{:016X}",
-                     ep->ExceptionRecord->ExceptionCode,
-                     reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress));
-    spdlog::default_logger()->flush();
-    return EXCEPTION_EXECUTE_HANDLER;
-}
-#else
 #include <csignal>
 #include <execinfo.h>
 #include <unistd.h>
@@ -30,19 +19,14 @@ extern "C" void posixCrashHandler(int sig)
     std::signal(sig, SIG_DFL);
     std::raise(sig);
 }
-#endif
 
 int main(int argc, char* argv[])
 {
-#ifdef _WIN32
-    SetUnhandledExceptionFilter(crashHandler);
-#else
     std::signal(SIGSEGV, posixCrashHandler);
     std::signal(SIGABRT, posixCrashHandler);
     std::signal(SIGFPE,  posixCrashHandler);
     std::signal(SIGILL,  posixCrashHandler);
     std::signal(SIGBUS,  posixCrashHandler);
-#endif
 
     // Initialize logging first
     ibom::utils::Logger::initialize("pcb_inspector", "logs", spdlog::level::info);

@@ -177,11 +177,12 @@ Zero-copy : `FrameRef = std::shared_ptr<const cv::Mat>`. La frame allouée dans 
 | `overlay/` | `Homography.h/.cpp`, `OverlayRenderer.h/.cpp`, `ComponentOverlay.h/.cpp`, `HeatmapRenderer.h/.cpp`, `TrackingWorker.h/.cpp` | ✅ |
 | `gui/` | `MainWindow`, `CameraView`, `BomPanel`, `ControlPanel`, `StatsPanel`, `SettingsDialog`, `HelpDialog`, `InspectionWizard`, `Theme.h` | ✅ |
 | `utils/` | `Logger.h/.cpp`, `GpuUtils.h/.cpp`, `ImageUtils.h/.cpp` | ✅ |
-| `ai/` | `InferenceEngine`, `ModelManager`, `ComponentDetector`, `OCREngine`, `SolderInspector` | ❌ non instancié |
+| `ai/` | `InferenceEngine`, `ModelManager`, `ComponentDetector`, `OCREngine`, `SolderInspector` | 🟡 câblé (init auto si `.onnx` présent, cf docs/AI_PIPELINE.md) |
 | `features/` | `PickAndPlace`, `VoiceControl`, `BarcodeScanner`, `Measurement`, `StencilAlign`, `SnapshotHistory`, `RemoteView` | ❌ non instancié |
 | `export/` | `ReportGenerator`, `DataExporter` | ❌ non instancié |
 
-> `ai/`, `features/`, `export/` : code complet mais aucun `.onnx` dans `models/` — non instancié dans `Application`.
+> `ai/` : depuis 2026-06-10, `Application::initializeAI()` initialise ONNX Runtime + charge le détecteur **en thread d'arrière-plan** si un `.onnx` existe dans `models/` (flag `ai.enabled`, modèle `ai.detector_model`, défaut `component_detector`). Sans modèle, l'app reste 100 % fonctionnelle. Signal `aiStatusChanged(bool, QString)` ; accès via `componentDetector()` (nullptr tant que pas prêt). `OCREngine`/`SolderInspector` restent non câblés.
+> `features/`, `export/` : code complet mais non instancié (sauf PickAndPlace/Measurement/SnapshotHistory/DataExporter, créés par `Application`).
 
 ---
 
@@ -262,12 +263,11 @@ Defaults à connaître :
 
 ## Non connecté (sources existent, pas instancié)
 
-`ai/InferenceEngine`, `ai/ComponentDetector`, `ai/OCREngine`, `ai/SolderInspector`,
-`features/PickAndPlace`, `features/Measurement`, `features/RemoteView`,
-`features/VoiceControl`, `features/BarcodeScanner`, `features/SnapshotHistory`,
-`features/StencilAlign`, `export/ReportGenerator`, `export/DataExporter`
+`ai/OCREngine`, `ai/SolderInspector`,
+`features/RemoteView`, `features/VoiceControl`, `features/BarcodeScanner`,
+`features/StencilAlign`, `export/ReportGenerator`
 
-> `models/` vide — les modèles ONNX sont à entraîner (YOLOv8/RT-DETR) et exporter.
+> `ai/InferenceEngine` + `ComponentDetector` sont câblés depuis 2026-06-10 (init auto en arrière-plan si `.onnx` présent — voir docs/AI_PIPELINE.md). `models/` reste vide : entraîner/exporter via `scripts/export_yolov8_onnx.py`.
 
 ---
 

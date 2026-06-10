@@ -48,6 +48,8 @@ bool Config::load(const std::string& path)
         if (j.contains("ai")) {
             auto& ai = j["ai"];
             m_modelsPath          = ai.value("models_path", m_modelsPath);
+            m_aiEnabled           = ai.value("enabled", m_aiEnabled);
+            m_detectorModel       = ai.value("detector_model", m_detectorModel);
             m_useTensorRT         = ai.value("use_tensorrt", m_useTensorRT);
             m_detectionConfidence = ai.value("confidence", m_detectionConfidence);
         }
@@ -147,9 +149,11 @@ bool Config::save(const std::string& path) const
 
         // AI
         j["ai"] = {
-            {"models_path",  m_modelsPath},
-            {"use_tensorrt", m_useTensorRT},
-            {"confidence",   m_detectionConfidence}
+            {"models_path",    m_modelsPath},
+            {"enabled",        m_aiEnabled},
+            {"detector_model", m_detectorModel},
+            {"use_tensorrt",   m_useTensorRT},
+            {"confidence",     m_detectionConfidence}
         };
 
         // UI

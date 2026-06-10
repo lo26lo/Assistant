@@ -1,16 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
 
-# Fix: CMake 4.x + Ninja on Windows — rules.ninja not generated during try_compile
-# Root cause: path normalization issue with short DOS paths (COMMON~1) in CMAKE_MAKE_PROGRAM
-# Solution from: https://cmake.org/cmake/help/latest/variable/CMAKE_TRY_COMPILE_TARGET_TYPE.html
-#
-# IMPORTANT : Windows-only. Sur Linux, ce flag empeche FindOpenGL (et autres
-# find_package) de tester la liaison effective des libs lors des try_compile,
-# ce qui fait echouer Qt6Gui ("Could NOT find OpenGL").
-if(WIN32)
-    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-endif()
-
 # ============================================================================
 # MicroscopeIBOM — PCB Inspection with AI Overlay
 # ============================================================================
@@ -323,17 +312,11 @@ if(IBOM_ENABLE_TENSORRT AND TensorRT_FOUND)
 endif()
 
 # ============================================================================
-# Platform-specific
+# Platform
+# Cible Linux uniquement (Jetson) depuis la Phase 1c — le support Windows vit
+# sur la branche figee `windows-legacy` (tag v0.1.0-windows-final).
 # ============================================================================
-if(WIN32)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_PLATFORM_WINDOWS)
-    # Use WinMain on Windows
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        WIN32_EXECUTABLE TRUE
-    )
-elseif(UNIX)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_PLATFORM_LINUX)
-endif()
+target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_PLATFORM_LINUX)
 
 # ============================================================================
 # Tests

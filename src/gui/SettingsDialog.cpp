@@ -12,9 +12,6 @@
 #include <QColorDialog>
 #include <QMetaObject>
 #include <thread>
-#ifdef Q_OS_WIN
-#include <objbase.h>
-#endif
 
 SettingsDialog::SettingsDialog(ibom::Config& config, QWidget* parent)
     : QDialog(parent)
@@ -413,9 +410,8 @@ void SettingsDialog::accept()
 
 void SettingsDialog::enumerateCameras()
 {
-    // QMediaDevices::videoInputs() can stall the GUI thread for tens of
-    // seconds on Windows MSMF when the camera service is in a bad state.
-    // Run it on a detached worker (with COM init) and post the result back.
+    // QMediaDevices::videoInputs() can stall the GUI thread for seconds when a
+    // camera is in a bad state. Run it on a detached worker and post back.
     int previousIndex = m_cameraDevice->currentIndex();
     if (previousIndex < 0)
         previousIndex = m_config.cameraIndex();
@@ -427,16 +423,10 @@ void SettingsDialog::enumerateCameras()
         m_refreshCameras->setEnabled(false);
 
     std::thread([this, previousIndex]() {
-#ifdef Q_OS_WIN
-        ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-#endif
         QStringList names;
         const auto cameras = QMediaDevices::videoInputs();
         for (int i = 0; i < cameras.size(); ++i)
             names << QString("%1: %2").arg(i).arg(cameras[i].description());
-#ifdef Q_OS_WIN
-        ::CoUninitialize();
-#endif
         QMetaObject::invokeMethod(this, [this, names, previousIndex]() {
             m_cameraDevice->clear();
             if (names.isEmpty()) {
