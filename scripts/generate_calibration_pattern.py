@@ -1,43 +1,27 @@
 """
-Generate microscope calibration checkerboard patterns as PDF.
-Prints at exact real-world dimensions — verify with calipers after printing.
+Generate tiled calibration checkerboard patterns on A4 page.
+4 patterns in 4-column grid, fills entire page, high resolution, no text.
 """
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
-OUTPUT = "calibration_patterns.pdf"
+OUTPUT = "calibration_patterns_tiled.pdf"
 
-# Each pattern: (label, square_size_mm, cols, rows)
+# Each pattern: (sq_size_mm, cols, rows)
 # cols×rows = number of SQUARES (inner corners = cols-1 × rows-1)
 PATTERNS = [
-    ("1.0mm squares — 8×6 (7×5 inner corners)", 1.0, 8, 6),
-    ("0.5mm squares — 8×6 (7×5 inner corners)", 0.5, 8, 6),
-    ("2.0mm squares — 8×6 (7×5 inner corners)", 2.0, 8, 6),
+    (1.0, 8, 6),    # 8×6mm
+    (0.5, 8, 6),    # 4×3mm
+    (2.0, 8, 6),    # 16×12mm
+    (5.0, 8, 6),    # 40×30mm
 ]
 
 
-def draw_pattern(c: canvas.Canvas, label: str, sq: float, cols: int, rows: int):
-    page_w, page_h = A4
+def draw_pattern_plain(c: canvas.Canvas, x_pos: float, y_pos: float, sq: float, cols: int, rows: int):
+    """Draw checkerboard pattern + scale ruler below + border."""
     board_w = cols * sq * mm
     board_h = rows * sq * mm
-
-    # Center on page
-    x0 = (page_w - board_w) / 2
-    y0 = (page_h - board_h) / 2
-
-    # Title
-    c.setFont("Helvetica-Bold", 14)
-    c.drawCentredString(page_w / 2, page_h - 30 * mm, f"Calibration Checkerboard — {label}")
-
-    # Dimensions info
-    c.setFont("Helvetica", 9)
-    c.drawCentredString(page_w / 2, page_h - 37 * mm,
-                        f"Board: {cols*sq:.1f} × {rows*sq:.1f} mm  |  "
-                        f"Inner corners: {cols-1} × {rows-1}  |  "
-                        f"Square: {sq} mm")
-    c.drawCentredString(page_w / 2, page_h - 42 * mm,
-                        "PRINT AT 100% SCALE — NO FIT-TO-PAGE — Verify with calipers!")
 
     # Draw checkerboard
     for row in range(rows):
@@ -46,40 +30,77 @@ def draw_pattern(c: canvas.Canvas, label: str, sq: float, cols: int, rows: int):
                 c.setFillColorRGB(0, 0, 0)
             else:
                 c.setFillColorRGB(1, 1, 1)
-            x = x0 + col * sq * mm
-            y = y0 + (rows - 1 - row) * sq * mm
+            x = x_pos + col * sq * mm
+            y = y_pos + (rows - 1 - row) * sq * mm
             c.rect(x, y, sq * mm, sq * mm, fill=1, stroke=0)
 
-    # Thin border around the board
-    c.setStrokeColorRGB(0.5, 0.5, 0.5)
-    c.setLineWidth(0.3)
-    c.rect(x0, y0, board_w, board_h, fill=0, stroke=1)
+    # Border around pattern
+    c.setStrokeColorRGB(0, 0, 0)
+    c.setLineWidth(0.2)
+    c.rect(x_pos, y_pos, board_w, board_h, fill=0, stroke=1)
 
     # Scale ruler below board (5mm ticks)
-    ruler_y = y0 - 8 * mm
+    ruler_y = y_pos - 3 * mm
     ruler_len = min(board_w, 20 * mm)
     c.setStrokeColorRGB(0, 0, 0)
-    c.setLineWidth(0.5)
-    c.line(x0, ruler_y, x0 + ruler_len, ruler_y)
-    c.setFont("Helvetica", 6)
+    c.setLineWidth(0.3)
+    c.line(x_pos, ruler_y, x_pos + ruler_len, ruler_y)
+
+    # Tick marks
     tick = 0
     while tick * mm <= ruler_len + 0.01:
-        tx = x0 + tick * mm
-        h = 2 * mm if tick % 5 == 0 else 1 * mm
+        tx = x_pos + tick * mm
+        h = 1.5 * mm if tick % 5 == 0 else 0.7 * mm
         c.line(tx, ruler_y, tx, ruler_y + h)
-        if tick % 5 == 0:
-            c.drawCentredString(tx, ruler_y - 2.5 * mm, f"{tick}")
         tick += 1
-    c.drawString(x0 + ruler_len + 2 * mm, ruler_y - 1 * mm, "mm")
 
 
 def main():
-    c = canvas.Canvas(OUTPUT, pagesize=A4)
-    for i, (label, sq, cols, rows) in enumerate(PATTERNS):
-        draw_pattern(c, label, sq, cols, rows)
-        c.showPage()
+    page_w, page_h = A4
+    margin = 5 * mm
+    spacing = 7 * mm
+
+    # Calculate dimensions for each pattern
+    tiles = []
+    for sq, cols, rows in PATTERNS:
+        w = cols * sq * mm
+        h = rows * sq * mm
+        tiles.append((sq, cols, rows, w, h))
+
+    # Calculate row height = height of tallest pattern + ruler + spacing
+    max_height = max(t[4] for t in tiles)
+    ruler_space = 4 * mm
+    row_height = max_height + ruler_space + spacing
+
+    # Calculate available space
+    avail_w = page_w - 2 * margin
+    col_width = (avail_w - 3 * spacing) / 4
+
+    # Calculate how many rows fit
+    avail_h = page_h - 2 * margin
+    num_rows = int(avail_h / row_height)
+
+    c = canvas.Canvas(OUTPUT, pagesize=A4, compress=1)
+
+    # Draw grid
+    for row_idx in range(num_rows):
+        y_base = page_h - margin - row_idx * row_height
+
+        if y_base < margin:
+            break
+
+        for col_idx, (sq, cols, rows, tile_w, tile_h) in enumerate(tiles):
+            x_base = margin + col_idx * (col_width + spacing)
+
+            # Center pattern within column
+            x_center = x_base + (col_width - tile_w) / 2
+            # Align to top of row
+            y_pos = y_base - tile_h
+
+            draw_pattern_plain(c, x_center, y_pos, sq, cols, rows)
+
     c.save()
-    print(f"Generated {OUTPUT} with {len(PATTERNS)} pages")
+    print(f"Generated {OUTPUT} — {num_rows} rows of 4 patterns per row")
 
 
 if __name__ == "__main__":
