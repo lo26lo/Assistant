@@ -19,8 +19,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from studio.project import Project
-from studio import import_manager, fake_dataset
+from studio import import_manager, fake_dataset, session_split
 from studio.validation import validate_project
+from studio.gpu_check import check_gpu
+from studio.vendor.training_manager import TrainingConfig, TrainingManager
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -36,12 +38,13 @@ STEPS = [
     "4 · Entraînement",
     "5 · Test & déploiement",
 ]
-LOT1_STEPS = {0, 1, 2}
-
-
 def load_classes() -> list[str]:
     data = json.loads((APP_DIR / "config" / "pcb_classes.json").read_text(encoding="utf-8"))
     return data["classes"]
+
+
+def load_defaults() -> dict:
+    return json.loads((APP_DIR / "config" / "defaults.json").read_text(encoding="utf-8"))
 
 
 class StudioApp(tk.Tk):
@@ -54,6 +57,7 @@ class StudioApp(tk.Tk):
 
         self.project = Project()
         self.classes = load_classes()
+        self.defaults = load_defaults()
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.busy = False
         self.last_summary = None
@@ -79,7 +83,7 @@ class StudioApp(tk.Tk):
             b.pack(fill="x")
             b.bind("<Button-1>", lambda _e, i=i: self.show_step(i))
             self.step_buttons.append(b)
-        tk.Label(side, text="Lot 1 — étapes 0-2\nLots 2-3 à venir",
+        tk.Label(side, text="Lots 1+2 — étapes 0-4\nLot 3 (déploiement) à venir",
                  bg=BG2, fg=MUT, font=("Segoe UI", 9), justify="left"
                  ).pack(side="bottom", anchor="w", padx=16, pady=12)
 
@@ -146,6 +150,10 @@ class StudioApp(tk.Tk):
             self._step_import()
         elif i == 2:
             self._step_validate()
+        elif i == 3:
+            self._step_split()
+        elif i == 4:
+            self._step_train()
         else:
             self._step_placeholder(i)
 
@@ -374,11 +382,220 @@ class StudioApp(tk.Tk):
         if self.last_summary and self.last_summary.preview_path:
             webbrowser.open(self.last_summary.preview_path.as_uri())
 
-    # --- étapes 3-5 : placeholders Lot 2/3 ------------------------------------
+    # --- étape 3 : split par session -------------------------------------------
+    def _step_split(self):
+        sessions = self.project.sessions()
+        self._title("Split train / validation",
+                    "Split PAR SESSION (jamais par image : deux frames d'une même "
+                    "session sont quasi identiques → un split aléatoire fausserait "
+                    "le mAP). Produit train.txt / val.txt / data.yaml.")
+        if not sessions:
+            tk.Label(self.content, text="Importer d'abord des sessions (étape 1).",
+                     bg=BG, fg=WARN, font=("Segoe UI", 11)).pack(anchor="w", pady=8)
+            return
+
+        bar = tk.Frame(self.content, bg=BG)
+        bar.pack(anchor="w", pady=4)
+        tk.Label(bar, text="Part validation :", bg=BG, fg=FG).pack(side="left")
+        self.val_ratio = tk.DoubleVar(
+            value=float(self.defaults.get("val_ratio", 0.2)))
+        tk.Spinbox(bar, from_=0.1, to=0.4, increment=0.05, width=5,
+                   textvariable=self.val_ratio, bg=BG2, fg=FG, relief="flat"
+                   ).pack(side="left", padx=(4, 14))
+        tk.Button(bar, text="✂️ Générer le split", command=self._do_split,
+                  bg=ACC, fg=BG, relief="flat", font=("Segoe UI", 10, "bold"),
+                  padx=14, pady=5).pack(side="left")
+
+        self.split_text = tk.Text(self.content, height=14, bg=BG2, fg=FG,
+                                  relief="flat", font=("Consolas", 10),
+                                  state="disabled")
+        self.split_text.pack(anchor="w", fill="x", pady=10)
+        if self.project.data.get("split_summary"):
+            self._set_split_text(self.project.data["split_summary"])
+
+    def _set_split_text(self, text: str):
+        self.split_text.configure(state="normal")
+        self.split_text.delete("1.0", "end")
+        self.split_text.insert("end", text)
+        self.split_text.configure(state="disabled")
+
+    def _do_split(self):
+        sessions = self.project.sessions()
+        out_dir = self.project.workdir / "split"
+        ratio = float(self.val_ratio.get())
+        classes = self.classes
+
+        def work():
+            return session_split.split_project(sessions, out_dir, classes,
+                                               val_ratio=ratio, log=self.log)
+
+        def done(res):
+            lines = [f"data.yaml : {res.data_yaml}",
+                     "",
+                     f"TRAIN ({res.n_train} images) : "
+                     f"{', '.join(res.train_sessions)}",
+                     f"VAL   ({res.n_val} images, "
+                     f"{100 * res.val_fraction:.0f}%) : "
+                     f"{', '.join(res.val_sessions)}"]
+            lines += [f"⚠️ {w}" for w in res.warnings]
+            text = "\n".join(lines)
+            self._set_split_text(text)
+            self.project.data["data_yaml"] = str(res.data_yaml)
+            self.project.data["split_summary"] = text
+            self.project.save()
+            self.log("✅ Split prêt — étape suivante : Entraînement")
+
+        self._run_bg(work, done=done)
+
+    # --- étape 4 : entraînement -------------------------------------------------
+    def _step_train(self):
+        self._title("Entraînement YOLOv8",
+                    "Module repris de Pokemon-Dataset-Creator (presets PCB : "
+                    "rotations 180° + flips actifs). Le 1er lancement télécharge "
+                    "le modèle de base (~50 Mo).")
+
+        # Bandeau GPU (check en arrière-plan, l'import torch peut prendre 2-3 s)
+        self.gpu_banner = tk.Label(self.content, text="⏳ Vérification du GPU…",
+                                   bg=BG2, fg=FG, font=("Segoe UI", 10),
+                                   anchor="w", padx=10, pady=6, justify="left")
+        self.gpu_banner.pack(fill="x", pady=(0, 8))
+        self._gpu_status = None
+        threading.Thread(target=self._bg_gpu_check, daemon=True).start()
+
+        data_yaml = self.project.data.get("data_yaml", "")
+        if not data_yaml or not Path(data_yaml).exists():
+            tk.Label(self.content, text="Générer d'abord le split (étape 3).",
+                     bg=BG, fg=WARN, font=("Segoe UI", 11)).pack(anchor="w", pady=8)
+            return
+        tk.Label(self.content, text=f"Dataset : {data_yaml}", bg=BG, fg=MUT,
+                 font=("Segoe UI", 9)).pack(anchor="w")
+
+        # Presets
+        presets = self.defaults["training_presets"]
+        prow = tk.Frame(self.content, bg=BG)
+        prow.pack(anchor="w", pady=8)
+        self.preset_var = tk.StringVar(value="standard")
+        for name in presets:
+            p = presets[name]
+            tk.Radiobutton(
+                prow, text=f"{name} ({p['model'].replace('.pt', '')}, "
+                           f"{p['epochs']} ep)",
+                variable=self.preset_var, value=name, command=self._apply_preset,
+                bg=BG, fg=FG, selectcolor=BG2, activebackground=BG,
+                activeforeground=ACC, font=("Segoe UI", 10)
+            ).pack(side="left", padx=(0, 14))
+
+        # Overrides epochs/batch
+        orow = tk.Frame(self.content, bg=BG)
+        orow.pack(anchor="w", pady=4)
+        tk.Label(orow, text="Epochs:", bg=BG, fg=FG).pack(side="left")
+        self.epochs_var = tk.IntVar()
+        tk.Spinbox(orow, from_=1, to=1000, textvariable=self.epochs_var, width=6,
+                   bg=BG2, fg=FG, relief="flat").pack(side="left", padx=(4, 14))
+        tk.Label(orow, text="Batch:", bg=BG, fg=FG).pack(side="left")
+        self.batch_var = tk.IntVar()
+        tk.Spinbox(orow, from_=1, to=128, textvariable=self.batch_var, width=5,
+                   bg=BG2, fg=FG, relief="flat").pack(side="left", padx=4)
+        self._apply_preset()
+
+        self.btn_train = tk.Button(
+            self.content, text="🎓 Démarrer l'entraînement", command=self._do_train,
+            bg=ACC, fg=BG, relief="flat", font=("Segoe UI", 11, "bold"),
+            padx=16, pady=7)
+        self.btn_train.pack(anchor="w", pady=12)
+        tk.Label(self.content,
+                 text="⚠️ Pas de bouton stop : fermer l'application interrompt "
+                      "l'entraînement (last.pt est sauvegardé à chaque epoch). "
+                      "La progression s'affiche dans le journal ci-dessous.",
+                 bg=BG, fg=MUT, font=("Segoe UI", 9), justify="left",
+                 wraplength=820).pack(anchor="w")
+
+        best = self.project.data.get("best_model", "")
+        if best and Path(best).exists():
+            tk.Label(self.content,
+                     text=f"Dernier modèle entraîné : {best}\n"
+                          f"Métriques : {self.project.data.get('last_metrics', '—')}",
+                     bg=BG, fg=OK, font=("Segoe UI", 9), justify="left"
+                     ).pack(anchor="w", pady=(10, 0))
+
+    def _bg_gpu_check(self):
+        st = check_gpu()
+        self._gpu_status = st
+
+        def update():
+            color = OK if st.ok else (WARN if st.device == "cpu" else ERR)
+            self.gpu_banner.configure(text=st.summary, fg=color)
+            for line in st.details:
+                self.log(f"   {line}")
+        self.after(0, update)
+
+    def _apply_preset(self):
+        p = self.defaults["training_presets"][self.preset_var.get()]
+        self.epochs_var.set(p["epochs"])
+        self.batch_var.set(p["batch"])
+
+    def _do_train(self):
+        if self.busy:
+            self.log("⏳ Une opération est déjà en cours…")
+            return
+        st = self._gpu_status
+        if st is None:
+            self.log("⏳ Check GPU pas terminé — réessayer dans 2 s")
+            return
+        if not st.ok:
+            if not messagebox.askyesno(
+                    "GPU non prêt",
+                    f"{st.summary}\n\nLancer quand même (CPU, très lent) ?"):
+                return
+
+        preset = self.defaults["training_presets"][self.preset_var.get()]
+        aug = self.defaults.get("augmentation_pcb", {})
+        runs_dir = self.project.workdir / "runs"
+        cfg = TrainingConfig(
+            model_name=preset["model"],
+            epochs=int(self.epochs_var.get()),
+            batch_size=int(self.batch_var.get()),
+            image_size=int(self.defaults.get("image_size", 640)),
+            device=st.device,
+            patience=preset.get("patience", 50),
+            data_yaml=Path(self.project.data["data_yaml"]),
+            project_dir=runs_dir,
+            degrees=float(aug.get("degrees", 180.0)),
+            flipud=float(aug.get("flipud", 0.5)),
+            fliplr=float(aug.get("fliplr", 0.5)),
+            mosaic=float(aug.get("mosaic", 1.0)),
+            hsv_v=float(aug.get("hsv_v", 0.4)),
+        )
+        manager = TrainingManager(cfg)
+        manager.set_log_callback(self.log)
+        self.btn_train.configure(state="disabled", text="🎓 Entraînement en cours…")
+
+        def work():
+            ok = manager.train()
+            return ok, manager
+
+        def done(result):
+            ok, mgr = result
+            self.btn_train.configure(state="normal",
+                                     text="🎓 Démarrer l'entraînement")
+            if ok:
+                best = mgr.get_best_model_path()
+                metrics = mgr.get_metrics() or {}
+                self.project.data["best_model"] = str(best)
+                self.project.data["last_metrics"] = (
+                    f"mAP50={metrics.get('mAP50', 0):.3f} "
+                    f"mAP50-95={metrics.get('mAP50-95', 0):.3f}")
+                self.project.save()
+                self.log(f"🎉 Modèle prêt : {best} — étape suivante : "
+                         f"Test & déploiement (Lot 3)")
+
+        self._run_bg(work, done=done)
+
+    # --- étape 5 : placeholder Lot 3 -------------------------------------------
     def _step_placeholder(self, i: int):
         self._title(STEPS[i].split("· ")[1],
-                    "Cette étape arrive au Lot 2 (split par session + entraînement) "
-                    "ou au Lot 3 (test, export ONNX, déploiement Jetson). "
+                    "Cette étape arrive au Lot 3 (test visuel, export ONNX, "
+                    "déploiement scp vers le Jetson). "
                     "Voir docs/DATASET_STUDIO_PLAN.md.")
         tk.Label(self.content, text="🚧 À venir", bg=BG, fg=WARN,
                  font=("Segoe UI", 14)).pack(anchor="w", pady=18)

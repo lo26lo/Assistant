@@ -16,16 +16,19 @@ composants pour MicroscopeIBOM. Basé sur les modules génériques YOLO de
 ⚠️ Pour l'entraînement (Lot 2) : la RTX 5070 Ti (Blackwell, sm_120) exige
 **PyTorch ≥ 2.7 en CUDA 12.8** — voir les instructions affichées par INSTALL.bat.
 
-## État — Lot 1 (actuel)
+## État — Lots 1+2 (actuels)
 
 | Étape | Statut |
 |-------|--------|
 | 0 · Projet (workdir, accès Jetson) | ✅ |
 | 1 · Import sessions (dossier local) + générateur factice | ✅ |
 | 2 · Validation (rapports HTML, stats classes, aperçu bboxes) | ✅ |
-| 3 · Split par session & équilibrage | 🚧 Lot 2 |
-| 4 · Entraînement (presets YOLOv8) | 🚧 Lot 2 |
+| 3 · Split **par session** (train.txt/val.txt/data.yaml) | ✅ |
+| 4 · Entraînement (presets rapide/standard/précis, check GPU Blackwell, log par epoch) | ✅ |
 | 5 · Test, export ONNX, déploiement Jetson | 🚧 Lot 3 |
+
+Pour l'étape 4, installer d'abord les dépendances lourdes : **install_training.bat**
+(PyTorch CUDA 12.8 ~3 Go + ultralytics, puis vérifie le GPU automatiquement).
 
 ## Test rapide sans vraies données
 

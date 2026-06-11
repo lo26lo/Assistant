@@ -70,6 +70,27 @@ Aucun. Tous les obstacles Phase 0/1/2 sont résolus et documentés dans [JETSON_
 
 ---
 
+## Session 2026-06-10 (suite 7) — Lot 2 PCB Dataset Studio (split + entraînement)
+
+### Contexte
+GO utilisateur pendant qu'il teste le Lot 1 sur son PC. Périmètre = plan §6 Lot 2.
+
+### Livré
+- `studio/session_split.py` : split **par session** (jamais par image) — greedy plus-petites-sessions-en-val pour approcher le ratio, garde ≥1 session de chaque côté, avertit si une combinaison éclairage|zoom (manifest.jsonl) n'existe qu'en val ; fallback mono-session = split contiguë + warning. Sortie : `train.txt`/`val.txt` (chemins absolus, ultralytics retrouve les labels via `/images/`→`/labels/`) + `data.yaml` commenté
+- `studio/gpu_check.py` : détection torch/CUDA/ultralytics + **piège Blackwell** — vérifie que `sm_120` est dans `torch.cuda.get_arch_list()` (un torch < 2.7 voit le GPU mais plante au premier kernel) ; exécutable en module (`python -m studio.gpu_check`)
+- `studio/vendor/training_manager.py` : vendorisé de Pokemon (adaptations marquées [PCB] : défauts yolov8m/pcb_detector/degrees=180/flipud=0.5 + callback `on_fit_epoch_end` → progression par epoch dans le journal GUI)
+- `app.py` : étapes 3 (ratio val + résumé du split persisté) et 4 (bandeau GPU async, presets rapide/standard/précis depuis defaults.json, overrides epochs/batch, confirmation si CPU, best.pt + métriques persistés dans le projet)
+- `install_training.bat` : torch cu128 + ultralytics + check GPU auto
+
+### Tests effectués (hors GUI, hors vrai GPU)
+✅ py_compile · ✅ split 4 sessions (30/10, zéro intersection train/val, data.yaml valide) · ✅ fallback mono-session (8/2 + warning) · ✅ gpu_check sans torch (message clair) · ✅ TrainingManager avec **ultralytics factice** : kwargs vérifiés (degrees=180, flipud=0.5, data/epochs corrects), métriques remontées, callback epoch enregistré.
+⚠️ Restent à tester par l'utilisateur sur le PC : la GUI des étapes 3-4 et un **vrai** entraînement (install_training.bat → preset rapide sur le dataset factice).
+
+### Prochaine étape
+Retours utilisateur Lots 1-2 → Lot 3 (test visuel, export ONNX via scripts/export_yolov8_onnx.py, import/déploiement scp Jetson)
+
+---
+
 ## Session 2026-06-10 (suite 6) — Implémentation Lot 1 PCB Dataset Studio
 
 ### Décisions
