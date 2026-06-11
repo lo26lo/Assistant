@@ -13,7 +13,9 @@
 
 ## État actuel — au 2026-06-11
 
-> **2026-06-11** : PR #2 mergée dans `main` (`f36895e`) — Dataset Studio Lots 1+2 + Phase 1c + pipeline IA + tous les fixes Docker/scripts. Fix `INSTALL.bat` (syntaxe Unix `>/dev/null` → `>nul`, détection via lanceur `py`). Le dev continue sur `claude/dreamy-cori-oec93c`.
+> **2026-06-11** : PR #2 mergée dans `main` (`f36895e`) — Dataset Studio Lots 1+2 + Phase 1c + pipeline IA + tous les fixes Docker/scripts. Fix `INSTALL.bat` (PR #3), scripts Linux du Studio (PR #4). **Phase A implémentée** : `DatasetCreator` + `DatasetPanel` + signal qualité tracking + `footprint_classes.json` + tests (voir session "suite" ci-dessous). Le dev continue sur `claude/dreamy-cori-oec93c`.
+>
+> ✅ **Build + ctest Jetson validés** (2026-06-11) : `bash scripts/build_jetson.sh` → 31/31, binaire 1.3 MB. `ctest` → **7/7 passent**. Branche `claude/dreamy-cori-oec93c` mergée dans `main`.
 
 > **Nouveau aujourd'hui** (3 itérations) :
 > 1. App **lancée sur l'écran local du Jetson** ✅ + audit complet → [JETSON_AMELIORATIONS.md](JETSON_AMELIORATIONS.md)
@@ -69,6 +71,37 @@ Aucun. Tous les obstacles Phase 0/1/2 sont résolus et documentés dans [JETSON_
 2. Vérifier le statut de [JETSON_ERREURS.md](JETSON_ERREURS.md) pour les bugs ouverts
 3. Sur le Jetson : `cd ~/Assistant-git && git pull && git status`
 4. Continuer là où la dernière session s'est arrêtée
+
+---
+
+## Session 2026-06-11 (suite) — Phase A : capture + annotation auto (DatasetCreator)
+
+### Contexte
+GO utilisateur sur le plan Phase A de [DATASET_CREATOR_PLAN.md](DATASET_CREATOR_PLAN.md), défauts validés : boxes droites (pas OBB), JPEG q95, résolution native 1920×1080.
+
+### Livré
+- **TrackingWorker** : signal `homographyUpdated(cv::Mat)` → `homographyUpdated(cv::Mat, int inliers, double reprojErrPx)` — inliers depuis le mask RANSAC, erreur = **médiane** des reprojections des inliers. Connexion existante + test mis à jour (vérifie inliers ≥ 15 et err < 3px sur warp synthétique).
+- **`resources/footprint_classes.json`** : 14 classes (même liste ordonnée que `tools/dataset_studio/config/pcb_classes.json` — contrat Studio), règles regex ordonnées (footprint/ref/value, AND entre champs présents, OR = plusieurs règles). Règles LED avant diode, WS2812/SK6812 → led. Validé par simulation Python sur 17 footprints KiCad réels.
+- **`src/features/DatasetCreator.{h,cpp}`** : QThread dédié (pattern TrackingWorker). 5 gates (inliers≥25, reproj≤3px, netteté Laplacien≥100 sur downscale 0.25×, exposition ≤5% pixels cramés/noirs, fraîcheur homographie ≤300ms), throttle 500ms, anti-doublon de pose (coins board projetés, Δ moyen ≥15px), projection bboxes (filtre Layer, shrink 0.85, clip ≥60% visible, min 12px), sortie `$IBOM_DATA_DIR/dataset/session_<date>_<board>_<éclairage>/` (images JPEG q95 + labels YOLO + manifest.jsonl avec homographie/inliers/blur/tags). Footprints non mappés loggés + récapitulés au stop. `ClassMapper` + `projectLabels()` purs → testables.
+- **`src/gui/DatasetPanel.{h,cpp}`** : dock gauche (tabifié avec Inspection) — board/éclairage, Start/Stop, 5 gates ●vert/rouge avec valeurs, compteurs sauvées/rejetées **par cause**, labels dernière frame.
+- **Config** : section `dataset.*` (10 seuils, defaults plan §A2/A3).
+- **Application** : thread + worker + 8 connexions (frames bruts — cohérents avec l'homographie tracking estimée sur frames bruts), `setProject` au chargement iBOM (Layer::Front v1). ⚠ Metatypes : slot `setProject` déclaré avec types **pleinement qualifiés** (piège #17).
+- **`tests/test_dataset_creator.cpp`** : 6 cas — règles ordonnées/insensibles à la casse, rejet sans 'other', géométrie YOLO exacte (scale ×10), shrink, gates (layer/taille/clipping), homographie vide.
+
+### ✅ Build Jetson validé (2026-06-11)
+`bash scripts/build_jetson.sh` sur Jetson AGX Orin JP6.2 container dev :
+- **31/31 steps**, binaire `build/bin/MicroscopeIBOM` (1.3 MB) généré sans erreur
+- Qt 6.2.4 / OpenCV 4.10.0 / CUDA / TensorRT / UMA tous détectés
+- 2 warnings `-Wunused` dans `Application.cpp` (lignes 474 et 520) — corrigés avec `[[maybe_unused]]` dans le commit suivant
+- `ctest --output-on-failure` : ✅ **7/7 tests passent** (0.48 s total)
+
+### ✅ Branche validée — mergée dans main
+`claude/dreamy-cori-oec93c` → `main` après validation complète sur Jetson.
+
+### Prochaine étape
+1. Première session de capture réelle (caméra branchée + carte avec iBOM, onglet Dataset dans l'app)
+2. Phase B (assistant variété : carte de couverture, check-list zoom/éclairage, quotas)
+3. Phases C1-C2 (validate_dataset.py, split_dataset.py) si pas déjà faits
 
 ---
 

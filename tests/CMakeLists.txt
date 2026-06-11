@@ -86,3 +86,26 @@ if(Qt6_FOUND)
 else()
     message(STATUS "Qt6 Core not found — skipping test_tracking_worker")
 endif()
+
+# Dataset creator test — class mapping + YOLO label projection. DatasetCreator
+# is a QObject (AUTOMOC) but the tests only exercise the pure helpers; Qt6::Core
+# is enough (QObject/QString/QDateTime).
+if(Qt6_FOUND)
+    add_executable(test_dataset_creator
+        test_dataset_creator.cpp
+        ${CMAKE_SOURCE_DIR}/src/features/DatasetCreator.cpp
+    )
+    set_target_properties(test_dataset_creator PROPERTIES AUTOMOC ON)
+    target_include_directories(test_dataset_creator PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(test_dataset_creator PRIVATE cxx_std_20)
+    target_link_libraries(test_dataset_creator PRIVATE
+        Catch2::Catch2WithMain
+        Qt6::Core
+        opencv_core opencv_imgproc opencv_imgcodecs
+        nlohmann_json::nlohmann_json
+        spdlog::spdlog
+    )
+    add_test(NAME test_dataset_creator COMMAND test_dataset_creator)
+else()
+    message(STATUS "Qt6 Core not found — skipping test_dataset_creator")
+endif()

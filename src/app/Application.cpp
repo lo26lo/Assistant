@@ -21,6 +21,8 @@
 #include "features/PickAndPlace.h"
 #include "features/Measurement.h"
 #include "features/SnapshotHistory.h"
+#include "features/DatasetCreator.h"
+#include "gui/DatasetPanel.h"
 #include "export/DataExporter.h"
 #include "gui/Theme.h"
 #include "utils/Logger.h"
@@ -43,8 +45,11 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
+#include <filesystem>
 
 Q_DECLARE_METATYPE(cv::Mat)
+Q_DECLARE_METATYPE(std::shared_ptr<const ibom::IBomProject>)
+Q_DECLARE_METATYPE(ibom::Layer)
 
 namespace ibom {
 
@@ -65,6 +70,11 @@ Application::~Application()
         m_trackingThread->quit();
         m_trackingThread->wait();
     }
+
+    if (m_datasetThread) {
+        m_datasetThread->quit();
+        m_datasetThread->wait();
+    }
 }
 
 bool Application::initialize()
@@ -72,6 +82,10 @@ bool Application::initialize()
     // Register types for cross-thread signal/slot marshalling.
     qRegisterMetaType<cv::Mat>("cv::Mat");
     qRegisterMetaType<ibom::camera::FrameRef>("ibom::camera::FrameRef");
+    qRegisterMetaType<ibom::features::DatasetStatus>("ibom::features::DatasetStatus");
+    qRegisterMetaType<std::shared_ptr<const IBomProject>>(
+        "std::shared_ptr<const ibom::IBomProject>");
+    qRegisterMetaType<ibom::Layer>("ibom::Layer");
 
     // Logging is already initialized in main(); just flush on info for diagnostics
     spdlog::flush_on(spdlog::level::info);
@@ -227,6 +241,39 @@ void Application::createSubsystems()
         Q_ARG(int,    m_config->trackingIntervalMs()),
         Q_ARG(float,  m_config->trackingDownscale()));
 
+    // Dataset capture worker on its own thread — JPEG writes + label
+    // projection must never block the GUI (same pattern as tracking).
+    m_datasetThread = new QThread(this);
+    m_datasetThread->setObjectName("DatasetCapture");
+    m_datasetCreator = new features::DatasetCreator();
+    m_datasetCreator->moveToThread(m_datasetThread);
+    connect(m_datasetThread, &QThread::finished,
+            m_datasetCreator, &QObject::deleteLater);
+    m_datasetThread->start();
+    QMetaObject::invokeMethod(m_datasetCreator, "configure", Qt::QueuedConnection,
+        Q_ARG(int,    m_config->datasetMinInliers()),
+        Q_ARG(double, m_config->datasetMaxReprojErrPx()),
+        Q_ARG(double, m_config->datasetMinSharpness()),
+        Q_ARG(double, m_config->datasetMaxBadExposureFrac()),
+        Q_ARG(int,    m_config->datasetMaxHomographyAgeMs()),
+        Q_ARG(int,    m_config->datasetSaveIntervalMs()),
+        Q_ARG(double, m_config->datasetMinPoseDeltaPx()),
+        Q_ARG(double, m_config->datasetBboxShrink()),
+        Q_ARG(int,    m_config->datasetMinBoxPx()),
+        Q_ARG(double, m_config->datasetMinVisibleFrac()));
+    QMetaObject::invokeMethod(m_datasetCreator, "setOutputRoot", Qt::QueuedConnection,
+        Q_ARG(QString, QString::fromStdString((utils::dataDir() / "dataset").string())));
+    {
+        // Class rules: user override in the data dir wins, else the file
+        // shipped in the repo (cwd = repo root inside the container).
+        namespace fs = std::filesystem;
+        const fs::path overridePath = utils::dataDir() / "footprint_classes.json";
+        const fs::path defaultPath  = "resources/footprint_classes.json";
+        const fs::path rulesPath = fs::exists(overridePath) ? overridePath : defaultPath;
+        QMetaObject::invokeMethod(m_datasetCreator, "setClassRulesPath", Qt::QueuedConnection,
+            Q_ARG(QString, QString::fromStdString(rulesPath.string())));
+    }
+
     // Inspection workflow features
     spdlog::info("Creating inspection workflow features...");
     m_pickAndPlace    = std::make_unique<features::PickAndPlace>(this);
@@ -310,7 +357,7 @@ void Application::connectSignals()
     // ── Tracking worker → homography update on GUI thread ───────
     if (m_trackingWorker) {
         connect(m_trackingWorker, &overlay::TrackingWorker::homographyUpdated,
-                this, [this](cv::Mat combined) {
+                this, [this](cv::Mat combined, int /*inliers*/, double /*reprojErr*/) {
             if (!m_liveMode || combined.empty() || !m_homography) return;
             m_homography->setMatrix(combined);
             if (m_overlayRenderer)
@@ -322,6 +369,32 @@ void Application::connectSignals()
                 this, [](const QString& msg) {
             spdlog::warn("Tracking worker error: {}", msg.toStdString());
         }, Qt::QueuedConnection);
+
+        // Tracking quality feed for dataset capture (worker → worker, queued).
+        if (m_datasetCreator) {
+            connect(m_trackingWorker, &overlay::TrackingWorker::homographyUpdated,
+                    m_datasetCreator, &features::DatasetCreator::onHomography,
+                    Qt::QueuedConnection);
+        }
+    }
+
+    // ── Dataset capture panel ⇄ worker ──────────────────────────
+    if (m_datasetCreator && m_mainWindow->datasetPanel()) {
+        auto* panel = m_mainWindow->datasetPanel();
+        connect(panel, &gui::DatasetPanel::startRequested,
+                m_datasetCreator, &features::DatasetCreator::startSession,
+                Qt::QueuedConnection);
+        connect(panel, &gui::DatasetPanel::stopRequested,
+                m_datasetCreator, &features::DatasetCreator::stopSession,
+                Qt::QueuedConnection);
+        connect(m_datasetCreator, &features::DatasetCreator::sessionStarted,
+                panel, &gui::DatasetPanel::onSessionStarted, Qt::QueuedConnection);
+        connect(m_datasetCreator, &features::DatasetCreator::sessionStopped,
+                panel, &gui::DatasetPanel::onSessionStopped, Qt::QueuedConnection);
+        connect(m_datasetCreator, &features::DatasetCreator::sessionError,
+                panel, &gui::DatasetPanel::onSessionError, Qt::QueuedConnection);
+        connect(m_datasetCreator, &features::DatasetCreator::statusUpdated,
+                panel, &gui::DatasetPanel::updateStatus, Qt::QueuedConnection);
     }
 
     // ── Camera toggle ───────────────────────────────────────────
@@ -358,6 +431,14 @@ void Application::connectSignals()
                 Q_ARG(ibom::camera::FrameRef, frameRef));
         }
 
+        // ── Dataset capture: same raw frame, own thread, throttles itself ──
+        // Raw (non-undistorted) frame on purpose: the tracking homography is
+        // estimated on raw frames, so labels and pixels stay consistent.
+        if (m_datasetCreator) {
+            QMetaObject::invokeMethod(m_datasetCreator, "processFrame", Qt::QueuedConnection,
+                Q_ARG(ibom::camera::FrameRef, frameRef));
+        }
+
         // Apply undistortion if calibrated (allocates a new Mat; unavoidable).
         cv::Mat processed;
         if (m_calibration && m_calibration->isCalibrated()) {
@@ -390,7 +471,7 @@ void Application::connectSignals()
             // Draw component pads, silkscreen outlines, and labels
             const bool drawPads = m_config->showPads();
             const bool drawSilk = m_config->showSilkscreen();
-            const bool drawFab  = m_config->showFabrication();
+            [[maybe_unused]] const bool drawFab = m_config->showFabrication();
 
             // Resolve per-state base colors from Config (user-customizable via Settings)
             QColor cSelected = QColor(QString::fromStdString(m_config->selectedColorHex()));
@@ -436,7 +517,7 @@ void Application::connectSignals()
                     cv::Point2f padCenter(
                         static_cast<float>(pad.position.x),
                         static_cast<float>(pad.position.y));
-                    cv::Point2f imgPad = m_homography->pcbToImage(padCenter);
+                    [[maybe_unused]] cv::Point2f imgPad = m_homography->pcbToImage(padCenter);
 
                     // Transform pad size: map a rect at pad position
                     auto padCorners = m_homography->transformRect(
@@ -1272,6 +1353,15 @@ void Application::loadIBomFile(const QString& path)
 
     m_mainWindow->updateStatusMessage(
         tr("iBOM loaded: %1 components").arg(m_ibomProject->components.size()));
+
+    // Hand the project to the dataset capture worker (Front face in v1 —
+    // matches the overlay, which also renders Layer::Front only).
+    if (m_datasetCreator) {
+        QMetaObject::invokeMethod(m_datasetCreator, "setProject", Qt::QueuedConnection,
+            Q_ARG(std::shared_ptr<const ibom::IBomProject>,
+                  std::shared_ptr<const IBomProject>(m_ibomProject)),
+            Q_ARG(ibom::Layer, Layer::Front));
+    }
 
     emit ibomLoaded(static_cast<int>(m_ibomProject->components.size()));
 }

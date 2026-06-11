@@ -56,8 +56,11 @@ public slots:
     void processFrame(ibom::camera::FrameRef frame);
 
 signals:
-    /// Emitted with the composed homography (PCB → current image).
-    void homographyUpdated(cv::Mat combinedHomography);
+    /// Emitted with the composed homography (PCB → current image) and the
+    /// quality of the estimate: RANSAC inlier count and the median
+    /// reprojection error (px) of those inliers. Consumers gate on these
+    /// to decide whether the homography is trustworthy (e.g. DatasetCreator).
+    void homographyUpdated(cv::Mat combinedHomography, int inliers, double reprojErrPx);
 
     /// Emitted once when a reference frame has been captured.
     void referenceCaptured(int keypointCount);

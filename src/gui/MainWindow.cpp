@@ -5,6 +5,7 @@
 #include "InspectionWizard.h"
 #include "InspectionPanel.h"
 #include "StatsPanel.h"
+#include "DatasetPanel.h"
 #include "SettingsDialog.h"
 #include "HelpDialog.h"
 #include "Theme.h"
@@ -268,6 +269,17 @@ void MainWindow::createDockWidgets()
     inspDock->setMaximumWidth(360);
     addDockWidget(Qt::LeftDockWidgetArea, inspDock);
 
+    // Dataset capture panel (left, tabified with Inspection)
+    m_datasetPanel = new DatasetPanel(this);
+    auto* datasetDock = new QDockWidget(tr("Dataset"), this);
+    datasetDock->setObjectName("DatasetDock");
+    datasetDock->setWidget(m_datasetPanel);
+    datasetDock->setMinimumWidth(280);
+    datasetDock->setMaximumWidth(360);
+    addDockWidget(Qt::LeftDockWidgetArea, datasetDock);
+    tabifyDockWidget(inspDock, datasetDock);
+    inspDock->raise();  // inspection remains the default left tab
+
     // Inspection wizard (floating, hidden by default)
     m_inspectionWizard = new InspectionWizard(this);
 
@@ -279,6 +291,7 @@ void MainWindow::createDockWidgets()
         viewMenu->addAction(controlDock->toggleViewAction());
         viewMenu->addAction(statsDock->toggleViewAction());
         viewMenu->addAction(inspDock->toggleViewAction());
+        viewMenu->addAction(datasetDock->toggleViewAction());
     }
 }
 

@@ -21,6 +21,7 @@ class ControlPanel;
 class InspectionWizard;
 class InspectionPanel;
 class StatsPanel;
+class DatasetPanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -35,6 +36,7 @@ public:
     InspectionWizard* inspectionWizard() { return m_inspectionWizard; }
     InspectionPanel*  inspectionPanel()  { return m_inspectionPanel; }
     StatsPanel*       statsPanel()       { return m_statsPanel; }
+    DatasetPanel*     datasetPanel()     { return m_datasetPanel; }
 
     void setDarkMode(bool dark);
     void updateFpsDisplay(double fps);
@@ -89,6 +91,7 @@ private:
     InspectionWizard* m_inspectionWizard = nullptr;
     InspectionPanel*  m_inspectionPanel  = nullptr;
     StatsPanel*       m_statsPanel       = nullptr;
+    DatasetPanel*     m_datasetPanel     = nullptr;
 
     // Toolbar & actions
     QToolBar* m_mainToolBar   = nullptr;

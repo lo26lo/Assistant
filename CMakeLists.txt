@@ -137,6 +137,7 @@ set(SOURCES
     src/gui/InspectionWizard.cpp
     src/gui/InspectionPanel.cpp
     src/gui/StatsPanel.cpp
+    src/gui/DatasetPanel.cpp
     src/gui/SettingsDialog.cpp
     src/gui/HelpDialog.cpp
 
@@ -148,6 +149,7 @@ set(SOURCES
     src/features/StencilAlign.cpp
     src/features/SnapshotHistory.cpp
     src/features/RemoteView.cpp
+    src/features/DatasetCreator.cpp
 
     # Export
     src/export/ReportGenerator.cpp
@@ -197,6 +199,7 @@ set(HEADERS
     src/gui/InspectionWizard.h
     src/gui/InspectionPanel.h
     src/gui/StatsPanel.h
+    src/gui/DatasetPanel.h
     src/gui/SettingsDialog.h
     src/gui/HelpDialog.h
     src/gui/Theme.h
@@ -209,6 +212,7 @@ set(HEADERS
     src/features/StencilAlign.h
     src/features/SnapshotHistory.h
     src/features/RemoteView.h
+    src/features/DatasetCreator.h
 
     # Export
     src/export/ReportGenerator.h

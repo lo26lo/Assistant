@@ -68,8 +68,14 @@ TEST_CASE("TrackingWorker recovers a known homography", "[tracking]")
                      [&](int n) { refKp = n; });
 
     cv::Mat updated;
+    int inliers = 0;
+    double reprojErr = -1.0;
     QObject::connect(&worker, &TrackingWorker::homographyUpdated,
-                     [&](cv::Mat h) { updated = h.clone(); });
+                     [&](cv::Mat h, int n, double e) {
+                         updated = h.clone();
+                         inliers = n;
+                         reprojErr = e;
+                     });
 
     QString err;
     QObject::connect(&worker, &TrackingWorker::trackingError,
@@ -114,6 +120,12 @@ TEST_CASE("TrackingWorker recovers a known homography", "[tracking]")
 
     INFO("max reprojection error = " << maxErr << " px");
     REQUIRE(maxErr < 5.0);
+
+    // Quality metrics published with the homography: a clean synthetic warp
+    // must yield a healthy inlier count and a sub-threshold median error.
+    REQUIRE(inliers >= 15);
+    REQUIRE(reprojErr >= 0.0);
+    REQUIRE(reprojErr < 3.0);
 }
 
 TEST_CASE("TrackingWorker emits no homography without a base", "[tracking]")
@@ -125,7 +137,7 @@ TEST_CASE("TrackingWorker emits no homography without a base", "[tracking]")
 
     bool got = false;
     QObject::connect(&worker, &TrackingWorker::homographyUpdated,
-                     [&](cv::Mat) { got = true; });
+                     [&](cv::Mat, int, double) { got = true; });
 
     const cv::Mat base = makeTexture();
     worker.processFrame(wrap(base));  // captures reference

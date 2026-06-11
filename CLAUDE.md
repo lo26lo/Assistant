@@ -145,11 +145,13 @@ main.cpp
        ├─ Homography (pcbToImage, transformRect, setMatrix)
        ├─ HeatmapRenderer (heatmap défauts)
        ├─ TrackingWorker (QThread dédié ORB+RANSAC, downscale 0.5×)
+       ├─ DatasetCreator (QThread dédié — capture + auto-annotation YOLO, Phase A)
        └─ MainWindow
             ├─ CameraView (paintEvent, overlay opacity, double-clic fullscreen, zoom/pan)
             ├─ ControlPanel (toggles, sliders)
             ├─ BomPanel (QTableWidget, filtres, checkboxes)
             ├─ StatsPanel (FPS, GPU, scale px/mm)
+            ├─ DatasetPanel (start/stop session, 5 gates live, compteurs)
             ├─ SettingsDialog (4 onglets: Camera/Overlay/Tracking/AI)
             ├─ HelpDialog (8 onglets)
             └─ InspectionWizard (4 étapes)
@@ -161,7 +163,8 @@ main.cpp
 |--------|------|
 | Main/GUI | Qt event loop, paintEvent, signals/slots UI |
 | CameraCapture | `captureLoop()` — lit `cv::VideoCapture`, émet `frameReady(FrameRef)` en QueuedConnection |
-| TrackingWorker | ORB+RANSAC — reçoit `processFrame(FrameRef)` via QueuedConnection, émet `homographyUpdated(cv::Mat)` |
+| TrackingWorker | ORB+RANSAC — reçoit `processFrame(FrameRef)` via QueuedConnection, émet `homographyUpdated(cv::Mat, int inliers, double reprojErrPx)` |
+| DatasetCreator | Capture dataset — gates qualité, projection bboxes iBOM → labels YOLO, écriture JPEG/labels/manifest sous `$IBOM_DATA_DIR/dataset/` |
 
 Zero-copy : `FrameRef = std::shared_ptr<const cv::Mat>`. La frame allouée dans le thread capture est partagée sans clone jusqu'à CameraView. Le calibrateur fait un `.clone()` explicite pour stockage long-terme.
 
@@ -178,11 +181,11 @@ Zero-copy : `FrameRef = std::shared_ptr<const cv::Mat>`. La frame allouée dans 
 | `gui/` | `MainWindow`, `CameraView`, `BomPanel`, `ControlPanel`, `StatsPanel`, `SettingsDialog`, `HelpDialog`, `InspectionWizard`, `Theme.h` | ✅ |
 | `utils/` | `Logger.h/.cpp`, `GpuUtils.h/.cpp`, `ImageUtils.h/.cpp` | ✅ |
 | `ai/` | `InferenceEngine`, `ModelManager`, `ComponentDetector`, `OCREngine`, `SolderInspector` | 🟡 câblé (init auto si `.onnx` présent, cf docs/AI_PIPELINE.md) |
-| `features/` | `PickAndPlace`, `VoiceControl`, `BarcodeScanner`, `Measurement`, `StencilAlign`, `SnapshotHistory`, `RemoteView` | ❌ non instancié |
+| `features/` | `PickAndPlace`, `VoiceControl`, `BarcodeScanner`, `Measurement`, `StencilAlign`, `SnapshotHistory`, `RemoteView`, `DatasetCreator` | 🟡 partiel |
 | `export/` | `ReportGenerator`, `DataExporter` | ❌ non instancié |
 
 > `ai/` : depuis 2026-06-10, `Application::initializeAI()` initialise ONNX Runtime + charge le détecteur **en thread d'arrière-plan** si un `.onnx` existe dans `models/` (flag `ai.enabled`, modèle `ai.detector_model`, défaut `component_detector`). Sans modèle, l'app reste 100 % fonctionnelle. Signal `aiStatusChanged(bool, QString)` ; accès via `componentDetector()` (nullptr tant que pas prêt). `OCREngine`/`SolderInspector` restent non câblés.
-> `features/`, `export/` : code complet mais non instancié (sauf PickAndPlace/Measurement/SnapshotHistory/DataExporter, créés par `Application`).
+> `features/`, `export/` : code complet mais non instancié (sauf PickAndPlace/Measurement/SnapshotHistory/DataExporter/**DatasetCreator**, créés par `Application`). `DatasetCreator` (Phase A, 2026-06-11) : capture + auto-annotation YOLO sur QThread dédié — gates qualité (inliers/reproj/netteté/exposition/fraîcheur), mapping classes via `resources/footprint_classes.json` (même liste ordonnée que `tools/dataset_studio/config/pcb_classes.json` — ne pas réordonner), sortie `$IBOM_DATA_DIR/dataset/session_*/` au format attendu par le Studio. UI : `gui/DatasetPanel` (dock gauche). Cf docs/DATASET_CREATOR_PLAN.md.
 
 ---
 

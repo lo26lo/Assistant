@@ -120,6 +120,21 @@ bool Config::load(const std::string& path)
             m_selectedOutlineWidth = insp.value("selected_outline_px", m_selectedOutlineWidth);
         }
 
+        // Dataset capture
+        if (j.contains("dataset")) {
+            auto& ds = j["dataset"];
+            m_datasetMinInliers         = ds.value("min_inliers", m_datasetMinInliers);
+            m_datasetMaxReprojErrPx     = ds.value("max_reproj_err_px", m_datasetMaxReprojErrPx);
+            m_datasetMinSharpness       = ds.value("min_sharpness", m_datasetMinSharpness);
+            m_datasetMaxBadExposureFrac = ds.value("max_bad_exposure_frac", m_datasetMaxBadExposureFrac);
+            m_datasetMaxHomographyAgeMs = ds.value("max_homography_age_ms", m_datasetMaxHomographyAgeMs);
+            m_datasetSaveIntervalMs     = ds.value("save_interval_ms", m_datasetSaveIntervalMs);
+            m_datasetMinPoseDeltaPx     = ds.value("min_pose_delta_px", m_datasetMinPoseDeltaPx);
+            m_datasetBboxShrink         = ds.value("bbox_shrink", m_datasetBboxShrink);
+            m_datasetMinBoxPx           = ds.value("min_box_px", m_datasetMinBoxPx);
+            m_datasetMinVisibleFrac     = ds.value("min_visible_frac", m_datasetMinVisibleFrac);
+        }
+
         spdlog::info("Config loaded from '{}'", filePath);
         return true;
 
@@ -204,6 +219,20 @@ bool Config::save(const std::string& path) const
             {"color_normal",        m_normalColorHex},
             {"placed_opacity",      m_placedOpacity},
             {"selected_outline_px", m_selectedOutlineWidth}
+        };
+
+        // Dataset capture
+        j["dataset"] = {
+            {"min_inliers",           m_datasetMinInliers},
+            {"max_reproj_err_px",     m_datasetMaxReprojErrPx},
+            {"min_sharpness",         m_datasetMinSharpness},
+            {"max_bad_exposure_frac", m_datasetMaxBadExposureFrac},
+            {"max_homography_age_ms", m_datasetMaxHomographyAgeMs},
+            {"save_interval_ms",      m_datasetSaveIntervalMs},
+            {"min_pose_delta_px",     m_datasetMinPoseDeltaPx},
+            {"bbox_shrink",           m_datasetBboxShrink},
+            {"min_box_px",            m_datasetMinBoxPx},
+            {"min_visible_frac",      m_datasetMinVisibleFrac}
         };
 
         std::ofstream ofs(filePath);

@@ -1,6 +1,6 @@
 # Plan — Dataset Creator : capture & annotation automatiques pour le détecteur de composants
 
-> **Date** : 2026-06-10 · **Statut** : PLAN (rien d'implémenté)
+> **Date** : 2026-06-10 · **Statut** : Phase A implémentée le 2026-06-11 (à valider sur Jetson) — Phases B/C/D restent à faire. NB : la Phase C est largement couverte par le wizard Windows/Linux `tools/dataset_studio/` (validation, split par session, entraînement).
 > **Objectif** : produire 800+ images annotées **en quelques sessions de manipulation**, sans annotation manuelle, en réutilisant ce que MicroscopeIBOM sait déjà faire — et en s'inspirant du workflow de [Pokemon-Dataset-Creator](https://github.com/lo26lo/Pokemon-Dataset-Creator) (cf. §8).
 > **Document lié** : [AI_PIPELINE.md](AI_PIPELINE.md) (consommation du modèle entraîné).
 
