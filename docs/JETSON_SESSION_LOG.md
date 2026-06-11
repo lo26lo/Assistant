@@ -11,7 +11,9 @@
 
 ---
 
-## État actuel — au 2026-06-10 (fin de session, 3e itération)
+## État actuel — au 2026-06-11
+
+> **2026-06-11** : PR #2 mergée dans `main` (`f36895e`) — Dataset Studio Lots 1+2 + Phase 1c + pipeline IA + tous les fixes Docker/scripts. Fix `INSTALL.bat` (syntaxe Unix `>/dev/null` → `>nul`, détection via lanceur `py`). Le dev continue sur `claude/dreamy-cori-oec93c`.
 
 > **Nouveau aujourd'hui** (3 itérations) :
 > 1. App **lancée sur l'écran local du Jetson** ✅ + audit complet → [JETSON_AMELIORATIONS.md](JETSON_AMELIORATIONS.md)
@@ -67,6 +69,27 @@ Aucun. Tous les obstacles Phase 0/1/2 sont résolus et documentés dans [JETSON_
 2. Vérifier le statut de [JETSON_ERREURS.md](JETSON_ERREURS.md) pour les bugs ouverts
 3. Sur le Jetson : `cd ~/Assistant-git && git pull && git status`
 4. Continuer là où la dernière session s'est arrêtée
+
+---
+
+## Session 2026-06-11 — Merge Lots 1+2 dans main + fix INSTALL.bat
+
+### Contexte
+PR #2 (Lots 1+2 Dataset Studio + tout le travail Jetson de la branche `claude/dreamy-cori-oec93c`) **mergée dans `main`** (`f36895e`). L'utilisateur teste sur son PC Windows et rapporte : `INSTALL.bat` ne trouve pas Python.
+
+### Bug trouvé
+`INSTALL.bat` ligne 7 : `where python >/dev/null 2>&1` — syntaxe **Unix** invalide en cmd.exe (il faut `>nul`). La redirection échoue → le test python échoue toujours → message "Python introuvable" même avec Python installé. Erreur de ma part lors du Lot 1 (jamais testé sur un vrai Windows).
+
+### Fix livré
+`INSTALL.bat` réécrit :
+- Détection via le lanceur **`py -3`** d'abord (installé par python.org, marche même sans "Add to PATH"), fallback `python`
+- Redirections `>nul 2>&1` (syntaxe cmd correcte)
+- Check version explicite ≥ 3.10 (au lieu d'une exigence implicite 3.10–3.12)
+- Codes d'erreur vérifiés sur `venv` et `pip install`
+- Le venv reste créé automatiquement (une seule fois) — c'est voulu, START.bat le réutilise
+
+### Prochaine étape
+Re-test utilisateur : `git pull origin main` → `INSTALL.bat` → `START.bat`.
 
 ---
 
