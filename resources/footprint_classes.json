@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "Mapping footprint/reference -> classe du détecteur de composants.",
+    "MEME LISTE ORDONNEE que tools/dataset_studio/config/pcb_classes.json —",
+    "ne pas réordonner : les ids YOLO en dépendent.",
+    "Les règles sont évaluées DANS L'ORDRE, première qui matche gagne.",
+    "Champs d'une règle (tous optionnels, ceux présents doivent TOUS matcher,",
+    "regex case-insensitive, recherche partielle) : footprint, ref, value.",
+    "Pour exprimer un OU, écrire plusieurs règles pour la même classe.",
+    "Un composant qui ne matche aucune règle est loggé avec son footprint",
+    "(jamais classé silencieusement) puis mis dans 'other'."
+  ],
+  "classes": [
+    "resistor",
+    "capacitor",
+    "inductor",
+    "diode",
+    "led",
+    "transistor_sot",
+    "ic_soic",
+    "ic_qfp",
+    "ic_qfn",
+    "ic_bga",
+    "connector",
+    "crystal",
+    "button",
+    "other"
+  ],
+  "rules": [
+    { "class": "led",            "footprint": "LED|WS2812|SK6812|Neopixel" },
+    { "class": "led",            "ref": "^D\\d+", "value": "LED" },
+    { "class": "led",            "value": "WS2812|SK6812|Neopixel" },
+
+    { "class": "resistor",       "footprint": "^R_|:R_|Resistor" },
+    { "class": "resistor",       "ref": "^R\\d+" },
+
+    { "class": "capacitor",      "footprint": "^C_|:C_|Capacitor|^CP_|:CP_" },
+    { "class": "capacitor",      "ref": "^C\\d+" },
+
+    { "class": "inductor",       "footprint": "^L_|:L_|Inductor|Ferrite" },
+    { "class": "inductor",       "ref": "^L\\d+|^FB\\d+" },
+
+    { "class": "transistor_sot", "footprint": "SOT-?\\d" },
+    { "class": "transistor_sot", "ref": "^Q\\d+" },
+
+    { "class": "diode",          "footprint": "^D_|:D_|SOD|Diode" },
+    { "class": "diode",          "ref": "^D\\d+" },
+
+    { "class": "ic_soic",        "footprint": "SOIC|SO-?8|SO-?14|SO-?16|TSSOP|MSOP|SSOP" },
+    { "class": "ic_qfp",         "footprint": "QFP" },
+    { "class": "ic_qfn",         "footprint": "QFN|DFN" },
+    { "class": "ic_bga",         "footprint": "BGA" },
+
+    { "class": "connector",      "footprint": "PinHeader|PinSocket|Conn|USB|JST|Header" },
+    { "class": "connector",      "ref": "^J\\d+|^CN\\d+|^P\\d+" },
+
+    { "class": "crystal",        "footprint": "Crystal|Resonator|Oscillator" },
+    { "class": "crystal",        "ref": "^Y\\d+|^X\\d+" },
+
+    { "class": "button",         "footprint": "Button|SW_|Switch|Tactile" },
+    { "class": "button",         "ref": "^SW\\d+" }
+  ]
+}

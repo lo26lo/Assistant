@@ -165,6 +165,24 @@ public:
     float selectedOutlineWidth() const { return m_selectedOutlineWidth; }
     void setSelectedOutlineWidth(float w) { m_selectedOutlineWidth = w; }
 
+    // --- Dataset capture (Phase A — see docs/DATASET_CREATOR_PLAN.md) ---
+    int    datasetMinInliers() const { return m_datasetMinInliers; }
+    double datasetMaxReprojErrPx() const { return m_datasetMaxReprojErrPx; }
+    /// Laplacian variance threshold below which a frame counts as blurred.
+    double datasetMinSharpness() const { return m_datasetMinSharpness; }
+    /// Max fraction of saturated (white) + crushed (black) pixels.
+    double datasetMaxBadExposureFrac() const { return m_datasetMaxBadExposureFrac; }
+    int    datasetMaxHomographyAgeMs() const { return m_datasetMaxHomographyAgeMs; }
+    /// Min interval between two saved frames (≈ 2 img/s at 500 ms).
+    int    datasetSaveIntervalMs() const { return m_datasetSaveIntervalMs; }
+    /// Min mean displacement (px) of the projected board corners between
+    /// two saved frames — enforces viewpoint variety.
+    double datasetMinPoseDeltaPx() const { return m_datasetMinPoseDeltaPx; }
+    /// Shrink factor applied to projected iBOM bboxes (courtyard > package).
+    double datasetBboxShrink() const { return m_datasetBboxShrink; }
+    int    datasetMinBoxPx() const { return m_datasetMinBoxPx; }
+    double datasetMinVisibleFrac() const { return m_datasetMinVisibleFrac; }
+
 private:
     std::string defaultConfigPath() const;
 
@@ -221,6 +239,18 @@ private:
     std::string m_normalColorHex      = "#AAAA44";  // muted gold (current default)
     float       m_placedOpacity       = 0.45f;      // dim placed comps to background
     float       m_selectedOutlineWidth = 3.0f;      // thicker silk border for selected
+
+    // Dataset capture (defaults from docs/DATASET_CREATOR_PLAN.md §A2/§A3)
+    int    m_datasetMinInliers         = 25;
+    double m_datasetMaxReprojErrPx     = 3.0;
+    double m_datasetMinSharpness       = 100.0;
+    double m_datasetMaxBadExposureFrac = 0.05;
+    int    m_datasetMaxHomographyAgeMs = 300;
+    int    m_datasetSaveIntervalMs     = 500;
+    double m_datasetMinPoseDeltaPx     = 15.0;
+    double m_datasetBboxShrink         = 0.85;
+    int    m_datasetMinBoxPx           = 12;
+    double m_datasetMinVisibleFrac     = 0.6;
 };
 
 } // namespace ibom

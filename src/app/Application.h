@@ -43,6 +43,7 @@ namespace features {
 class PickAndPlace;
 class Measurement;
 class SnapshotHistory;
+class DatasetCreator;
 }
 
 namespace exports {
@@ -169,6 +170,11 @@ private:
     cv::Mat  m_baseHomography;  // Original homography before live tracking
     QThread* m_trackingThread = nullptr;            // owned by Application (QObject parent)
     overlay::TrackingWorker* m_trackingWorker = nullptr;  // lives on m_trackingThread
+
+    // Dataset capture (Phase A) — JPEG encoding + label projection run on a
+    // dedicated thread, same ownership pattern as the tracking worker.
+    QThread* m_datasetThread = nullptr;
+    features::DatasetCreator* m_datasetCreator = nullptr;  // lives on m_datasetThread
 
     // Dynamic scale tracking
     double m_basePixelsPerMm = 0.0;  // pixelsPerMm at initial homography

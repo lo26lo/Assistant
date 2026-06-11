@@ -4,6 +4,9 @@
 #include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace ibom::overlay {
 
 TrackingWorker::TrackingWorker(QObject* parent)
@@ -135,21 +138,45 @@ void TrackingWorker::processFrame(ibom::camera::FrameRef frame)
         if (srcPts.size() < static_cast<size_t>(m_minMatchCount))
             return;
 
-        cv::Mat frameH = cv::findHomography(srcPts, dstPts, cv::RANSAC, m_ransacThreshold);
+        cv::Mat inlierMask;
+        cv::Mat frameH = cv::findHomography(srcPts, dstPts, cv::RANSAC,
+                                            m_ransacThreshold, inlierMask);
         if (frameH.empty() || frameH.rows != 3 || frameH.cols != 3)
             return;
 
         if (m_baseHomography.empty())
             return;
 
+        // Quality of the estimate: inlier count + median reprojection error of
+        // the inliers (median is robust to the few large residuals RANSAC keeps
+        // just under the threshold).
+        std::vector<cv::Point2f> projected;
+        cv::perspectiveTransform(srcPts, projected, frameH);
+        std::vector<double> errs;
+        errs.reserve(srcPts.size());
+        for (size_t i = 0; i < srcPts.size(); ++i) {
+            if (inlierMask.empty() || inlierMask.at<uchar>(static_cast<int>(i))) {
+                const cv::Point2f d = projected[i] - dstPts[i];
+                errs.push_back(std::hypot(static_cast<double>(d.x),
+                                          static_cast<double>(d.y)));
+            }
+        }
+        const int inliers = static_cast<int>(errs.size());
+        double reprojErr = 0.0;
+        if (!errs.empty()) {
+            const auto mid = errs.begin() + errs.size() / 2;
+            std::nth_element(errs.begin(), mid, errs.end());
+            reprojErr = *mid;
+        }
+
         cv::Mat combined = frameH * m_baseHomography;
-        emit homographyUpdated(combined);
+        emit homographyUpdated(combined, inliers, reprojErr);
 
         const auto tEnd = std::chrono::steady_clock::now();
         using ms = std::chrono::duration<double, std::milli>;
-        spdlog::debug("TrackingWorker: {}×{} → kp={} inliers={} | prep={:.1f} detect={:.1f} "
-                      "match={:.1f} homog={:.1f} total={:.1f} ms",
-                      small.cols, small.rows, kp.size(), srcPts.size(),
+        spdlog::debug("TrackingWorker: {}×{} → kp={} inliers={}/{} err={:.2f}px | "
+                      "prep={:.1f} detect={:.1f} match={:.1f} homog={:.1f} total={:.1f} ms",
+                      small.cols, small.rows, kp.size(), inliers, srcPts.size(), reprojErr,
                       ms(tPrep   - t0).count(),
                       ms(tDetect - tPrep).count(),
                       ms(tMatch  - tDetect).count(),
