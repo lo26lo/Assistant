@@ -94,11 +94,17 @@ le paquet apt `libhpdf-dev` qui ne fournit pas de config CMake).
   `elseif(HPDF_LIBRARY)`. Aligne CMake sur le critère `__has_include` du `.cpp`.
 - Entrée #16 dans `JETSON_ERREURS.md` (🟡 CONTOURNÉ — validation build Jetson en attente).
 
-### À faire / reste
-- [ ] Valider le rebuild Jetson après reconfigure propre (`rm -rf build/CMakeCache.txt build/CMakeFiles`)
-- [ ] Confirmer `ls /usr/lib/aarch64-linux-gnu/libhpdf*` (si absent → `apt install libhpdf-dev`)
-- [ ] `ctest --output-on-failure`
-- [ ] Reporter ce patch CMake côté PR #5 avant merge, puis passer #16 ✅ RÉSOLU
+### Validé sur Jetson (2026-06-14)
+- ✅ Rebuild OK après le fix CMake — binaire `build/bin/MicroscopeIBOM` (1,4 MB)
+- ✅ `ctest --output-on-failure` : **7/7 tests passent** (0,45 s)
+- Erreur #16 passée ✅ RÉSOLU.
+- ⚠️ Piège rencontré : copier-coller multi-lignes dans le shell du container pollue le
+  buffer d'entrée (commandes avalées, sortie absente, syntax errors fantômes). Solution :
+  ressortir/rentrer dans le container et taper les commandes **une par une**.
+
+### Reste à faire
+- [ ] Reporter ce patch CMake (`find_library` fallback libharu) côté PR #5 avant merge —
+      actuellement il vit sur `claude/pensive-euler-pvde0v`.
 
 ---
 

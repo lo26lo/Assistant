@@ -15,7 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
-| 16 | 2026-06-14 | CMakeLists.txt / libharu | 🟡 CONTOURNÉ | [Link `undefined reference HPDF_*` — header `<hpdf.h>` présent mais lib non linkée](#erreur-16--link-undefined-reference-hpdf_--header-présent-mais-lib-non-linkée) |
+| 16 | 2026-06-14 | CMakeLists.txt / libharu | ✅ RÉSOLU | [Link `undefined reference HPDF_*` — header `<hpdf.h>` présent mais lib non linkée](#erreur-16--link-undefined-reference-hpdf_--header-présent-mais-lib-non-linkée) |
 | 15 | 2026-06-10 | compose.local.yml / camera | ✅ RÉSOLU | [Caméra USB vue par lsusb mais "No camera detected" dans l'app — /dev/video* non mappés](#erreur-15--caméra-usb-vue-par-lsusb-mais-no-camera-detected-dans-lapp--devvideo-non-mappés) |
 | 14 | 2026-06-10 | compose.local.yml | ✅ RÉSOLU | [`group_add` dupliqués par le merge compose.yml + compose.local.yml](#erreur-14--group_add-dupliques-par-le-merge-composeyml--composelocalyml) |
 | 13 | 2026-05-21 | OpenCV 4.10 / camera | ✅ RÉSOLU | [`CV_AUTOSTEP` pas exposé transitivement sur OpenCV 4.10 Linux](#erreur-13--cv_autostep-pas-expose-transitivement-sur-opencv-410-linux) |
@@ -118,7 +118,7 @@ Ces points sont **anticipés** mais pas encore observés. À convertir en vraie 
 
 **Date :** 2026-06-14
 **Composant :** CMake / libharu (génération PDF rapports)
-**Statut :** 🟡 CONTOURNÉ (fix code appliqué, validation build Jetson en attente)
+**Statut :** ✅ RÉSOLU (fix CMake validé sur Jetson — build + 7/7 ctest, 2026-06-14)
 **Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-06-14
 
 ### Symptôme
@@ -162,7 +162,8 @@ endif()
 ```
 
 Reconfigure propre nécessaire (`rm -rf build/CMakeCache.txt build/CMakeFiles`) pour
-réévaluer le `find_library`. À repasser ✅ RÉSOLU une fois le link Jetson validé.
+réévaluer le `find_library`. **Validé sur Jetson le 2026-06-14** : build OK
+(binaire 1,4 MB) + `ctest` 7/7.
 
 > Note : le fix vit sur la branche `claude/pensive-euler-pvde0v`. La PR #5 elle-même
 > reste à corriger (idéalement intégrer ce patch CMake côté PR avant merge).
