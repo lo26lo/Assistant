@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 17 | 2026-06-14 | Application.cpp / caméra | 🟡 CONTOURNÉ | [`Found 0 camera(s)` sur device V4L2 fonctionnel — énumération via QMediaDevices au lieu d'OpenCV](#erreur-17--found-0-cameras-sur-device-v4l2-fonctionnel--enumeration-via-qmediadevices) |
 | 16 | 2026-06-14 | CMakeLists.txt / libharu | ✅ RÉSOLU | [Link `undefined reference HPDF_*` — header `<hpdf.h>` présent mais lib non linkée](#erreur-16--link-undefined-reference-hpdf_--header-présent-mais-lib-non-linkée) |
 | 15 | 2026-06-10 | compose.local.yml / camera | ✅ RÉSOLU | [Caméra USB vue par lsusb mais "No camera detected" dans l'app — /dev/video* non mappés](#erreur-15--caméra-usb-vue-par-lsusb-mais-no-camera-detected-dans-lapp--devvideo-non-mappés) |
 | 14 | 2026-06-10 | compose.local.yml | ✅ RÉSOLU | [`group_add` dupliqués par le merge compose.yml + compose.local.yml](#erreur-14--group_add-dupliques-par-le-merge-composeyml--composelocalyml) |
@@ -113,6 +114,50 @@ Ces points sont **anticipés** mais pas encore observés. À convertir en vraie 
 ---
 
 <!-- AJOUTER LES NOUVELLES ERREURS AU-DESSUS DE CETTE LIGNE -->
+
+## ERREUR 17 — `Found 0 camera(s)` sur device V4L2 fonctionnel — énumération via QMediaDevices
+
+**Date :** 2026-06-14
+**Composant :** Application.cpp / énumération caméra (Qt Multimedia vs OpenCV V4L2)
+**Statut :** 🟡 CONTOURNÉ (fix appliqué, validation Jetson en attente)
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-06-14
+
+### Symptôme
+Caméra microscope HAYEAR (MOS-4K Pro, `0ac8:3420`) branchée, `/dev/video0` présent et
+mappé dans le container, OpenCV l'ouvre parfaitement — mais l'app affiche « No camera
+detected » et logue `Found 0 camera(s)`. Aucun flux ni device dans l'UI.
+
+```
+[2026-06-14 19:36:20.207] [info] [:] Found 0 camera(s)
+```
+
+Preuve que le matériel est OK (dans le container) :
+```
+$ python3 -c "import cv2; c=cv2.VideoCapture(0, cv2.CAP_V4L2); print(c.isOpened(), c.read()[0])"
+True True
+$ v4l2-ctl -d /dev/video0 --list-formats-ext   # MJPG 1920x1080@30 + H264 + 4K
+```
+
+### Cause
+`Application::initialize()` énumérait les caméras avec **`QMediaDevices::videoInputs()`**
+(backend Qt6 Multimedia, GStreamer/FFmpeg). Sur Jetson dans Docker, ce backend ne voit pas
+les `/dev/video*` (plugins GStreamer caméra absents/non configurés), donc liste vide. Or la
+capture réelle (`CameraCapture::captureLoop`) ouvre le device **par index via OpenCV/V4L2**,
+qui fonctionne. L'énumération et la capture n'utilisaient pas le même backend. Pire :
+`CameraCapture::listDevices()` (énumération OpenCV V4L2, correcte) existait déjà mais
+n'était pas appelée.
+
+### Solution
+Énumérer via `camera::CameraCapture::listDevices()` (même backend que la capture) au lieu de
+`QMediaDevices`. Ce dernier n'est plus interrogé que pour fournir un libellé lisible quand il
+expose le device. Patch dans `Application.cpp` (bloc « Enumerate cameras »).
+
+> Reste à valider : rebuild + lancement sur Jetson, vérifier que la caméra apparaît dans le
+> sélecteur et que le flux s'affiche. Détail format : la caméra streame MJPG/H264/H265 ;
+> `captureLoop` force déjà `FOURCC MJPG` (CLAUDE.md piège FOURCC). À passer ✅ RÉSOLU une fois
+> le flux confirmé à l'écran.
+
+---
 
 ## ERREUR 16 — Link `undefined reference HPDF_*` — header présent mais lib non linkée
 

@@ -102,9 +102,27 @@ le paquet apt `libhpdf-dev` qui ne fournit pas de config CMake).
   buffer d'entrée (commandes avalées, sortie absente, syntax errors fantômes). Solution :
   ressortir/rentrer dans le container et taper les commandes **une par une**.
 
+### Suite — caméra non détectée (erreur #17)
+Après build OK, lancement de l'app : caméra HAYEAR MOS-4K Pro branchée, `/dev/video0` mappé
+dans le container, OpenCV l'ouvre (test Python `True True`), `v4l2-ctl` liste MJPG
+1920×1080@30 — **mais** l'app logue `Found 0 camera(s)` et l'UI ne montre rien.
+
+**Cause** : `Application.cpp` énumérait via `QMediaDevices::videoInputs()` (Qt Multimedia,
+aveugle aux `/dev/video*` sur Jetson/Docker) alors que la capture ouvre par index en
+OpenCV/V4L2. `CameraCapture::listDevices()` (OpenCV) existait mais n'était pas utilisée.
+
+**Fix appliqué** : énumération via `camera::CameraCapture::listDevices()`, QMediaDevices
+réduit à un simple fournisseur de libellé. Cf [JETSON_ERREURS.md](JETSON_ERREURS.md) #17.
+
+Piège de chemin de log noté au passage : le log courant est `logs/pcb_inspector.log`
+**relatif au CWD de lancement** (pas `build/bin/logs/`). Lancé depuis `/opt/microscope-ibom`
+→ `/opt/microscope-ibom/logs/pcb_inspector.log`.
+
 ### Reste à faire
-- [ ] Reporter ce patch CMake (`find_library` fallback libharu) côté PR #5 avant merge —
-      actuellement il vit sur `claude/pensive-euler-pvde0v`.
+- [ ] **Valider sur Jetson** : rebuild + relancer l'app, confirmer caméra dans le sélecteur
+      + flux affiché → passer #17 ✅ RÉSOLU.
+- [ ] Reporter les patchs (CMake libharu #16 + énumération caméra #17) côté PR #5 avant merge
+      — ils vivent sur `claude/pensive-euler-pvde0v`.
 
 ---
 
