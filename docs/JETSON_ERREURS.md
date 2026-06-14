@@ -15,7 +15,8 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
-| 17 | 2026-06-14 | Application.cpp / caméra | ✅ RÉSOLU |
+| 18 | 2026-06-14 | CameraCalibration.cpp | 🟡 EN COURS | [Calibration échoue `No checkerboard patterns detected` sur damier 7×5 valide — détecteur legacy capricieux](#erreur-18--calibration-echoue-sur-damier-valide--detecteur-legacy) |
+| 17 | 2026-06-14 | Application.cpp / caméra | ✅ RÉSOLU | [`Found 0 camera(s)` sur device V4L2 fonctionnel — énumération via QMediaDevices au lieu d'OpenCV](#erreur-17--found-0-cameras-sur-device-v4l2-fonctionnel--enumeration-via-qmediadevices) |
 | 16 | 2026-06-14 | CMakeLists.txt / libharu | ✅ RÉSOLU | [Link `undefined reference HPDF_*` — header `<hpdf.h>` présent mais lib non linkée](#erreur-16--link-undefined-reference-hpdf_--header-présent-mais-lib-non-linkée) |
 | 15 | 2026-06-10 | compose.local.yml / camera | ✅ RÉSOLU | [Caméra USB vue par lsusb mais "No camera detected" dans l'app — /dev/video* non mappés](#erreur-15--caméra-usb-vue-par-lsusb-mais-no-camera-detected-dans-lapp--devvideo-non-mappés) |
 | 14 | 2026-06-10 | compose.local.yml | ✅ RÉSOLU | [`group_add` dupliqués par le merge compose.yml + compose.local.yml](#erreur-14--group_add-dupliques-par-le-merge-composeyml--composelocalyml) |
@@ -114,6 +115,35 @@ Ces points sont **anticipés** mais pas encore observés. À convertir en vraie 
 ---
 
 <!-- AJOUTER LES NOUVELLES ERREURS AU-DESSUS DE CETTE LIGNE -->
+
+## ERREUR 18 — Calibration échoue sur damier valide — détecteur legacy
+
+**Date :** 2026-06-14
+**Composant :** CameraCalibration.cpp / `cv::findChessboardCorners`
+**Statut :** 🟡 EN COURS (fix appliqué, validation Jetson en attente)
+
+### Symptôme
+Caméra HAYEAR fonctionnelle, flux net et contrasté, damier **8×6 cases = 7×5 coins internes**
+(= config par défaut `calibBoardCols=7`/`calibBoardRows=5`), entièrement dans le cadre. Les 5
+images de calibration sont capturées mais : `No checkerboard patterns detected in calibration
+images` → `Calibration failed`.
+
+### Cause
+`cv::findChessboardCorners` (détecteur **legacy**) est connu pour échouer fréquemment sur des
+damiers pourtant valides dès qu'il y a perspective, éclairage non uniforme ou reflets — typique
+d'une caméra microscope. La géométrie et la frame (brute, clonée depuis `latestFrame`) étaient
+correctes ; ce n'était ni un problème de config, ni d'overlay.
+
+### Solution
+Basculer sur **`cv::findChessboardCornersSB`** (sector-based, OpenCV 4.x, sous-pixel natif,
+nettement plus robuste) avec flags `NORMALIZE_IMAGE | EXHAUSTIVE | ACCURACY`, et **fallback**
+sur le détecteur legacy + `cornerSubPix` si SB échoue. Ajout d'un `spdlog::warn` par image non
+détectée pour diagnostiquer les échecs restants. Patch dans `CameraCalibration::calibrate()`.
+
+> À valider sur Jetson : refaire les 5 prises et confirmer que la calibration aboutit (RMS
+> error loggée + `calibration.yml` écrit). Passer ✅ RÉSOLU une fois confirmé.
+
+---
 
 ## ERREUR 17 — `Found 0 camera(s)` sur device V4L2 fonctionnel — énumération via QMediaDevices
 

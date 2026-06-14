@@ -42,7 +42,20 @@ double CameraCalibration::calibrate(const std::vector<cv::Mat>& images,
         imageSize = gray.size();
 
         std::vector<cv::Point2f> corners;
-        bool found = cv::findChessboardCorners(gray, boardSize, corners,
+        // findChessboardCornersSB (sector-based, OpenCV 4.x) is far more robust
+        // than the legacy detector under perspective/uneven lighting and returns
+        // sub-pixel corners directly. Fall back to the legacy detector + cornerSubPix
+        // if SB fails (e.g. very low resolution).
+        bool found = cv::findChessboardCornersSB(gray, boardSize, corners,
+            cv::CALIB_CB_NORMALIZE_IMAGE | cv::CALIB_CB_EXHAUSTIVE | cv::CALIB_CB_ACCURACY);
+
+        if (found) {
+            imagePoints.push_back(corners);
+            objectPoints.push_back(objPts);
+            continue;
+        }
+
+        found = cv::findChessboardCorners(gray, boardSize, corners,
             cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE);
 
         if (found) {
@@ -50,6 +63,9 @@ double CameraCalibration::calibrate(const std::vector<cv::Mat>& images,
                 cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::COUNT, 30, 0.001));
             imagePoints.push_back(corners);
             objectPoints.push_back(objPts);
+        } else {
+            spdlog::warn("Checkerboard not found in one calibration image "
+                         "(expected {}x{} inner corners)", boardSize.width, boardSize.height);
         }
     }
 
