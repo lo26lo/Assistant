@@ -134,12 +134,23 @@ bool Application::initialize()
     // the engine (minutes); the app is fully usable without it meanwhile.
     initializeAI();
 
-    // Enumerate cameras and populate ControlPanel
+    // Enumerate cameras and populate ControlPanel.
+    // The capture pipeline opens devices by index via OpenCV/V4L2, so we
+    // enumerate the same way (CameraCapture::listDevices). QMediaDevices is
+    // only queried for friendlier labels: on Jetson-in-Docker its multimedia
+    // backend frequently fails to see /dev/video* even when V4L2 capture works
+    // perfectly — relying on it alone yields "0 cameras" on a working device.
     {
         QStringList cameraNames;
-        const auto cameras = QMediaDevices::videoInputs();
-        for (int i = 0; i < cameras.size(); ++i)
-            cameraNames << QString("%1: %2").arg(i).arg(cameras[i].description());
+        const auto v4lDevices = camera::CameraCapture::listDevices();
+        const auto qtCameras  = QMediaDevices::videoInputs();
+        for (size_t i = 0; i < v4lDevices.size(); ++i) {
+            const int qi = static_cast<int>(i);
+            QString label = (qi < qtCameras.size())
+                ? qtCameras[qi].description()
+                : QString::fromStdString(v4lDevices[i]);
+            cameraNames << QString("%1: %2").arg(qi).arg(label);
+        }
         if (cameraNames.isEmpty())
             cameraNames << tr("No camera detected");
         m_mainWindow->controlPanel()->setCameraDevices(cameraNames);
@@ -149,7 +160,7 @@ bool Application::initialize()
             if (idx >= 0 && idx < cameraNames.size())
                 cp->findChild<QComboBox*>()->setCurrentIndex(idx);
         }
-        spdlog::info("Found {} camera(s)", cameras.size());
+        spdlog::info("Found {} camera(s) (V4L2 enumeration)", v4lDevices.size());
     }
 
     // Show main window

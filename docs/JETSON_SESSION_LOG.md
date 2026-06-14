@@ -213,6 +213,58 @@ Exploration complète de `src/`, `tools/`, `tests/`, `Config.h` vs `SettingsDial
 
 ---
 
+## Session 2026-06-14 — Test PR #5 sur Jetson : fix link libharu
+
+### Contexte
+L'utilisateur teste la PR #5 (`l0l0l0/Assistant:claude/focused-fermi-if21mm`, 9 items de
+`IDEES_AMELIORATIONS.md`) sur le Jetson, dans le container dev, depuis un autre compte
+GitHub. Marche à suivre établie : fork ajouté comme remote `pr5`, fetch + checkout de la
+branche dans le container (réseau GitHub OK seulement depuis le container, pas l'hôte
+Jetson), puis `bash scripts/build_jetson.sh`.
+
+### Problème rencontré
+Build KO au link : `undefined reference to HPDF_*` (cf [JETSON_ERREURS.md](JETSON_ERREURS.md)
+entrée #16). `ReportGenerator.cpp` compile le code PDF via `__has_include(<hpdf.h>)` (header
+présent) mais le CMake ne linke jamais `libhpdf.so` (aucun `find_package` n'aboutit avec
+le paquet apt `libhpdf-dev` qui ne fournit pas de config CMake).
+
+### Livré
+- **`CMakeLists.txt`** : fallback `find_library(HPDF_LIBRARY NAMES hpdf)` + branche de link
+  `elseif(HPDF_LIBRARY)`. Aligne CMake sur le critère `__has_include` du `.cpp`.
+- Entrée #16 dans `JETSON_ERREURS.md` (🟡 CONTOURNÉ — validation build Jetson en attente).
+
+### Validé sur Jetson (2026-06-14)
+- ✅ Rebuild OK après le fix CMake — binaire `build/bin/MicroscopeIBOM` (1,4 MB)
+- ✅ `ctest --output-on-failure` : **7/7 tests passent** (0,45 s)
+- Erreur #16 passée ✅ RÉSOLU.
+- ⚠️ Piège rencontré : copier-coller multi-lignes dans le shell du container pollue le
+  buffer d'entrée (commandes avalées, sortie absente, syntax errors fantômes). Solution :
+  ressortir/rentrer dans le container et taper les commandes **une par une**.
+
+### Suite — caméra non détectée (erreur #17)
+Après build OK, lancement de l'app : caméra HAYEAR MOS-4K Pro branchée, `/dev/video0` mappé
+dans le container, OpenCV l'ouvre (test Python `True True`), `v4l2-ctl` liste MJPG
+1920×1080@30 — **mais** l'app logue `Found 0 camera(s)` et l'UI ne montre rien.
+
+**Cause** : `Application.cpp` énumérait via `QMediaDevices::videoInputs()` (Qt Multimedia,
+aveugle aux `/dev/video*` sur Jetson/Docker) alors que la capture ouvre par index en
+OpenCV/V4L2. `CameraCapture::listDevices()` (OpenCV) existait mais n'était pas utilisée.
+
+**Fix appliqué** : énumération via `camera::CameraCapture::listDevices()`, QMediaDevices
+réduit à un simple fournisseur de libellé. Cf [JETSON_ERREURS.md](JETSON_ERREURS.md) #17.
+
+Piège de chemin de log noté au passage : le log courant est `logs/pcb_inspector.log`
+**relatif au CWD de lancement** (pas `build/bin/logs/`). Lancé depuis `/opt/microscope-ibom`
+→ `/opt/microscope-ibom/logs/pcb_inspector.log`.
+
+### Reste à faire
+- [ ] **Valider sur Jetson** : rebuild + relancer l'app, confirmer caméra dans le sélecteur
+      + flux affiché → passer #17 ✅ RÉSOLU.
+- [ ] Reporter les patchs (CMake libharu #16 + énumération caméra #17) côté PR #5 avant merge
+      — ils vivent sur `claude/pensive-euler-pvde0v`.
+
+---
+
 ## Session 2026-06-11 (suite) — Phase A : capture + annotation auto (DatasetCreator)
 
 ### Contexte
