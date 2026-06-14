@@ -15,7 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
-| 17 | 2026-06-14 | Application.cpp / caméra | 🟡 CONTOURNÉ | [`Found 0 camera(s)` sur device V4L2 fonctionnel — énumération via QMediaDevices au lieu d'OpenCV](#erreur-17--found-0-cameras-sur-device-v4l2-fonctionnel--enumeration-via-qmediadevices) |
+| 17 | 2026-06-14 | Application.cpp / caméra | ✅ RÉSOLU |
 | 16 | 2026-06-14 | CMakeLists.txt / libharu | ✅ RÉSOLU | [Link `undefined reference HPDF_*` — header `<hpdf.h>` présent mais lib non linkée](#erreur-16--link-undefined-reference-hpdf_--header-présent-mais-lib-non-linkée) |
 | 15 | 2026-06-10 | compose.local.yml / camera | ✅ RÉSOLU | [Caméra USB vue par lsusb mais "No camera detected" dans l'app — /dev/video* non mappés](#erreur-15--caméra-usb-vue-par-lsusb-mais-no-camera-detected-dans-lapp--devvideo-non-mappés) |
 | 14 | 2026-06-10 | compose.local.yml | ✅ RÉSOLU | [`group_add` dupliqués par le merge compose.yml + compose.local.yml](#erreur-14--group_add-dupliques-par-le-merge-composeyml--composelocalyml) |
@@ -119,7 +119,7 @@ Ces points sont **anticipés** mais pas encore observés. À convertir en vraie 
 
 **Date :** 2026-06-14
 **Composant :** Application.cpp / énumération caméra (Qt Multimedia vs OpenCV V4L2)
-**Statut :** 🟡 CONTOURNÉ (fix appliqué, validation Jetson en attente)
+**Statut :** ✅ RÉSOLU (2026-06-14 — caméra HAYEAR 1920×1080 MJPG visible à l'écran)
 **Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-06-14
 
 ### Symptôme

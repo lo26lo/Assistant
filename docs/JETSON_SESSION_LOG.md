@@ -257,11 +257,19 @@ Piège de chemin de log noté au passage : le log courant est `logs/pcb_inspecto
 **relatif au CWD de lancement** (pas `build/bin/logs/`). Lancé depuis `/opt/microscope-ibom`
 → `/opt/microscope-ibom/logs/pcb_inspector.log`.
 
+### ✅ Validé sur Jetson (2026-06-14)
+- `Found 1 camera(s) (V4L2 enumeration)` — caméra HAYEAR MOS-4K Pro détectée
+- `Camera opened: 1920x1080 @ 30 fps, FOURCC=MJPG` — flux affiché à l'écran ✅
+- Erreur #17 → ✅ RÉSOLU
+
 ### Reste à faire
-- [ ] **Valider sur Jetson** : rebuild + relancer l'app, confirmer caméra dans le sélecteur
-      + flux affiché → passer #17 ✅ RÉSOLU.
-- [ ] Reporter les patchs (CMake libharu #16 + énumération caméra #17) côté PR #5 avant merge
-      — ils vivent sur `claude/pensive-euler-pvde0v`.
+- [ ] **SettingsDialog** : la caméra n'apparaît pas dans l'onglet Settings (QMediaDevices
+      encore utilisé là). Cosmétique — même fix que Application.cpp à appliquer dans SettingsDialog.cpp.
+- [ ] **Calibration** : `No checkerboard patterns detected` — pas un bug code, le patron
+      doit être imprimé et présenté correctement à la caméra (Menu Aide → patron).
+- [ ] **Segfault à la fermeture** : `exiting with code 0` puis `Segmentation fault` — teardown
+      Qt (probablement RemoteView). Non bloquant.
+- [ ] Ouvrir PR `claude/pr5-plus-fixes` → `main` (branche déjà prête).
 
 ---
 
