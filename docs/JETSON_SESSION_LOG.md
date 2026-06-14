@@ -74,6 +74,34 @@ Aucun. Tous les obstacles Phase 0/1/2 sont résolus et documentés dans [JETSON_
 
 ---
 
+## Session 2026-06-14 — Test PR #5 sur Jetson : fix link libharu
+
+### Contexte
+L'utilisateur teste la PR #5 (`l0l0l0/Assistant:claude/focused-fermi-if21mm`, 9 items de
+`IDEES_AMELIORATIONS.md`) sur le Jetson, dans le container dev, depuis un autre compte
+GitHub. Marche à suivre établie : fork ajouté comme remote `pr5`, fetch + checkout de la
+branche dans le container (réseau GitHub OK seulement depuis le container, pas l'hôte
+Jetson), puis `bash scripts/build_jetson.sh`.
+
+### Problème rencontré
+Build KO au link : `undefined reference to HPDF_*` (cf [JETSON_ERREURS.md](JETSON_ERREURS.md)
+entrée #16). `ReportGenerator.cpp` compile le code PDF via `__has_include(<hpdf.h>)` (header
+présent) mais le CMake ne linke jamais `libhpdf.so` (aucun `find_package` n'aboutit avec
+le paquet apt `libhpdf-dev` qui ne fournit pas de config CMake).
+
+### Livré
+- **`CMakeLists.txt`** : fallback `find_library(HPDF_LIBRARY NAMES hpdf)` + branche de link
+  `elseif(HPDF_LIBRARY)`. Aligne CMake sur le critère `__has_include` du `.cpp`.
+- Entrée #16 dans `JETSON_ERREURS.md` (🟡 CONTOURNÉ — validation build Jetson en attente).
+
+### À faire / reste
+- [ ] Valider le rebuild Jetson après reconfigure propre (`rm -rf build/CMakeCache.txt build/CMakeFiles`)
+- [ ] Confirmer `ls /usr/lib/aarch64-linux-gnu/libhpdf*` (si absent → `apt install libhpdf-dev`)
+- [ ] `ctest --output-on-failure`
+- [ ] Reporter ce patch CMake côté PR #5 avant merge, puis passer #16 ✅ RÉSOLU
+
+---
+
 ## Session 2026-06-11 (suite) — Phase A : capture + annotation auto (DatasetCreator)
 
 ### Contexte

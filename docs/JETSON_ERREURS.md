@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 16 | 2026-06-14 | CMakeLists.txt / libharu | 🟡 CONTOURNÉ | [Link `undefined reference HPDF_*` — header `<hpdf.h>` présent mais lib non linkée](#erreur-16--link-undefined-reference-hpdf_--header-présent-mais-lib-non-linkée) |
 | 15 | 2026-06-10 | compose.local.yml / camera | ✅ RÉSOLU | [Caméra USB vue par lsusb mais "No camera detected" dans l'app — /dev/video* non mappés](#erreur-15--caméra-usb-vue-par-lsusb-mais-no-camera-detected-dans-lapp--devvideo-non-mappés) |
 | 14 | 2026-06-10 | compose.local.yml | ✅ RÉSOLU | [`group_add` dupliqués par le merge compose.yml + compose.local.yml](#erreur-14--group_add-dupliques-par-le-merge-composeyml--composelocalyml) |
 | 13 | 2026-05-21 | OpenCV 4.10 / camera | ✅ RÉSOLU | [`CV_AUTOSTEP` pas exposé transitivement sur OpenCV 4.10 Linux](#erreur-13--cv_autostep-pas-expose-transitivement-sur-opencv-410-linux) |
@@ -112,6 +113,61 @@ Ces points sont **anticipés** mais pas encore observés. À convertir en vraie 
 ---
 
 <!-- AJOUTER LES NOUVELLES ERREURS AU-DESSUS DE CETTE LIGNE -->
+
+## ERREUR 16 — Link `undefined reference HPDF_*` — header présent mais lib non linkée
+
+**Date :** 2026-06-14
+**Composant :** CMake / libharu (génération PDF rapports)
+**Statut :** 🟡 CONTOURNÉ (fix code appliqué, validation build Jetson en attente)
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) session 2026-06-14
+
+### Symptôme
+Build de la PR #5 (`l0l0l0/Assistant:claude/focused-fermi-if21mm`) dans le container dev :
+link de `MicroscopeIBOM` échoue avec des dizaines de `undefined reference to 'HPDF_*'`
+(`HPDF_New`, `HPDF_AddPage`, `HPDF_Page_TextOut`…) provenant de
+`ReportGenerator::generatePDF`.
+
+### Contexte
+- Commande : `bash scripts/build_jetson.sh` (étape `[18/18] Linking`)
+- `src/export/ReportGenerator.cpp` active le code PDF via `#if __has_include(<hpdf.h>)` →
+  le header libharu **est** présent dans l'image (`apt libhpdf-dev`), donc les appels
+  `HPDF_*` sont compilés.
+- Côté CMake, le bloc libharu ne teste que `find_package(unofficial-libharu)`,
+  `find_package(libharu)` et `find_package(HPDF)`. Sur Jetson Jammy, le paquet apt
+  `libhpdf-dev` ne fournit **ni** config CMake **ni** module `FindHPDF`, seulement
+  `libhpdf.so` + `<hpdf.h>`. Aucun `find_package` ne réussit → la lib n'est jamais
+  ajoutée au `target_link_libraries` → symboles non résolus au link.
+
+### Cause
+Mismatch entre la détection côté `.cpp` (`__has_include`, basée sur le header) et la
+détection côté CMake (`find_package`, basée sur un package config absent). Le code se
+compile mais la lib ne se linke pas.
+
+### Solution
+Ajouter un fallback `find_library(HPDF_LIBRARY NAMES hpdf)` dans `CMakeLists.txt` quand
+aucun `find_package` n'aboutit, et une branche `elseif(HPDF_LIBRARY)` qui linke
+`${HPDF_LIBRARY}` + définit `IBOM_HAS_LIBHARU`. Cela aligne CMake sur le même critère
+que `__has_include` dans le `.cpp`.
+
+```cmake
+find_package(HPDF QUIET)
+if(NOT HPDF_FOUND)
+    find_library(HPDF_LIBRARY NAMES hpdf)
+endif()
+...
+elseif(HPDF_LIBRARY)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${HPDF_LIBRARY})
+    target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_HAS_LIBHARU)
+endif()
+```
+
+Reconfigure propre nécessaire (`rm -rf build/CMakeCache.txt build/CMakeFiles`) pour
+réévaluer le `find_library`. À repasser ✅ RÉSOLU une fois le link Jetson validé.
+
+> Note : le fix vit sur la branche `claude/pensive-euler-pvde0v`. La PR #5 elle-même
+> reste à corriger (idéalement intégrer ce patch CMake côté PR avant merge).
+
+---
 
 ## ERREUR 15 — Caméra USB vue par lsusb mais "No camera detected" dans l'app — /dev/video* non mappés
 
