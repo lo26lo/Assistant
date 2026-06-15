@@ -100,8 +100,10 @@ void RealSenseCapture::captureLoop()
         spdlog::warn("RealSense device select failed: {} — using default", e.what());
     }
 
-    // Phase 1: color only. BGR8 so the cv::Mat matches the rest of the app.
+    // Color (BGR8 to match the app) + depth (Z16). Depth is later aligned to
+    // the color frame so depth[y,x] maps to color pixel [y,x].
     cfg.enable_stream(RS2_STREAM_COLOR, m_width, m_height, RS2_FORMAT_BGR8, m_fps);
+    cfg.enable_stream(RS2_STREAM_DEPTH, m_width, m_height, RS2_FORMAT_Z16, m_fps);
 
     rs2::pipeline_profile profile;
     bool started = false;
@@ -110,13 +112,14 @@ void RealSenseCapture::captureLoop()
         started = true;
     } catch (const rs2::error& e) {
         // Requested mode unsupported (e.g. the global 1920x1080 default exceeds
-        // the D405's 1280x720 color sensor). Retry letting librealsense pick a
-        // valid default color mode rather than failing outright.
-        spdlog::warn("RealSense {}x{}@{} unsupported ({}). Retrying with default mode.",
+        // the D405's 1280x720 sensors). Retry letting librealsense pick valid
+        // default color+depth modes rather than failing outright.
+        spdlog::warn("RealSense {}x{}@{} unsupported ({}). Retrying with default modes.",
                      m_width, m_height, m_fps, e.what());
         try {
             rs2::config fallback;
             fallback.enable_stream(RS2_STREAM_COLOR, RS2_FORMAT_BGR8);
+            fallback.enable_stream(RS2_STREAM_DEPTH, RS2_FORMAT_Z16);
             profile = pipe.start(fallback);
             started = true;
         } catch (const rs2::error& e2) {
@@ -130,14 +133,24 @@ void RealSenseCapture::captureLoop()
         return;
     }
 
-    // Report the mode the camera actually settled on.
+    // Depth → metres scale (depth units), and align depth onto the color frame.
+    float depthUnits = 0.001f;  // default 1 mm/unit; refined from the sensor
+    try {
+        depthUnits = profile.get_device().first<rs2::depth_sensor>().get_depth_scale();
+    } catch (const rs2::error&) { /* keep default */ }
+    rs2::align alignToColor(RS2_STREAM_COLOR);
+
+    // Report the mode the camera actually settled on + cache color intrinsics.
     try {
         auto vsp = profile.get_stream(RS2_STREAM_COLOR).as<rs2::video_stream_profile>();
         m_width  = vsp.width();
         m_height = vsp.height();
         m_fps    = vsp.fps();
-        spdlog::info("RealSense color opened: {}x{} @ {} fps (BGR8)",
-                     m_width, m_height, m_fps);
+        const rs2_intrinsics in = vsp.get_intrinsics();
+        m_colorFx.store(static_cast<double>(in.fx));
+        spdlog::info("RealSense color opened: {}x{} @ {} fps (BGR8), fx={:.1f}px, "
+                     "depth_units={} m",
+                     m_width, m_height, m_fps, in.fx, depthUnits);
     } catch (const rs2::error&) { /* keep requested values */ }
 
     int consecutiveFailures = 0;
@@ -160,7 +173,15 @@ void RealSenseCapture::captureLoop()
         }
         consecutiveFailures = 0;
 
-        rs2::video_frame color = fs.get_color_frame();
+        // Align depth onto color so the two frames share a pixel grid.
+        rs2::frameset aligned;
+        try {
+            aligned = alignToColor.process(fs);
+        } catch (const rs2::error&) {
+            aligned = fs;  // fall back to raw set
+        }
+
+        rs2::video_frame color = aligned.get_color_frame();
         if (!color) continue;
 
         // The rs2 buffer is recycled by the pipeline, so clone into an owned
@@ -176,6 +197,17 @@ void RealSenseCapture::captureLoop()
             m_latestFrame = shared;
         }
         emit frameReady(shared);
+
+        // Publish depth as CV_16UC1 in millimetres (aligned to color).
+        if (rs2::depth_frame depth = aligned.get_depth_frame()) {
+            const cv::Mat raw(cv::Size(depth.get_width(), depth.get_height()),
+                              CV_16UC1, const_cast<void*>(depth.get_data()),
+                              cv::Mat::AUTO_STEP);
+            // raw units → mm. depthUnits is metres/unit, so mm = raw * units * 1000.
+            cv::Mat depthMm;
+            raw.convertTo(depthMm, CV_16UC1, depthUnits * 1000.0);
+            emit depthFrameReady(std::make_shared<const cv::Mat>(std::move(depthMm)));
+        }
     }
 
     try {

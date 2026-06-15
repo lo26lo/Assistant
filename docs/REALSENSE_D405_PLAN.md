@@ -177,15 +177,15 @@ Tous les `connect(m_camera.get(), &CameraCapture::frameReady, …)` deviennent `
 
 *Critère de succès* : sélectionner D405 → image couleur 1280×720 dans `CameraView`, overlay/tracking/dataset fonctionnent ; rebascule vers microscope USB OK à chaud.
 
-### Phase 2 — Profondeur (valeur ajoutée)
+### Phase 2 — Profondeur (valeur ajoutée) — ✅ IMPLÉMENTÉE (2026-06-15, à valider D405 branchée)
 
 **But** : exposer la depth que la webcam ne peut pas donner.
 
-1. `using DepthFrameRef = std::shared_ptr<const cv::Mat>;` (`CV_16UC1`, mm/pixel).
-2. `RealSenseCapture` : `enable_stream(RS2_STREAM_DEPTH, …)` + `rs2::align(RS2_STREAM_COLOR)` pour aligner depth↔color.
-3. Signal `depthFrameReady(DepthFrameRef)` ajouté **dans `RealSenseCapture`** (pas dans l'interface) ; `Application` se connecte via `if (m_camera->hasDepth()) { if (auto* rs = dynamic_cast<RealSenseCapture*>(m_camera.get())) connect(...); }`.
-4. **Scale px/mm auto** : distance médiane du plan PCB → `pixelsPerMm` sans homographie. Branché dans la logique d'échelle existante (`scaleMethod` gagne une valeur `Depth`).
-5. `StatsPanel` : "Distance : 23.4 mm" en live (throttle ~300 ms, comme le focus assist).
+1. ✅ `using DepthFrameRef = std::shared_ptr<const cv::Mat>;` (`CV_16UC1`, mm/pixel) dans `ICameraSource.h`.
+2. ✅ `RealSenseCapture` : `enable_stream(RS2_STREAM_DEPTH, Z16)` + `rs2::align(RS2_STREAM_COLOR)`. Depth convertie en **mm** (via `get_depth_scale()`).
+3. ✅ Signal `depthFrameReady(DepthFrameRef)` **dans `RealSenseCapture`** ; `Application::wireCameraSignals` se connecte via `dynamic_cast<RealSenseCapture*>` (rien pour la webcam).
+4. ✅ **Scale px/mm auto** : `pixelsPerMm = colorFx / distance_mm` (géométrie pinhole, intrinsèques usine), distance = médiane ROI centrale 20% (0 ignorés). Actif quand `ScaleMethod::Depth`. Met à jour calibration + measurement + CameraView.
+5. ✅ `StatsPanel::setDistance()` : "Distance : 23.4 mm" live (throttle 3 Hz).
 
 ### Phase 3 — Inspection 3D (différenciateur, à planifier séparément)
 

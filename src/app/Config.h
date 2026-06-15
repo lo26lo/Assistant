@@ -16,7 +16,8 @@ enum class CameraBackend {
 enum class ScaleMethod {
     None        = 0,  // Use calibration value only (fixed)
     Homography  = 1,  // Extract scale factor from live tracking homography
-    IBomPads    = 2   // Compute from known iBOM pad distances
+    IBomPads    = 2,  // Compute from known iBOM pad distances
+    Depth       = 3   // From a RealSense depth camera: pixelsPerMm = fx / dist_mm
 };
 
 /// Order in which components are presented during inspection.

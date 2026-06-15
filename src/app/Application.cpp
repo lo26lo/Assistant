@@ -100,6 +100,9 @@ bool Application::initialize()
     // Register types for cross-thread signal/slot marshalling.
     qRegisterMetaType<cv::Mat>("cv::Mat");
     qRegisterMetaType<ibom::camera::FrameRef>("ibom::camera::FrameRef");
+    // DepthFrameRef is the same C++ type as FrameRef; register the alias name so
+    // RealSenseCapture::depthFrameReady can be queued across threads.
+    qRegisterMetaType<ibom::camera::FrameRef>("ibom::camera::DepthFrameRef");
     qRegisterMetaType<ibom::features::DatasetStatus>("ibom::features::DatasetStatus");
     qRegisterMetaType<std::shared_ptr<const IBomProject>>(
         "std::shared_ptr<const ibom::IBomProject>");
@@ -901,6 +904,54 @@ void Application::wireCameraSignals()
 
         m_frameCount++;
     }, Qt::QueuedConnection);
+
+#ifdef IBOM_HAVE_REALSENSE
+    // ── Depth (RealSense only) → distance readout + auto px/mm scale ──
+    if (auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get())) {
+        connect(rs, &camera::RealSenseCapture::depthFrameReady, this,
+                [this, rs](ibom::camera::DepthFrameRef depth) {
+            if (!depth || depth->empty() || depth->type() != CV_16UC1) return;
+
+            // Throttle to ~3 Hz — distance/scale change slowly on a fixed rig.
+            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            if (nowMs - m_lastDepthMs < 300) return;
+            m_lastDepthMs = nowMs;
+
+            // Median depth over a central ROI (20%), ignoring 0 = invalid.
+            const cv::Mat& d = *depth;
+            const int rw = std::max(1, d.cols / 5), rh = std::max(1, d.rows / 5);
+            const cv::Rect roi((d.cols - rw) / 2, (d.rows - rh) / 2, rw, rh);
+            std::vector<uint16_t> vals;
+            vals.reserve(static_cast<size_t>(rw) * rh);
+            for (int y = roi.y; y < roi.y + roi.height; ++y) {
+                const auto* row = d.ptr<uint16_t>(y);
+                for (int x = roi.x; x < roi.x + roi.width; ++x)
+                    if (row[x] > 0) vals.push_back(row[x]);
+            }
+            if (vals.size() < 16) {            // too few valid samples
+                if (auto* sp = m_mainWindow->statsPanel()) sp->setDistance(0.0);
+                return;
+            }
+            std::nth_element(vals.begin(), vals.begin() + vals.size() / 2, vals.end());
+            const double distMm = vals[vals.size() / 2];
+
+            if (auto* sp = m_mainWindow->statsPanel()) sp->setDistance(distMm);
+
+            // Auto px/mm from pinhole geometry: pixelsPerMm = fx / distance_mm.
+            if (m_config->scaleMethod() == ScaleMethod::Depth) {
+                const double fx = rs->colorFx();
+                if (fx > 0 && distMm > 0) {
+                    const double ppmm = fx / distMm;
+                    m_currentPixelsPerMm = ppmm;
+                    if (m_calibration) m_calibration->setPixelsPerMm(ppmm);
+                    if (auto* sp = m_mainWindow->statsPanel()) sp->setScale(ppmm);
+                    if (m_measurement) m_measurement->setCalibration(ppmm);
+                    if (auto* cv = m_mainWindow->cameraView()) cv->setPixelsPerMm(ppmm);
+                }
+            }
+        }, Qt::QueuedConnection);
+    }
+#endif
 }
 
 void Application::connectControlSignals()

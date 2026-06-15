@@ -41,9 +41,19 @@ public:
 
     bool hasDepth() const override { return true; }
 
+    /// Color stream horizontal focal length in pixels (from factory
+    /// intrinsics). 0 until the pipeline has started. Used to derive px/mm
+    /// from depth: pixelsPerMm = colorFx / distance_mm.
+    double colorFx() const { return m_colorFx.load(); }
+
     /// List connected RealSense devices ("Intel RealSense D405 <serial>").
     /// Returns an empty vector when none are present or librealsense fails.
     static std::vector<std::string> listDevices();
+
+signals:
+    /// Emitted alongside frameReady when depth is available: a CV_16UC1 depth
+    /// map in millimetres, aligned to the color frame. Shared (no pixel copy).
+    void depthFrameReady(ibom::camera::DepthFrameRef depth);
 
 private:
     void captureLoop();
@@ -52,6 +62,7 @@ private:
     int m_width  = 1280;   // D405 native color/depth width
     int m_height = 720;
     int m_fps    = 30;
+    std::atomic<double> m_colorFx{0.0};
 
     std::atomic<bool>            m_capturing{false};
     std::unique_ptr<std::thread> m_thread;

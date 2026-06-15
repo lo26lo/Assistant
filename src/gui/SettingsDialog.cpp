@@ -126,6 +126,7 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
     m_scaleMethod->addItem(tr("None (fixed calibration)"),     0);
     m_scaleMethod->addItem(tr("From homography (auto-zoom)"),  1);
     m_scaleMethod->addItem(tr("From iBOM pad distances"),      2);
+    m_scaleMethod->addItem(tr("From RealSense depth"),         3);
     m_scaleMethod->setToolTip(tr("How to update px/mm when the microscope zoom changes"));
     calibForm->addRow(tr("Dynamic scale:"), m_scaleMethod);
 

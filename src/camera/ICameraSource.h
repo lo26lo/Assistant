@@ -15,6 +15,11 @@ namespace ibom::camera {
 /// worker, calibration) can hold a reference concurrently without clones.
 using FrameRef = std::shared_ptr<const cv::Mat>;
 
+/// Shared, immutable depth frame. CV_16UC1, one millimetre per unit, aligned
+/// to the color stream so depth[y,x] corresponds to the color pixel [y,x].
+/// 0 = no/invalid depth at that pixel. Only RealSense-class sources emit it.
+using DepthFrameRef = std::shared_ptr<const cv::Mat>;
+
 /**
  * @brief Abstract camera source.
  *
@@ -77,3 +82,5 @@ signals:
 } // namespace ibom::camera
 
 Q_DECLARE_METATYPE(ibom::camera::FrameRef)
+// DepthFrameRef aliases the same underlying type as FrameRef; declaring the
+// metatype again would redefine it, so it is intentionally NOT redeclared.

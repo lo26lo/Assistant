@@ -171,6 +171,8 @@ private:
 
     // Focus assist — last time the sharpness metric was computed (throttle).
     qint64 m_lastSharpnessMs = 0;
+    // Depth (RealSense) — last time distance/scale was computed (throttle).
+    qint64 m_lastDepthMs = 0;
 
     // Calibration image collection
     std::vector<cv::Mat> m_calibImages;
