@@ -1215,10 +1215,16 @@ void Application::connectControlSignals()
         // Check if camera index changed and restart if needed
         int newIdx = m_config->cameraIndex();
         bool wasCapturing = m_camera->isCapturing();
+        // Don't push the V4L2-oriented 1920x1080 default onto the D405 — it
+        // doesn't support it and would log a spurious "unsupported, retrying"
+        // fallback. Same guard as createCamera(); RealSense keeps its own res.
+        const bool genericRes = (m_config->cameraWidth() == 1920 && m_config->cameraHeight() == 1080);
+        const bool skipRes = (m_activeBackend == CameraBackend::RealSense && genericRes);
         if (wasCapturing) {
             m_camera->stop();
             m_camera->setDeviceIndex(newIdx);
-            m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
+            if (!skipRes)
+                m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
             m_camera->setFps(m_config->cameraFps());
             m_camera->setHardwareDecode(m_config->cameraHwDecode());
             m_camera->start();
@@ -1227,7 +1233,8 @@ void Application::connectControlSignals()
                          m_config->cameraFps());
         } else {
             m_camera->setDeviceIndex(newIdx);
-            m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
+            if (!skipRes)
+                m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
             m_camera->setFps(m_config->cameraFps());
         }
         // Push updated tracking parameters to the worker — it will recreate

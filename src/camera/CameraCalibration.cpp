@@ -4,6 +4,8 @@
 #include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
 #include <fstream>
+#include <filesystem>
+#include <system_error>
 
 namespace ibom::camera {
 
@@ -101,6 +103,13 @@ double CameraCalibration::calibrate(const std::vector<cv::Mat>& images,
 bool CameraCalibration::load(const std::string& path)
 {
     try {
+        // A missing file is expected on first run (no calibration yet) — don't
+        // alarm with an error (and avoid OpenCV's own FileStorage error spam).
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec)) {
+            spdlog::debug("No calibration file at {} (not calibrated yet)", path);
+            return false;
+        }
         cv::FileStorage fs(path, cv::FileStorage::READ);
         if (!fs.isOpened()) {
             spdlog::error("Cannot open calibration file: {}", path);

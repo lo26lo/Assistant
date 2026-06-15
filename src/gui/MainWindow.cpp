@@ -945,7 +945,7 @@ void MainWindow::applyDarkStylesheet()
         QProgressBar {
             background: #1a1a2e; border: none; border-radius: 4px;
             height: 8px; text-align: center;
-            font-size: 0px;
+            color: transparent;
         }
         QProgressBar::chunk {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -1125,7 +1125,7 @@ void MainWindow::applyLightStylesheet()
         QTabBar::tab:hover:!selected { color: #3a4060; }
         QProgressBar {
             background: #e0e2ec; border: none; border-radius: 4px;
-            height: 8px; font-size: 0px;
+            height: 8px; color: transparent;
         }
         QProgressBar::chunk {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,

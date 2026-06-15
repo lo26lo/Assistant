@@ -15,6 +15,7 @@
 #include <QCameraDevice>
 #include <QColorDialog>
 #include <QMetaObject>
+#include <QSignalBlocker>
 #include <thread>
 
 SettingsDialog::SettingsDialog(ibom::Config& config, QWidget* parent)
@@ -78,7 +79,9 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
     deviceRow->addWidget(m_refreshCameras);
     form->addRow(tr("Camera:"), deviceRow);
 
-    enumerateCameras();
+    // Enumeration is kicked off by loadFromConfig() once the backend combo is
+    // synced — calling it here would scan V4L2 (combo still at its default)
+    // even when the active backend is RealSense.
 
     m_cameraWidth = new QSpinBox;
     m_cameraWidth->setRange(320, 7680);
@@ -359,12 +362,17 @@ void SettingsDialog::createFeaturesTab(QTabWidget* tabs)
 
 void SettingsDialog::loadFromConfig()
 {
-    // Camera
+    // Camera — set the backend combo with signals blocked, then enumerate once
+    // for the real backend. Otherwise the constructor enumerates V4L2 (combo
+    // still at its default) before this runs, scanning /dev/video* needlessly
+    // when the active backend is RealSense.
     if (m_cameraBackend) {
         const int backendData = (m_config.cameraBackend() == ibom::CameraBackend::RealSense) ? 1 : 0;
         const int bi = m_cameraBackend->findData(backendData);
+        const QSignalBlocker block(m_cameraBackend);
         m_cameraBackend->setCurrentIndex(bi >= 0 ? bi : 0);
     }
+    enumerateCameras();
     int idx = m_config.cameraIndex();
     if (idx >= 0 && idx < m_cameraDevice->count())
         m_cameraDevice->setCurrentIndex(idx);
