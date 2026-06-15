@@ -10,6 +10,8 @@
 #include <QLabel>
 #include <memory>
 
+class QStackedWidget;
+
 namespace ibom {
 class Application;
 }
@@ -17,6 +19,7 @@ class Application;
 namespace ibom::gui {
 
 class CameraView;
+class PointCloudView;
 class BomPanel;
 class ControlPanel;
 class InspectionWizard;
@@ -32,6 +35,7 @@ public:
     ~MainWindow() override;
 
     CameraView*       cameraView()       { return m_cameraView; }
+    PointCloudView*   pointCloudView()   { return m_pointCloudView; }
     BomPanel*         bomPanel()         { return m_bomPanel; }
     ControlPanel*     controlPanel()     { return m_controlPanel; }
     InspectionWizard* inspectionWizard() { return m_inspectionWizard; }
@@ -48,6 +52,11 @@ public:
     /// Enable the View → Depth View toggle (only meaningful for RealSense).
     /// Unchecks and disables it when the depth stream is unavailable.
     void setDepthViewAvailable(bool available);
+    /// Enable the View → 3D Point Cloud toggle (RealSense depth only).
+    /// Leaves 3D mode and disables it when depth becomes unavailable.
+    void setPointCloudAvailable(bool available);
+    /// True while the central view is showing the 3D point cloud.
+    bool pointCloudActive() const { return m_pointCloudActive; }
 
 signals:
     void ibomFileRequested(const QString& path);
@@ -58,6 +67,8 @@ signals:
     void settingsChanged();
     /// Toggle the live view between color and colorized depth (RealSense only).
     void depthViewToggled(bool depth);
+    /// Toggle the central view between the 2D camera and the 3D point cloud.
+    void pointCloudToggled(bool enabled);
     /// Open the RealSense sensor-controls panel (routed from the Settings
     /// dialog; the live camera lives in Application).
     void realSenseControlsRequested();
@@ -97,7 +108,10 @@ private:
     Application* m_app = nullptr;
 
     // Main views
+    QStackedWidget*   m_centralStack     = nullptr;
     CameraView*       m_cameraView       = nullptr;
+    PointCloudView*   m_pointCloudView   = nullptr;
+    bool              m_pointCloudActive = false;
     BomPanel*         m_bomPanel         = nullptr;
     ControlPanel*     m_controlPanel     = nullptr;
     InspectionWizard* m_inspectionWizard = nullptr;
@@ -120,6 +134,7 @@ private:
     QAction*  m_actSettings   = nullptr;
     QAction*  m_actDarkMode   = nullptr;
     QAction*  m_actDepthView  = nullptr;
+    QAction*  m_actPointCloud = nullptr;
 
     // Status bar widgets
     QLabel* m_fpsLabel    = nullptr;

@@ -181,6 +181,10 @@ private:
     // Live view mode: false = color image, true = colorized depth map.
     // Only meaningful for the RealSense backend (depth stream).
     bool m_depthViewMode = false;
+    // 3D point cloud mode: central view shows the orbitable cloud (RealSense).
+    bool m_pointCloudMode = false;
+    // Throttle for the (heavier) point cloud build.
+    qint64 m_lastCloudMs = 0;
 
     // Calibration image collection
     std::vector<cv::Mat> m_calibImages;

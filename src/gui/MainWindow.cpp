@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "CameraView.h"
+#include "PointCloudView.h"
 #include "BomPanel.h"
 #include "ControlPanel.h"
 #include "InspectionWizard.h"
@@ -17,6 +18,7 @@
 #include <QMenu>
 #include <QDir>
 #include <QDockWidget>
+#include <QStackedWidget>
 #include <QKeyEvent>
 #include <QCloseEvent>
 #include <QDragEnterEvent>
@@ -44,9 +46,13 @@ MainWindow::MainWindow(Application* app, QWidget* parent)
     setMinimumSize(1280, 720);
     setAcceptDrops(true);
 
-    // Central camera view
-    m_cameraView = new CameraView(this);
-    setCentralWidget(m_cameraView);
+    // Central view: stack of the 2D camera and the 3D point cloud.
+    m_centralStack   = new QStackedWidget(this);
+    m_cameraView     = new CameraView(this);
+    m_pointCloudView = new PointCloudView(this);
+    m_centralStack->addWidget(m_cameraView);      // index 0
+    m_centralStack->addWidget(m_pointCloudView);  // index 1
+    setCentralWidget(m_centralStack);
 
     createActions();
     createMenuBar();
@@ -127,6 +133,14 @@ void MainWindow::setDepthViewAvailable(bool available)
         m_cameraView->setViewToggleVisible(available);
 }
 
+void MainWindow::setPointCloudAvailable(bool available)
+{
+    if (!m_actPointCloud) return;
+    m_actPointCloud->setEnabled(available);
+    if (!available && m_actPointCloud->isChecked())
+        m_actPointCloud->setChecked(false);  // leave 3D mode, emits pointCloudToggled(false)
+}
+
 // ── Actions ──────────────────────────────────────────────────────
 
 void MainWindow::createActions()
@@ -187,6 +201,19 @@ void MainWindow::createActions()
     connect(m_cameraView, &CameraView::viewToggleClicked, this, [this]() {
         if (m_actDepthView->isEnabled()) m_actDepthView->toggle();
     });
+
+    m_actPointCloud = new QAction(tr("3D Point Cloud"), this);
+    m_actPointCloud->setCheckable(true);
+    m_actPointCloud->setShortcut(Qt::Key_3);
+    m_actPointCloud->setEnabled(false);  // enabled once a RealSense stream is live
+    m_actPointCloud->setToolTip(tr("Show the live 3D point cloud (orbit with the "
+                                   "mouse) instead of the camera image. RealSense only."));
+    connect(m_actPointCloud, &QAction::toggled, this, [this](bool on) {
+        m_pointCloudActive = on;
+        m_centralStack->setCurrentIndex(on ? 1 : 0);
+        if (on && m_pointCloudView) m_pointCloudView->resetView();
+        emit pointCloudToggled(on);
+    });
 }
 
 void MainWindow::createMenuBar()
@@ -215,6 +242,7 @@ void MainWindow::createMenuBar()
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(m_actFullscreen);
     viewMenu->addAction(m_actDepthView);
+    viewMenu->addAction(m_actPointCloud);
     viewMenu->addAction(m_actDarkMode);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));

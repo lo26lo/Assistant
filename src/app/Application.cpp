@@ -2,6 +2,7 @@
 #include "Config.h"
 #include "gui/MainWindow.h"
 #include "gui/CameraView.h"
+#include "gui/PointCloudView.h"
 #include "gui/ControlPanel.h"
 #include "gui/StatsPanel.h"
 #include "gui/BomPanel.h"
@@ -617,9 +618,10 @@ void Application::updateCalibrationUI()
     if (auto* cp = m_mainWindow->controlPanel())
         cp->setCameraBackendUI(isRS);
 
-    // Depth view is only available with the RealSense backend (depth stream).
+    // Depth view + 3D point cloud are only available with RealSense (depth).
     m_mainWindow->setDepthViewAvailable(isRS);
-    if (!isRS) m_depthViewMode = false;
+    m_mainWindow->setPointCloudAvailable(isRS);
+    if (!isRS) { m_depthViewMode = false; m_pointCloudMode = false; }
 
     // Update calibration info in the stats panel.
     if (auto* sp = m_mainWindow->statsPanel()) {
@@ -1033,6 +1035,26 @@ void Application::wireCameraSignals()
                     view->updateFrame(qimg.copy());
             }
 
+            // ── 3D point cloud: deproject depth + color via intrinsics ──
+            // Throttled to ~12 Hz (the build + VBO upload is heavier than the
+            // 2D paths). Uses the latest color frame (aligned to depth).
+            if (m_pointCloudMode) {
+                const qint64 nowCloud = QDateTime::currentMSecsSinceEpoch();
+                if (nowCloud - m_lastCloudMs >= 80) {
+                    m_lastCloudMs = nowCloud;
+                    if (auto* pcv = m_mainWindow->pointCloudView()) {
+                        cv::Mat color;
+                        if (auto cf = rs->latestFrame(); cf && !cf->empty())
+                            color = *cf;
+                        pcv->updateCloud(dmat, color,
+                                         static_cast<float>(rs->colorFx()),
+                                         static_cast<float>(rs->colorFy()),
+                                         static_cast<float>(rs->colorPpx()),
+                                         static_cast<float>(rs->colorPpy()));
+                    }
+                }
+            }
+
             // Throttle to ~3 Hz — distance/scale change slowly on a fixed rig.
             const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
             if (nowMs - m_lastDepthMs < 300) return;
@@ -1291,6 +1313,15 @@ void Application::connectControlSignals()
             this, [this](bool depth) {
         m_depthViewMode = depth;
         spdlog::info("View mode: {}", depth ? "colorized depth" : "color");
+    });
+
+    // ── 3D point cloud toggle (RealSense) ───────────────────────
+    connect(m_mainWindow.get(), &gui::MainWindow::pointCloudToggled,
+            this, [this](bool on) {
+        m_pointCloudMode = on;
+        spdlog::info("3D point cloud view: {}", on ? "on" : "off");
+        if (!on && m_mainWindow->pointCloudView())
+            m_mainWindow->pointCloudView()->clear();
     });
 
     // ── Settings changed ────────────────────────────────────────
