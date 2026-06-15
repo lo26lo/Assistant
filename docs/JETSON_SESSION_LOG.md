@@ -11,8 +11,10 @@
 
 ---
 
-## État actuel — au 2026-06-15 (RealSense Phase 1 codée, à valider Jetson)
+## État actuel — au 2026-06-15 (RealSense D405 fonctionnel sur Jetson ✅)
 
+> **2026-06-15 (suite 13)** : **fix calibration OpenCV désactivée pour RealSense** — librealsense applique déjà les intrinsèques usine, appliquer `undistort` OpenCV par-dessus déformait l'image. Condition dans `Application::wireCameraSignals` : `undistort` ignoré si `m_activeBackend == CameraBackend::RealSense`. Supprimer `/opt/microscope-ibom/data/calibration.yml` sur Jetson pour effacer la calibration corrompue. PR #7 mergée dans `main` (commit `e2b8e66`). ✅ D405 testé sur Jetson : couleur OK, depth/scale OK, RMS calibration 0.13 (mais ne pas réappliquer pour RealSense). Problème "écran non rempli" = letterbox normal (16:9 CameraView + panneaux dock latéraux = ratio widget ≠ 16:9 image) — voir note ci-dessous.
+>
 > **2026-06-15 (suite 12)** : **contrôles RealSense aussi accessibles depuis Settings**. Bouton « Camera Controls (RealSense)… » ajouté dans l'onglet Camera du `SettingsDialog` → signal `realSenseControlsRequested()`. `MainWindow::onShowSettings` ferme Settings (évite le blocage modal) puis émet `MainWindow::realSenseControlsRequested()`. Handler `Application::openRealSenseControls()` extrait en méthode, connecté **à la fois** au bouton du ControlPanel et au signal de MainWindow.
 >
 > **2026-06-15 (suite 11)** : **review Copilot PR #7 traitée** (6 points). (1+5) `RealSenseCapture::stop()` join/reset toujours le thread même si la boucle s'est arrêtée seule ; `captureLoop` clear `m_capturing` + émet `captureStateChanged(false)` en sortie d'erreur (sinon `isCapturing()` reste vrai et bloque le restart). (2+3) Scripts : détection D405 sur PID exact `8086:0b5b` (au lieu de `8086:0b` trop large). (4) En-tête de REALSENSE_D405_PLAN.md passé en « implémenté ». (6) `RealSenseControlsDialog` : `QPointer` sur la caméra + fermeture auto sur `destroyed` + guards `if(m_camera)` dans les callbacks → plus de pointeur pendant si hot-swap pendant que le dialog est ouvert.

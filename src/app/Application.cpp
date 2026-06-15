@@ -731,8 +731,10 @@ void Application::wireCameraSignals()
         }
 
         // Apply undistortion if calibrated (allocates a new Mat; unavoidable).
+        // Skip for RealSense: librealsense already applies factory calibration.
         cv::Mat processed;
-        if (m_calibration && m_calibration->isCalibrated()) {
+        if (m_calibration && m_calibration->isCalibrated()
+            && m_activeBackend != CameraBackend::RealSense) {
             processed = m_calibration->undistort(frame);
         } else {
             processed = frame;  // header share, no pixel copy
