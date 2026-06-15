@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ICameraSource.h"
+#include "PointCloudData.h"
 
 #include <atomic>
 #include <mutex>
@@ -99,10 +100,19 @@ public:
     /// < 0 = leave the preset untouched. Used when applying resolution profiles.
     void setPendingVisualPreset(float value) { m_pendingPreset.store(value); }
 
+    /// Enable/disable computing the 3D point cloud on the capture thread.
+    /// Off by default (avoids the per-frame rs2::pointcloud cost when the 3D
+    /// view is not shown). When on, pointCloudReady() fires each frame.
+    void setEmitPointCloud(bool on) { m_emitCloud.store(on); }
+
 signals:
     /// Emitted alongside frameReady when depth is available: a CV_16UC1 depth
     /// map in millimetres, aligned to the color frame. Shared (no pixel copy).
     void depthFrameReady(ibom::camera::DepthFrameRef depth);
+
+    /// Emitted when point-cloud emission is enabled: a colored 3D cloud built
+    /// via rs2::pointcloud (vertices in metres, camera frame). Shared.
+    void pointCloudReady(ibom::camera::PointCloudRef cloud);
 
 private:
     void captureLoop();
@@ -116,6 +126,7 @@ private:
     std::atomic<double> m_colorPpx{0.0};
     std::atomic<double> m_colorPpy{0.0};
     std::atomic<float>  m_pendingPreset{-1.0f};  // Visual Preset to apply on start
+    std::atomic<bool>   m_emitCloud{false};       // compute rs2::pointcloud when true
 
     std::atomic<bool>            m_capturing{false};
     std::unique_ptr<std::thread> m_thread;

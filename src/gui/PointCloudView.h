@@ -8,7 +8,7 @@
 #include <QVector3D>
 #include <QMatrix4x4>
 #include <QPoint>
-#include <opencv2/core.hpp>
+#include "../camera/PointCloudData.h"
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -23,9 +23,9 @@ namespace ibom::gui {
  * Orbit with the left mouse button, pan with the middle/right button, zoom with
  * the wheel.
  *
- * The cloud is rebuilt on the GUI thread (downsampled) via updateCloud() and
- * uploaded to a VBO lazily inside paintGL. Portable across desktop GL 3.3 and
- * OpenGL ES 3.0 (shader version chosen at runtime).
+ * The cloud is computed upstream (capture thread, rs2::pointcloud), staged via
+ * setCloud(), and uploaded to a VBO lazily inside paintGL. Portable across
+ * desktop GL 3.3 and OpenGL ES 3.0 (shader version chosen at runtime).
  */
 class PointCloudView : public QOpenGLWidget, protected QOpenGLFunctions {
     Q_OBJECT
@@ -34,11 +34,10 @@ public:
     explicit PointCloudView(QWidget* parent = nullptr);
     ~PointCloudView() override;
 
-    /// Rebuild the cloud from a depth map (mm) + aligned BGR color frame and the
-    /// color-stream intrinsics. Safe to call from the GUI thread at video rate;
-    /// the points are downsampled to keep the upload cheap.
-    void updateCloud(const cv::Mat& depthMm, const cv::Mat& colorBgr,
-                     float fx, float fy, float ppx, float ppy);
+    /// Set the cloud to render. Built upstream (capture thread) via
+    /// rs2::pointcloud — vertices in metres, camera frame. Cheap: just stages
+    /// the interleaved buffer for the next paint.
+    void setCloud(const ibom::camera::PointCloudRef& cloud);
 
     /// Drop the current cloud (e.g. when leaving 3D mode or stopping the camera).
     void clear();
@@ -71,10 +70,10 @@ private:
     int                 m_pointCount = 0;
     bool                m_dirty = false;
 
-    // Orbit camera
+    // Orbit camera (units: metres, matching rs2::points)
     float     m_yaw   = 0.0f;     // degrees
     float     m_pitch = -20.0f;   // degrees
-    float     m_dist  = 400.0f;   // mm from target
+    float     m_dist  = 0.4f;     // metres from target
     QVector3D m_target{0, 0, 0};  // look-at point (cloud centroid)
     bool      m_haveCloud = false;
 

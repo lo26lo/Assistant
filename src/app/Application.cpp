@@ -106,6 +106,7 @@ bool Application::initialize()
     // DepthFrameRef is the same C++ type as FrameRef; register the alias name so
     // RealSenseCapture::depthFrameReady can be queued across threads.
     qRegisterMetaType<ibom::camera::FrameRef>("ibom::camera::DepthFrameRef");
+    qRegisterMetaType<ibom::camera::PointCloudRef>("ibom::camera::PointCloudRef");
     qRegisterMetaType<ibom::features::DatasetStatus>("ibom::features::DatasetStatus");
     qRegisterMetaType<std::shared_ptr<const IBomProject>>(
         "std::shared_ptr<const ibom::IBomProject>");
@@ -1035,26 +1036,6 @@ void Application::wireCameraSignals()
                     view->updateFrame(qimg.copy());
             }
 
-            // ── 3D point cloud: deproject depth + color via intrinsics ──
-            // Throttled to ~12 Hz (the build + VBO upload is heavier than the
-            // 2D paths). Uses the latest color frame (aligned to depth).
-            if (m_pointCloudMode) {
-                const qint64 nowCloud = QDateTime::currentMSecsSinceEpoch();
-                if (nowCloud - m_lastCloudMs >= 80) {
-                    m_lastCloudMs = nowCloud;
-                    if (auto* pcv = m_mainWindow->pointCloudView()) {
-                        cv::Mat color;
-                        if (auto cf = rs->latestFrame(); cf && !cf->empty())
-                            color = *cf;
-                        pcv->updateCloud(dmat, color,
-                                         static_cast<float>(rs->colorFx()),
-                                         static_cast<float>(rs->colorFy()),
-                                         static_cast<float>(rs->colorPpx()),
-                                         static_cast<float>(rs->colorPpy()));
-                    }
-                }
-            }
-
             // Throttle to ~3 Hz — distance/scale change slowly on a fixed rig.
             const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
             if (nowMs - m_lastDepthMs < 300) return;
@@ -1093,6 +1074,16 @@ void Application::wireCameraSignals()
                 }
             }
         }, Qt::QueuedConnection);
+
+        // 3D point cloud built on the capture thread (rs2::pointcloud) → view.
+        connect(rs, &camera::RealSenseCapture::pointCloudReady, this,
+                [this](ibom::camera::PointCloudRef cloud) {
+            if (auto* pcv = m_mainWindow->pointCloudView())
+                pcv->setCloud(cloud);
+        }, Qt::QueuedConnection);
+
+        // Only pay the pointcloud cost while the 3D view is actually shown.
+        rs->setEmitPointCloud(m_pointCloudMode);
     }
 #endif
 
@@ -1320,6 +1311,10 @@ void Application::connectControlSignals()
             this, [this](bool on) {
         m_pointCloudMode = on;
         spdlog::info("3D point cloud view: {}", on ? "on" : "off");
+#ifdef IBOM_HAVE_REALSENSE
+        if (auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get()))
+            rs->setEmitPointCloud(on);
+#endif
         if (!on && m_mainWindow->pointCloudView())
             m_mainWindow->pointCloudView()->clear();
     });

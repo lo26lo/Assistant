@@ -187,6 +187,7 @@ set(HEADERS
 
     # Camera
     src/camera/ICameraSource.h
+    src/camera/PointCloudData.h
     src/camera/CameraCapture.h
     src/camera/CameraCalibration.h
     src/camera/UnifiedAllocator.h

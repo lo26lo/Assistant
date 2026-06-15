@@ -10,10 +10,6 @@
 
 namespace ibom::gui {
 
-namespace {
-// Cap the uploaded cloud so the GUI-thread build + VBO upload stays cheap.
-constexpr int kMaxPoints = 200000;
-}
 
 PointCloudView::PointCloudView(QWidget* parent)
     : QOpenGLWidget(parent)
@@ -49,60 +45,35 @@ void PointCloudView::resetView()
 {
     m_yaw = 0.0f;
     m_pitch = -20.0f;
+    m_haveCloud = false;  // let the next cloud reframe the zoom distance
     update();
 }
 
-void PointCloudView::updateCloud(const cv::Mat& depthMm, const cv::Mat& colorBgr,
-                                 float fx, float fy, float ppx, float ppy)
+void PointCloudView::setCloud(const ibom::camera::PointCloudRef& cloud)
 {
-    if (depthMm.empty() || depthMm.type() != CV_16UC1 || fx <= 0 || fy <= 0)
-        return;
+    if (!cloud || cloud->count == 0) { clear(); return; }
 
-    const int rows = depthMm.rows, cols = depthMm.cols;
-    const bool haveColor = (!colorBgr.empty()
-                            && colorBgr.rows == rows && colorBgr.cols == cols
-                            && colorBgr.type() == CV_8UC3);
+    const int n = cloud->count;
+    const float* xyz = cloud->xyz.data();
+    const uint8_t* rgb = cloud->rgb.data();
 
-    // Downsample so we stay under kMaxPoints regardless of resolution.
-    const int total = rows * cols;
-    int step = 1;
-    while ((total / (step * step)) > kMaxPoints) ++step;
-
+    // Interleave into x,(-y),(-z),r,g,b. rs2 vertices are metres in the camera
+    // frame (X right, Y down, Z forward); flip Y and Z for a natural view.
     std::vector<float> verts;
-    verts.reserve(static_cast<size_t>(total / (step * step)) * 6);
-
+    verts.reserve(static_cast<size_t>(n) * 6);
     double sx = 0, sy = 0, sz = 0;
-    int n = 0;
-    for (int v = 0; v < rows; v += step) {
-        const uint16_t* drow = depthMm.ptr<uint16_t>(v);
-        const cv::Vec3b* crow = haveColor ? colorBgr.ptr<cv::Vec3b>(v) : nullptr;
-        for (int u = 0; u < cols; u += step) {
-            const uint16_t z = drow[u];
-            if (z == 0) continue;                  // invalid sample
-            const float Z = static_cast<float>(z);
-            const float X = (u - ppx) * Z / fx;
-            const float Y = (v - ppy) * Z / fy;
-            // Flip Y and Z so the cloud faces the camera in a natural way.
-            verts.push_back(X);
-            verts.push_back(-Y);
-            verts.push_back(-Z);
-            if (crow) {
-                const cv::Vec3b& bgr = crow[u];
-                verts.push_back(bgr[2] / 255.0f);
-                verts.push_back(bgr[1] / 255.0f);
-                verts.push_back(bgr[0] / 255.0f);
-            } else {
-                // Colorless: shade by depth (cyan→red over working range).
-                const float t = std::clamp((Z - 30.0f) / 570.0f, 0.0f, 1.0f);
-                verts.push_back(t);
-                verts.push_back(1.0f - t);
-                verts.push_back(1.0f - t);
-            }
-            sx += X; sy += -Y; sz += -Z; ++n;
-        }
+    for (int i = 0; i < n; ++i) {
+        const float X =  xyz[i * 3 + 0];
+        const float Y = -xyz[i * 3 + 1];
+        const float Z = -xyz[i * 3 + 2];
+        verts.push_back(X);
+        verts.push_back(Y);
+        verts.push_back(Z);
+        verts.push_back(rgb[i * 3 + 0] / 255.0f);
+        verts.push_back(rgb[i * 3 + 1] / 255.0f);
+        verts.push_back(rgb[i * 3 + 2] / 255.0f);
+        sx += X; sy += Y; sz += Z;
     }
-
-    if (n == 0) { clear(); return; }
 
     const QVector3D centroid(static_cast<float>(sx / n),
                              static_cast<float>(sy / n),
@@ -115,13 +86,12 @@ void PointCloudView::updateCloud(const cv::Mat& depthMm, const cv::Mat& colorBgr
         m_dirty = true;
     }
 
-    // Frame the cloud the first time we get data (and keep the orbit afterwards).
+    // Frame the cloud the first time; afterwards keep the orbit angle/zoom and
+    // just follow the scene depth.
+    m_target = centroid;
     if (!m_haveCloud) {
-        m_target = centroid;
-        m_dist = std::max(150.0f, std::abs(centroid.z()) * 1.6f);
+        m_dist = std::max(0.2f, std::abs(centroid.z()) * 1.6f);
         m_haveCloud = true;
-    } else {
-        m_target = centroid;  // follow the scene depth, keep orbit angle/zoom
     }
     update();
 }
@@ -188,7 +158,7 @@ QMatrix4x4 PointCloudView::cameraMatrix() const
 {
     QMatrix4x4 proj;
     const float aspect = height() > 0 ? float(width()) / float(height()) : 1.0f;
-    proj.perspective(45.0f, aspect, 1.0f, 20000.0f);
+    proj.perspective(45.0f, aspect, 0.01f, 100.0f);  // metres
 
     QMatrix4x4 view;
     view.translate(0, 0, -m_dist);
@@ -289,7 +259,7 @@ void PointCloudView::wheelEvent(QWheelEvent* event)
 {
     const float steps = event->angleDelta().y() / 120.0f;
     m_dist *= std::pow(0.88f, steps);
-    m_dist = std::clamp(m_dist, 20.0f, 15000.0f);
+    m_dist = std::clamp(m_dist, 0.02f, 50.0f);  // metres
     update();
 }
 

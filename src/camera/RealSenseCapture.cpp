@@ -4,6 +4,7 @@
 #include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 
@@ -223,6 +224,11 @@ void RealSenseCapture::captureLoop()
                      m_width, m_height, m_fps, in.fx, depthUnits);
     } catch (const rs2::error&) { /* keep requested values */ }
 
+    // Point cloud helper (SDK path, like the RealSense Viewer): map_to(color)
+    // + calculate(depth). Reused across frames; only run when 3D view is on.
+    rs2::pointcloud pc;
+    auto lastCloud = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+
     int consecutiveFailures = 0;
     while (m_capturing.load()) {
         rs2::frameset fs;
@@ -287,6 +293,57 @@ void RealSenseCapture::captureLoop()
             raw.convertTo(depthMm, CV_16UC1, depthUnits * 1000.0);
             emit depthFrameReady(std::make_shared<const cv::Mat>(std::move(depthMm)));
         }
+
+        // ── 3D point cloud (SDK path) — canonical librealsense method ──
+        // Uses the NATIVE (unaligned) depth + map_to(color): the SDK applies the
+        // depth intrinsics and depth→color extrinsics, giving per-point texture
+        // coords into the color image. Built here (capture thread) to keep the
+        // GUI thread free; published as an owned, downsampled buffer.
+        if (m_emitCloud.load()) {
+            const auto now = std::chrono::steady_clock::now();
+            const bool due = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 now - lastCloud).count() >= 66;  // ~15 Hz
+            rs2::depth_frame rawDepth = fs.get_depth_frame();
+            if (due && rawDepth) {
+                lastCloud = now;
+                try {
+                    pc.map_to(color);
+                    rs2::points pts = pc.calculate(rawDepth);
+                    const auto* verts = pts.get_vertices();
+                    const auto* uvs   = pts.get_texture_coordinates();
+                    const size_t total = pts.size();
+
+                    // Downsample so the published cloud stays under ~200k points.
+                    size_t stride = 1;
+                    while (total / stride > 200000) ++stride;
+
+                    const int cw = color.get_width();
+                    const int ch = color.get_height();
+                    const auto* cdata = static_cast<const uint8_t*>(color.get_data());
+
+                    auto cloud = std::make_shared<PointCloudData>();
+                    cloud->xyz.reserve((total / stride) * 3);
+                    cloud->rgb.reserve((total / stride) * 3);
+                    for (size_t i = 0; i < total; i += stride) {
+                        if (verts[i].z <= 0.f) continue;   // invalid sample
+                        cloud->xyz.push_back(verts[i].x);
+                        cloud->xyz.push_back(verts[i].y);
+                        cloud->xyz.push_back(verts[i].z);
+                        // Sample BGR8 color via the point's texture coordinate.
+                        int u = std::min(std::max(int(uvs[i].u * cw + 0.5f), 0), cw - 1);
+                        int v = std::min(std::max(int(uvs[i].v * ch + 0.5f), 0), ch - 1);
+                        const uint8_t* px = cdata + (size_t(v) * cw + u) * 3;
+                        cloud->rgb.push_back(px[2]);  // R
+                        cloud->rgb.push_back(px[1]);  // G
+                        cloud->rgb.push_back(px[0]);  // B
+                    }
+                    cloud->count = static_cast<int>(cloud->xyz.size() / 3);
+                    emit pointCloudReady(PointCloudRef(std::move(cloud)));
+                } catch (const rs2::error& e) {
+                    spdlog::debug("RealSense pointcloud calc failed: {}", e.what());
+                }
+            }
+        }  // m_emitCloud
     }
 
     {
