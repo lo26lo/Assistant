@@ -100,6 +100,22 @@ public:
     /// < 0 = leave the preset untouched. Used when applying resolution profiles.
     void setPendingVisualPreset(float value) { m_pendingPreset.store(value); }
 
+    /// Point the auto-exposure metering at a rectangle of the depth/stereo
+    /// sensor (pixels in the current stream resolution), like the Viewer's AE
+    /// ROI. Pass an empty/zero rect to meter the central 50%. Applied live on
+    /// the device; returns false if the sensor doesn't support ROI.
+    bool setAutoExposureRoi(int x, int y, int w, int h);
+
+    /// Ask the capture thread to export the next computed point cloud to a
+    /// binary PLY (vertices + color), like the Viewer's "Export". Fires
+    /// plyExportFinished() when done.
+    void requestPlyExport(const std::string& path);
+
+    /// Ask the capture thread to run the D4xx on-chip self-calibration (no
+    /// target needed). Blocks the capture loop for a few seconds; fires
+    /// onChipCalibrationFinished() with the health score. Experimental.
+    void requestOnChipCalibration() { m_calibPending.store(true); }
+
     /// Enable/disable computing the 3D point cloud on the capture thread.
     /// Off by default (avoids the per-frame rs2::pointcloud cost when the 3D
     /// view is not shown). When on, pointCloudReady() fires each frame.
@@ -123,6 +139,13 @@ signals:
     /// depth, histogram-equalized by rs2::colorizer (aligned to color). Shared.
     void colorizedDepthReady(ibom::camera::FrameRef rgb);
 
+    /// Result of a requestPlyExport(): ok + the path written (or error text).
+    void plyExportFinished(bool ok, const QString& pathOrError);
+
+    /// Result of a requestOnChipCalibration(): ok, health score (closer to 0
+    /// is better), and a human-readable message.
+    void onChipCalibrationFinished(bool ok, float health, const QString& message);
+
 private:
     void captureLoop();
 
@@ -137,6 +160,10 @@ private:
     std::atomic<float>  m_pendingPreset{-1.0f};  // Visual Preset to apply on start
     std::atomic<bool>   m_emitCloud{false};       // compute rs2::pointcloud when true
     std::atomic<bool>   m_emitColorDepth{false};  // colorize depth via rs2::colorizer
+    std::atomic<bool>   m_calibPending{false};    // run on-chip self-calibration
+
+    mutable std::mutex  m_plyMutex;               // guards the pending PLY path
+    std::string         m_pendingPly;             // export path; empty = none
 
     std::atomic<bool>            m_capturing{false};
     std::unique_ptr<std::thread> m_thread;

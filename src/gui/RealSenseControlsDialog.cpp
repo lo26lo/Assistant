@@ -15,6 +15,9 @@
 #include <QDialogButtonBox>
 #include <QTimer>
 #include <QVector>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QDateTime>
 
 #include <map>
 
@@ -104,6 +107,66 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     connect(applyProf, &QPushButton::clicked, this, [this, profCombo]() {
         applyProfile(profCombo->currentIndex());
     });
+
+    // ── Tools (Viewer-style): AE ROI, PLY export, on-chip self-cal ──
+    auto* toolsBox = new QGroupBox(tr("Outils"), this);
+    auto* toolsLay = new QVBoxLayout(toolsBox);
+
+    auto* aeBtn = new QPushButton(tr("Auto-exposition sur le centre"));
+    aeBtn->setToolTip(tr("Règle l'auto-exposition en mesurant la zone centrale "
+                         "(la carte) plutôt que tout le champ — image plus stable."));
+    connect(aeBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_camera) return;
+        const bool ok = m_camera->setAutoExposureRoi(0, 0, 0, 0);  // central 50%
+        QMessageBox::information(this, tr("Auto-exposition"),
+            ok ? tr("ROI d'auto-exposition réglée sur le centre.")
+               : tr("Ce capteur ne supporte pas la ROI d'auto-exposition."));
+    });
+    toolsLay->addWidget(aeBtn);
+
+    auto* plyBtn = new QPushButton(tr("Exporter le nuage 3D (PLY)…"));
+    plyBtn->setToolTip(tr("Enregistre le prochain nuage de points (sommets + "
+                          "couleur) dans un fichier .ply."));
+    connect(plyBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_camera) return;
+        const QString def = QString("pointcloud_%1.ply")
+            .arg(QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"));
+        const QString path = QFileDialog::getSaveFileName(
+            this, tr("Exporter le nuage de points"), def, tr("PLY (*.ply)"));
+        if (!path.isEmpty()) m_camera->requestPlyExport(path.toStdString());
+    });
+    toolsLay->addWidget(plyBtn);
+
+    auto* calBtn = new QPushButton(tr("Self-calibration depth (sans mire)…"));
+    calBtn->setToolTip(tr("Lance la calibration depth embarquée du D4xx. "
+                          "Bloque quelques secondes ; expérimental."));
+    connect(calBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_camera) return;
+        if (QMessageBox::question(this, tr("Self-calibration"),
+                tr("Lancer la calibration depth embarquée ?\n"
+                   "Garde la caméra immobile face à une surface plane texturée "
+                   "pendant quelques secondes.")) == QMessageBox::Yes) {
+            m_camera->requestOnChipCalibration();
+        }
+    });
+    toolsLay->addWidget(calBtn);
+
+    root->addWidget(toolsBox);
+
+    // Surface async results from the capture thread.
+    if (m_camera) {
+        connect(m_camera, &camera::RealSenseCapture::plyExportFinished, this,
+                [this](bool ok, const QString& msg) {
+            QMessageBox::information(this, tr("Export PLY"),
+                ok ? tr("Nuage exporté :\n%1").arg(msg)
+                   : tr("Échec de l'export :\n%1").arg(msg));
+        });
+        connect(m_camera, &camera::RealSenseCapture::onChipCalibrationFinished, this,
+                [this](bool ok, float health, const QString& msg) {
+            Q_UNUSED(health);
+            QMessageBox::information(this, tr("Self-calibration"), msg);
+        });
+    }
 
     m_scroll = new QScrollArea(this);
     m_scroll->setWidgetResizable(true);

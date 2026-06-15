@@ -147,6 +147,36 @@ std::vector<std::string> RealSenseCapture::listDevices()
     return devices;
 }
 
+bool RealSenseCapture::setAutoExposureRoi(int x, int y, int w, int h)
+{
+    std::lock_guard<std::mutex> lk(m_deviceMutex);
+    if (!m_device) return false;
+    try {
+        // Default to the central 50% when no explicit rectangle is given.
+        if (w <= 0 || h <= 0) {
+            x = m_width / 4;  y = m_height / 4;
+            w = m_width / 2;  h = m_height / 2;
+        }
+        for (auto&& s : m_device->query_sensors()) {
+            if (auto roi = s.as<rs2::roi_sensor>()) {
+                rs2::region_of_interest r{ x, y, x + w, y + h };
+                roi.set_region_of_interest(r);
+                spdlog::info("RealSense AE ROI set to [{},{} {}x{}]", x, y, w, h);
+                return true;
+            }
+        }
+    } catch (const rs2::error& e) {
+        spdlog::warn("RealSense set AE ROI failed: {}", e.what());
+    }
+    return false;
+}
+
+void RealSenseCapture::requestPlyExport(const std::string& path)
+{
+    std::lock_guard<std::mutex> lk(m_plyMutex);
+    m_pendingPly = path;
+}
+
 void RealSenseCapture::captureLoop()
 {
     rs2::pipeline pipe;
@@ -344,15 +374,32 @@ void RealSenseCapture::captureLoop()
             // smoothing without running the temporal filter on a second stream.
             // Built here (capture thread) to keep the GUI free; published as an
             // owned, downsampled buffer.
-            if (m_emitCloud.load()) {
-                const auto now = std::chrono::steady_clock::now();
-                const bool due = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                     now - lastCloud).count() >= 66;  // ~15 Hz
-                if (due) {
-                    lastCloud = now;
-                    try {
-                        pc.map_to(color);
-                        rs2::points pts = pc.calculate(fdepth);
+            std::string plyPath;
+            { std::lock_guard<std::mutex> lk(m_plyMutex); plyPath.swap(m_pendingPly); }
+
+            const auto now = std::chrono::steady_clock::now();
+            const bool due = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 now - lastCloud).count() >= 66;  // ~15 Hz
+            const bool wantCloud = m_emitCloud.load() && due;
+            if (wantCloud || !plyPath.empty()) {
+                if (wantCloud) lastCloud = now;
+                try {
+                    pc.map_to(color);
+                    rs2::points pts = pc.calculate(fdepth);
+
+                    // PLY export (Viewer "Export"): SDK writes vertices+color.
+                    if (!plyPath.empty()) {
+                        try {
+                            pts.export_to_ply(plyPath, color);
+                            spdlog::info("RealSense point cloud exported: {}", plyPath);
+                            emit plyExportFinished(true, QString::fromStdString(plyPath));
+                        } catch (const rs2::error& e) {
+                            spdlog::warn("RealSense PLY export failed: {}", e.what());
+                            emit plyExportFinished(false, QString::fromUtf8(e.what()));
+                        }
+                    }
+
+                    if (wantCloud) {
                         const auto* verts = pts.get_vertices();
                         const auto* uvs   = pts.get_texture_coordinates();
                         const size_t total = pts.size();
@@ -383,11 +430,39 @@ void RealSenseCapture::captureLoop()
                         }
                         cloud->count = static_cast<int>(cloud->xyz.size() / 3);
                         emit pointCloudReady(PointCloudRef(std::move(cloud)));
-                    } catch (const rs2::error& e) {
-                        spdlog::debug("RealSense pointcloud calc failed: {}", e.what());
                     }
+                } catch (const rs2::error& e) {
+                    spdlog::debug("RealSense pointcloud calc failed: {}", e.what());
                 }
-            }  // m_emitCloud
+            }
+        }
+
+        // ── On-chip self-calibration (D4xx, no target) ──────────────
+        // Runs on the capture thread between frames; blocks a few seconds.
+        if (m_calibPending.exchange(false)) {
+            try {
+                std::lock_guard<std::mutex> lk(m_deviceMutex);
+                if (m_device) {
+                    auto cal = m_device->as<rs2::auto_calibrated_device>();
+                    float health = 0.f;
+                    // Default config: speed=slow for best accuracy on a static rig.
+                    const std::string cfg =
+                        "{\n \"speed\": 3,\n \"scan parameter\": 0\n}";
+                    rs2::calibration_table table =
+                        cal.run_on_chip_calibration(cfg, &health, 10000);
+                    cal.set_calibration_table(table);
+                    cal.write_calibration();
+                    spdlog::info("RealSense on-chip calibration done, health={:.4f}", health);
+                    emit onChipCalibrationFinished(
+                        true, health,
+                        QString("Self-calibration OK (health %1)").arg(health, 0, 'f', 4));
+                } else {
+                    emit onChipCalibrationFinished(false, 0.f, "No device handle");
+                }
+            } catch (const rs2::error& e) {
+                spdlog::warn("RealSense on-chip calibration failed: {}", e.what());
+                emit onChipCalibrationFinished(false, 0.f, QString::fromUtf8(e.what()));
+            }
         }
     }
 
