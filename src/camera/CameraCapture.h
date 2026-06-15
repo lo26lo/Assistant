@@ -52,6 +52,12 @@ public:
     void setFps(int fps);
     QSize resolution() const;
 
+    /// Enable NVIDIA hardware MJPG decode via GStreamer (nvv4l2decoder) on
+    /// Jetson. When enabled, captureLoop() tries the GStreamer pipeline first
+    /// and falls back to CPU V4L2 automatically if it cannot open.
+    void setHardwareDecode(bool enabled) { m_hwDecode = enabled; }
+    bool hardwareDecode() const { return m_hwDecode; }
+
     /// List available camera devices.
     static std::vector<std::string> listDevices();
 
@@ -73,6 +79,7 @@ private:
     int m_width = 1920;
     int m_height = 1080;
     int m_fps = 30;
+    bool m_hwDecode = true;
 
     std::atomic<bool>           m_capturing{false};
     std::unique_ptr<std::thread> m_thread;

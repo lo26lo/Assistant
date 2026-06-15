@@ -79,6 +79,12 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
     m_cameraFps->setRange(1, 120);
     form->addRow(tr("FPS:"), m_cameraFps);
 
+    m_cameraHwDecode = new QCheckBox(tr("NVIDIA hardware MJPG decode (Jetson)"));
+    m_cameraHwDecode->setToolTip(tr("Decode MJPG on the NVDEC/VIC blocks via GStreamer "
+                                    "(nvv4l2decoder) instead of the CPU. Falls back to "
+                                    "V4L2 automatically if unavailable. Restart camera to apply."));
+    form->addRow(QString(), m_cameraHwDecode);
+
     // --- Calibration group ---
     auto* calibGroup = new QGroupBox(tr("Calibration Checkerboard"));
     auto* calibForm  = new QFormLayout(calibGroup);
@@ -334,6 +340,7 @@ void SettingsDialog::loadFromConfig()
     m_cameraWidth->setValue(m_config.cameraWidth());
     m_cameraHeight->setValue(m_config.cameraHeight());
     m_cameraFps->setValue(m_config.cameraFps());
+    m_cameraHwDecode->setChecked(m_config.cameraHwDecode());
 
     // Calibration
     m_calibBoardCols->setValue(m_config.calibBoardCols());
@@ -393,6 +400,7 @@ void SettingsDialog::accept()
     m_config.setCameraWidth(m_cameraWidth->value());
     m_config.setCameraHeight(m_cameraHeight->value());
     m_config.setCameraFps(m_cameraFps->value());
+    m_config.setCameraHwDecode(m_cameraHwDecode->isChecked());
 
     // Calibration
     m_config.setCalibBoardCols(m_calibBoardCols->value());

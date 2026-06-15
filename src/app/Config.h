@@ -51,6 +51,11 @@ public:
     int  cameraFps() const { return m_cameraFps; }
     void setCameraFps(int fps) { m_cameraFps = fps; }
 
+    /// Use NVIDIA hardware MJPG decode (GStreamer nvv4l2decoder) on Jetson.
+    /// Falls back to CPU V4L2 automatically if the pipeline fails to open.
+    bool cameraHwDecode() const { return m_cameraHwDecode; }
+    void setCameraHwDecode(bool enabled) { m_cameraHwDecode = enabled; }
+
     // --- iBOM ---
     const std::string& ibomFilePath() const { return m_ibomFilePath; }
     void setIBomFilePath(const std::string& path) { m_ibomFilePath = path; }
@@ -200,6 +205,7 @@ private:
     int m_cameraWidth    = 1920;
     int m_cameraHeight   = 1080;
     int m_cameraFps      = 30;
+    bool m_cameraHwDecode = true;   // NVIDIA HW MJPG decode (Jetson), auto-fallback to V4L2
 
     // iBOM
     std::string m_ibomFilePath;

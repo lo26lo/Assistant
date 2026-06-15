@@ -51,6 +51,7 @@ bool Config::load(const std::string& path)
             m_cameraWidth  = cam.value("width", m_cameraWidth);
             m_cameraHeight = cam.value("height", m_cameraHeight);
             m_cameraFps    = cam.value("fps", m_cameraFps);
+            m_cameraHwDecode = cam.value("hw_decode", m_cameraHwDecode);
         }
 
         // iBOM
@@ -174,7 +175,8 @@ bool Config::save(const std::string& path) const
             {"index",  m_cameraIndex},
             {"width",  m_cameraWidth},
             {"height", m_cameraHeight},
-            {"fps",    m_cameraFps}
+            {"fps",    m_cameraFps},
+            {"hw_decode", m_cameraHwDecode}
         };
 
         // iBOM

@@ -7,8 +7,41 @@
 #include <spdlog/spdlog.h>
 #include <thread>
 #include <chrono>
+#include <algorithm>
 
 namespace ibom::camera {
+
+namespace {
+
+/// Build a GStreamer pipeline that decodes the camera's MJPG stream on the
+/// Jetson hardware blocks (nvv4l2decoder → NVDEC/VIC) and converts to BGR on
+/// the GPU (nvvidconv). This keeps the MJPG decode off the CPU entirely.
+/// MJPG (not H.264) is used deliberately: each frame is independent, so there
+/// are no inter-frame compression artifacts that would corrupt pad edges,
+/// silkscreen text or ORB keypoints — critical for inspection/measurement.
+std::string buildGstPipeline(int deviceIndex, int width, int height, int fps)
+{
+    return "v4l2src device=/dev/video" + std::to_string(deviceIndex) +
+           " ! image/jpeg,width=" + std::to_string(width) +
+           ",height=" + std::to_string(height) +
+           ",framerate=" + std::to_string(fps) + "/1"
+           " ! nvv4l2decoder mjpeg=1"
+           " ! nvvidconv"
+           " ! video/x-raw,format=BGRx"
+           " ! videoconvert ! video/x-raw,format=BGR"
+           " ! appsink drop=1 max-buffers=1 sync=false";
+}
+
+/// True if OpenCV was built with the GStreamer backend available.
+bool gstreamerAvailable()
+{
+    for (auto b : cv::videoio_registry::getBackends()) {
+        if (b == cv::CAP_GSTREAMER) return true;
+    }
+    return false;
+}
+
+} // namespace
 
 CameraCapture::CameraCapture(int deviceIndex, QObject* parent)
     : QObject(parent)
@@ -119,14 +152,40 @@ void CameraCapture::captureLoop()
     }
 
     bool opened = false;
-    for (auto& [backend, name] : backends) {
-        spdlog::info("Trying camera {} with {} backend (id={})...", m_deviceIndex, name, backend);
-        bool result = cap.open(m_deviceIndex, backend);
-        spdlog::info("  cap.open result: {}, isOpened: {}", result, cap.isOpened());
-        if (result && cap.isOpened()) {
-            spdlog::info("Camera opened with {} backend", name);
-            opened = true;
-            break;
+    bool openedViaGst = false;
+
+    // Preferred path on Jetson: hardware MJPG decode through GStreamer
+    // (nvv4l2decoder). The pipeline already outputs BGR frames, so the
+    // FOURCC/resolution properties below must be skipped when this succeeds.
+    if (m_hwDecode) {
+        if (gstreamerAvailable()) {
+            const std::string pipeline =
+                buildGstPipeline(m_deviceIndex, m_width, m_height, m_fps);
+            spdlog::info("Trying NVIDIA HW decode via GStreamer:\n  {}", pipeline);
+            if (cap.open(pipeline, cv::CAP_GSTREAMER) && cap.isOpened()) {
+                spdlog::info("Camera opened with GStreamer (nvv4l2decoder, HW MJPG decode)");
+                opened = true;
+                openedViaGst = true;
+            } else {
+                spdlog::warn("GStreamer HW pipeline failed to open — "
+                             "falling back to CPU V4L2 decode");
+            }
+        } else {
+            spdlog::warn("HW decode requested but OpenCV has no GStreamer backend "
+                         "— falling back to CPU V4L2 decode");
+        }
+    }
+
+    if (!opened) {
+        for (auto& [backend, name] : backends) {
+            spdlog::info("Trying camera {} with {} backend (id={})...", m_deviceIndex, name, backend);
+            bool result = cap.open(m_deviceIndex, backend);
+            spdlog::info("  cap.open result: {}, isOpened: {}", result, cap.isOpened());
+            if (result && cap.isOpened()) {
+                spdlog::info("Camera opened with {} backend", name);
+                opened = true;
+                break;
+            }
         }
     }
 
@@ -138,17 +197,22 @@ void CameraCapture::captureLoop()
         return;
     }
 
-    // Request MJPG BEFORE the resolution/fps. UVC cameras default to raw YUYV,
-    // whose bandwidth caps USB 2.0 well below 1080p@30 (the driver then silently
-    // falls back to ~5-10 fps). MJPG is compressed on-camera, so full res/fps fit.
-    // Order matters: FOURCC must be set before width/height for most V4L2 drivers.
-    cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+    // These V4L2 properties are meaningless on the GStreamer path — the format,
+    // resolution and fps are baked into the pipeline caps, and the appsink
+    // already delivers decoded BGR frames.
+    if (!openedViaGst) {
+        // Request MJPG BEFORE the resolution/fps. UVC cameras default to raw YUYV,
+        // whose bandwidth caps USB 2.0 well below 1080p@30 (the driver then silently
+        // falls back to ~5-10 fps). MJPG is compressed on-camera, so full res/fps fit.
+        // Order matters: FOURCC must be set before width/height for most V4L2 drivers.
+        cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
 
-    // Configure capture properties (best-effort, camera may not support requested res)
-    cap.set(cv::CAP_PROP_FRAME_WIDTH, m_width);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, m_height);
-    cap.set(cv::CAP_PROP_FPS, m_fps);
-    cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+        // Configure capture properties (best-effort, camera may not support requested res)
+        cap.set(cv::CAP_PROP_FRAME_WIDTH, m_width);
+        cap.set(cv::CAP_PROP_FRAME_HEIGHT, m_height);
+        cap.set(cv::CAP_PROP_FPS, m_fps);
+        cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+    }
 
     // Decode and log the FOURCC the camera actually settled on — if it isn't
     // MJPG, expect reduced fps at high resolution (the camera ignored the hint).

@@ -345,6 +345,9 @@ void Application::createSubsystems()
     // Camera capture
     spdlog::info("Creating CameraCapture...");
     m_camera = std::make_unique<camera::CameraCapture>(m_config->cameraIndex());
+    m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
+    m_camera->setFps(m_config->cameraFps());
+    m_camera->setHardwareDecode(m_config->cameraHwDecode());
 
     // Camera calibration
     spdlog::info("Creating CameraCalibration...");
@@ -558,6 +561,7 @@ void Application::connectSignals()
             m_camera->setDeviceIndex(m_config->cameraIndex());
             m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
             m_camera->setFps(m_config->cameraFps());
+            m_camera->setHardwareDecode(m_config->cameraHwDecode());
             if (!m_camera->start()) {
                 m_mainWindow->updateStatusMessage(tr("Failed to start camera"));
             }
@@ -832,6 +836,7 @@ void Application::connectSignals()
         m_camera->setDeviceIndex(index);
         m_camera->setResolution(w, h);
         m_camera->setFps(fps);
+        m_camera->setHardwareDecode(m_config->cameraHwDecode());
         if (wasCapturing) m_camera->start();
         spdlog::info("Camera settings applied: device={} {}x{} @{}fps", index, w, h, fps);
     });
@@ -1028,6 +1033,7 @@ void Application::connectSignals()
             m_camera->setDeviceIndex(newIdx);
             m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
             m_camera->setFps(m_config->cameraFps());
+            m_camera->setHardwareDecode(m_config->cameraHwDecode());
             m_camera->start();
             spdlog::info("Camera restarted on device {} ({}x{} @{}fps)",
                          newIdx, m_config->cameraWidth(), m_config->cameraHeight(),
