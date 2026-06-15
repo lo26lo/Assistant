@@ -11,8 +11,10 @@
 
 ---
 
-## État actuel — au 2026-06-12
+## État actuel — au 2026-06-15
 
+> **2026-06-15** : fix **mise en page InspectionPanel** (QScrollArea — boutons Export Report plus tronqués/chevauchants) + fix **caméra dans Settings** (SettingsDialog utilisait QMediaDevices au lieu de CameraCapture::listDevices, même bug que #17). Branche `claude/pr5-plus-fixes`. ⚠️ À valider sur Jetson.
+>
 > **2026-06-12 (suite 3)** : **restauration de session d'inspection** (`session_state.json` clé = chemin iBOM, sauvegarde à chaque « Placed », reprise au chargement + au Start Inspection, Reset efface) + **boutons Report HTML/PDF** (InspectionPanel + menu File → Export Report, via `ReportGenerator` enfin instancié — stats/yield/checklist + snapshot caméra). Nouveau : `PickAndPlace::restorePlaced()`. ⚠️ Toujours rien compilé ici — valider sur Jetson.
 >
 > **2026-06-12 (suite 2)** : **items 4-6 du backlog implémentés** — focus assist (netteté Laplacien live dans StatsPanel), fichiers récents + auto-reload iBOM (File → Open Recent), **RemoteView câblé** (viewer HTML écrit dans `$IBOM_DATA_DIR/remote_view.html`) + nouvel onglet **Settings → Features**. ⚠️ Toujours rien compilé ici — valider sur Jetson.
@@ -79,6 +81,47 @@ Aucun. Tous les obstacles Phase 0/1/2 sont résolus et documentés dans [JETSON_
 2. Vérifier le statut de [JETSON_ERREURS.md](JETSON_ERREURS.md) pour les bugs ouverts
 3. Sur le Jetson : `cd ~/Assistant-git && git pull && git status`
 4. Continuer là où la dernière session s'est arrêtée
+
+---
+
+## Session 2026-06-15 — Fix mise en page InspectionPanel + caméra absente dans Settings
+
+### Contexte
+Suite de la session 2026-06-14. Deux problèmes découverts lors du premier test visuel de l'app sur le Jetson :
+1. **Mise en page** : la section « Export Report » (bas du dock Inspection) avait des boutons chevauchants/tronqués — le panel était trop haut pour le dock sans ascenseur.
+2. **Camera dans Settings** : `SettingsDialog → Camera → Device` affichait « No camera detected » même quand la caméra était bien détectée dans le reste de l'app.
+
+### Cause de la mise en page
+`InspectionPanel::buildUI()` installe directement un `QVBoxLayout` sur `this`. Avec 4 groupes (Inspection/Measure/Snapshots/Export) + Progress/Labels/Buttons, le panel dépasse la hauteur du dock → Qt compresse les widgets du bas. Référence : `ControlPanel` utilise déjà le pattern `QScrollArea` + widget contenu.
+
+### Fix 1 — InspectionPanel : scroll area (`src/gui/InspectionPanel.cpp`)
+Même pattern que `ControlPanel` :
+```
+QScrollArea (this, widgetResizable, NoFrame)
+  └─ content (QWidget)
+       └─ QVBoxLayout — contient les 4 groupes
+```
+Includes ajoutés : `<QScrollArea>`, `<QFrame>`.
+
+### Fix 2 — SettingsDialog : V4L2 enumeration (`src/gui/SettingsDialog.cpp`)
+`SettingsDialog::enumerateCameras()` utilisait `QMediaDevices::videoInputs()` (aveugle sur Jetson/Docker) → même cause que l'erreur #17 dans Application.cpp. Fix : remplacé par `ibom::camera::CameraCapture::listDevices()` (V4L2 OpenCV), `QMediaDevices` conservé uniquement pour les libellés. Include `CameraCapture.h` ajouté.
+
+### Fichiers modifiés
+- `src/gui/InspectionPanel.cpp` — QScrollArea pattern
+- `src/gui/SettingsDialog.cpp` — V4L2 enumeration + include CameraCapture.h
+
+### ⚠️ À valider sur le Jetson
+```bash
+bash scripts/build_jetson.sh && cd build && ctest --output-on-failure
+```
+Tests manuels :
+- Dock Inspection : faire défiler jusqu'aux boutons Report HTML/PDF (scroll doit apparaître si la fenêtre est trop petite)
+- Settings → Camera : onglet ouvert → Device doit afficher « 0: /dev/video0 » au lieu de « No camera detected »
+
+### Reste à faire
+- [ ] Valider calibration `findChessboardCornersSB` (fix erreur #18 — déjà pushé, test demain)
+- [ ] Segfault à la fermeture (RemoteView teardown, non bloquant)
+- [ ] Ouvrir PR `claude/pr5-plus-fixes` → `main` quand tous les tests passent
 
 ---
 

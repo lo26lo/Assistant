@@ -1,5 +1,6 @@
 #include "SettingsDialog.h"
 #include "../app/Config.h"
+#include "../camera/CameraCapture.h"
 
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -457,9 +458,17 @@ void SettingsDialog::enumerateCameras()
 
     std::thread([this, previousIndex]() {
         QStringList names;
-        const auto cameras = QMediaDevices::videoInputs();
-        for (int i = 0; i < cameras.size(); ++i)
-            names << QString("%1: %2").arg(i).arg(cameras[i].description());
+        // Use OpenCV V4L2 enumeration (reliable on Jetson/Docker).
+        // QMediaDevices::videoInputs() is blind to /dev/video* in this environment.
+        const auto v4lDevices = ibom::camera::CameraCapture::listDevices();
+        const auto qtCameras  = QMediaDevices::videoInputs();
+        for (size_t i = 0; i < v4lDevices.size(); ++i) {
+            const int qi = static_cast<int>(i);
+            QString label = (qi < qtCameras.size())
+                ? qtCameras[qi].description()
+                : QString::fromStdString(v4lDevices[i]);
+            names << QString("%1: %2").arg(qi).arg(label);
+        }
         QMetaObject::invokeMethod(this, [this, names, previousIndex]() {
             m_cameraDevice->clear();
             if (names.isEmpty()) {

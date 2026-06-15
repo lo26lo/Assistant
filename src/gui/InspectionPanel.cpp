@@ -4,6 +4,8 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QScrollArea>
+#include <QFrame>
 #include <QFont>
 
 namespace ibom::gui {
@@ -24,7 +26,12 @@ void InspectionPanel::setEnabled(bool enabled)
 
 void InspectionPanel::buildUI()
 {
-    auto* main = new QVBoxLayout(this);
+    auto* scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+
+    auto* content = new QWidget;
+    auto* main = new QVBoxLayout(content);
     main->setContentsMargins(8, 8, 8, 8);
     main->setSpacing(10);
 
@@ -142,6 +149,12 @@ void InspectionPanel::buildUI()
 
     main->addWidget(exportGroup);
     main->addStretch();
+
+    scroll->setWidget(content);
+
+    auto* outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+    outerLayout->addWidget(scroll);
 
     // ── Wiring ──────────────────────────────────────────────────
     connect(m_btnStart,   &QPushButton::clicked, this, &InspectionPanel::startInspectionClicked);
