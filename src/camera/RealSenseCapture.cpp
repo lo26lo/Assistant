@@ -18,6 +18,12 @@ struct FilterChain {
     rs2::temporal_filter     temporal;
     rs2::threshold_filter    threshold;
     rs2::hole_filling_filter holeFill;
+    // Disparity-domain transforms: spatial+temporal are most effective applied
+    // in the disparity domain (Intel post-processing whitepaper / rs-post-
+    // processing example). depth→disparity (true) before, disparity→depth
+    // (false) after. Not user-exposed; bracket spatial/temporal automatically.
+    rs2::disparity_transform depthToDisparity{true};
+    rs2::disparity_transform disparityToDepth{false};
 
     std::mutex mutex;
     // Defaults tuned for a static PCB rig: spatial+temporal on (cf. #10682).
@@ -40,6 +46,20 @@ struct FilterChain {
             case HoleFill:  return "Hole Filling Filter";
             default:        return "Spatial Filter";
         }
+    }
+
+    /// Apply the enabled filters in the canonical librealsense order:
+    /// Threshold → [depth→disparity → Spatial → Temporal → disparity→depth]
+    /// → Hole Filling. The caller must hold `mutex`.
+    rs2::frame processOrdered(rs2::frame f) {
+        if (enabled[Threshold]) f = threshold.process(f);
+        const bool useDisparity = enabled[Spatial] || enabled[Temporal];
+        if (useDisparity)      f = depthToDisparity.process(f);
+        if (enabled[Spatial])  f = spatial.process(f);
+        if (enabled[Temporal]) f = temporal.process(f);
+        if (useDisparity)      f = disparityToDepth.process(f);
+        if (enabled[HoleFill]) f = holeFill.process(f);
+        return f;
     }
 };
 
@@ -280,9 +300,7 @@ void RealSenseCapture::captureLoop()
             rs2::frame filtered = depth;
             {
                 std::lock_guard<std::mutex> lk(m_filters->mutex);
-                for (int i = 0; i < FilterChain::Count; ++i)
-                    if (m_filters->enabled[i])
-                        filtered = m_filters->at(i).process(filtered);
+                filtered = m_filters->processOrdered(filtered);
             }
             const rs2::depth_frame fdepth = filtered.as<rs2::depth_frame>();
             const cv::Mat raw(cv::Size(fdepth.get_width(), fdepth.get_height()),
@@ -292,58 +310,58 @@ void RealSenseCapture::captureLoop()
             cv::Mat depthMm;
             raw.convertTo(depthMm, CV_16UC1, depthUnits * 1000.0);
             emit depthFrameReady(std::make_shared<const cv::Mat>(std::move(depthMm)));
-        }
 
-        // ── 3D point cloud (SDK path) — canonical librealsense method ──
-        // Uses the NATIVE (unaligned) depth + map_to(color): the SDK applies the
-        // depth intrinsics and depth→color extrinsics, giving per-point texture
-        // coords into the color image. Built here (capture thread) to keep the
-        // GUI thread free; published as an owned, downsampled buffer.
-        if (m_emitCloud.load()) {
-            const auto now = std::chrono::steady_clock::now();
-            const bool due = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 now - lastCloud).count() >= 66;  // ~15 Hz
-            rs2::depth_frame rawDepth = fs.get_depth_frame();
-            if (due && rawDepth) {
-                lastCloud = now;
-                try {
-                    pc.map_to(color);
-                    rs2::points pts = pc.calculate(rawDepth);
-                    const auto* verts = pts.get_vertices();
-                    const auto* uvs   = pts.get_texture_coordinates();
-                    const size_t total = pts.size();
+            // ── 3D point cloud (SDK path) — canonical librealsense method ──
+            // pc.map_to(color) + pc.calculate(depth). Reuses the SAME filtered
+            // (post-processed) depth so the cloud benefits from spatial/temporal
+            // smoothing without running the temporal filter on a second stream.
+            // Built here (capture thread) to keep the GUI free; published as an
+            // owned, downsampled buffer.
+            if (m_emitCloud.load()) {
+                const auto now = std::chrono::steady_clock::now();
+                const bool due = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     now - lastCloud).count() >= 66;  // ~15 Hz
+                if (due) {
+                    lastCloud = now;
+                    try {
+                        pc.map_to(color);
+                        rs2::points pts = pc.calculate(fdepth);
+                        const auto* verts = pts.get_vertices();
+                        const auto* uvs   = pts.get_texture_coordinates();
+                        const size_t total = pts.size();
 
-                    // Downsample so the published cloud stays under ~200k points.
-                    size_t stride = 1;
-                    while (total / stride > 200000) ++stride;
+                        // Downsample so the published cloud stays under ~200k points.
+                        size_t stride = 1;
+                        while (total / stride > 200000) ++stride;
 
-                    const int cw = color.get_width();
-                    const int ch = color.get_height();
-                    const auto* cdata = static_cast<const uint8_t*>(color.get_data());
+                        const int cw = color.get_width();
+                        const int ch = color.get_height();
+                        const auto* cdata = static_cast<const uint8_t*>(color.get_data());
 
-                    auto cloud = std::make_shared<PointCloudData>();
-                    cloud->xyz.reserve((total / stride) * 3);
-                    cloud->rgb.reserve((total / stride) * 3);
-                    for (size_t i = 0; i < total; i += stride) {
-                        if (verts[i].z <= 0.f) continue;   // invalid sample
-                        cloud->xyz.push_back(verts[i].x);
-                        cloud->xyz.push_back(verts[i].y);
-                        cloud->xyz.push_back(verts[i].z);
-                        // Sample BGR8 color via the point's texture coordinate.
-                        int u = std::min(std::max(int(uvs[i].u * cw + 0.5f), 0), cw - 1);
-                        int v = std::min(std::max(int(uvs[i].v * ch + 0.5f), 0), ch - 1);
-                        const uint8_t* px = cdata + (size_t(v) * cw + u) * 3;
-                        cloud->rgb.push_back(px[2]);  // R
-                        cloud->rgb.push_back(px[1]);  // G
-                        cloud->rgb.push_back(px[0]);  // B
+                        auto cloud = std::make_shared<PointCloudData>();
+                        cloud->xyz.reserve((total / stride) * 3);
+                        cloud->rgb.reserve((total / stride) * 3);
+                        for (size_t i = 0; i < total; i += stride) {
+                            if (verts[i].z <= 0.f) continue;   // invalid sample
+                            cloud->xyz.push_back(verts[i].x);
+                            cloud->xyz.push_back(verts[i].y);
+                            cloud->xyz.push_back(verts[i].z);
+                            // Sample BGR8 color via the point's texture coordinate.
+                            int u = std::min(std::max(int(uvs[i].u * cw + 0.5f), 0), cw - 1);
+                            int v = std::min(std::max(int(uvs[i].v * ch + 0.5f), 0), ch - 1);
+                            const uint8_t* px = cdata + (size_t(v) * cw + u) * 3;
+                            cloud->rgb.push_back(px[2]);  // R
+                            cloud->rgb.push_back(px[1]);  // G
+                            cloud->rgb.push_back(px[0]);  // B
+                        }
+                        cloud->count = static_cast<int>(cloud->xyz.size() / 3);
+                        emit pointCloudReady(PointCloudRef(std::move(cloud)));
+                    } catch (const rs2::error& e) {
+                        spdlog::debug("RealSense pointcloud calc failed: {}", e.what());
                     }
-                    cloud->count = static_cast<int>(cloud->xyz.size() / 3);
-                    emit pointCloudReady(PointCloudRef(std::move(cloud)));
-                } catch (const rs2::error& e) {
-                    spdlog::debug("RealSense pointcloud calc failed: {}", e.what());
                 }
-            }
-        }  // m_emitCloud
+            }  // m_emitCloud
+        }
     }
 
     {
