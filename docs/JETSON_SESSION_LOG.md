@@ -159,6 +159,21 @@ qui posent problème + les logs de calibration, etc.
   (QueuedConnection) dans `connectSignals()`.
 - **`CMakeLists.txt`** : ajout de `QtLogSink.{h,cpp}`.
 
+### Fix 6 — défilement tactile (écran Minix) sur le panneau gauche
+L'utilisateur (écran tactile Minix SF16T) signalait que « les ascenseurs du panneau de
+gauche ne fonctionnent pas ». Cause : ascenseurs Qt à 8px (impossibles au doigt) + pas
+de glisser-pour-défiler tactile sur `QScrollArea` par défaut.
+
+- **`src/gui/InspectionPanel.cpp`** : `QScroller::grabGesture(scroll->viewport(),
+  QScroller::LeftMouseButtonGesture)` → défilement cinétique au doigt (le tactile X11 est
+  synthétisé en souris, donc LeftMouseButtonGesture couvre tactile + souris ; les taps
+  passent quand même en clic). InspectionPanel n'a pas de slider → pas de conflit.
+- **`src/gui/MainWindow.cpp`** : ascenseurs élargis 8px → **14px** (handle radius 7px,
+  min 48px) dans les deux thèmes (dark + light) — saisissables au doigt partout.
+- **ControlPanel** (droite) : volontairement **sans** QScroller (slider d'opacité +
+  spinbox → le cinétique intercepterait le glisser). Bénéficie quand même de l'ascenseur
+  14px.
+
 ### Reste à faire
 - [ ] Valider calibration `findChessboardCornersSB` (fix erreur #18 — déjà pushé, test demain)
 - [ ] Segfault à la fermeture (RemoteView teardown, non bloquant)

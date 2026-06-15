@@ -5,6 +5,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QScrollArea>
+#include <QScroller>
 #include <QFrame>
 #include <QFont>
 
@@ -151,6 +152,11 @@ void InspectionPanel::buildUI()
     main->addStretch();
 
     scroll->setWidget(content);
+
+    // Touchscreen kinetic scrolling: the 8px scrollbar is unusable with a
+    // finger, so enable drag-to-scroll on the viewport. Works with touch
+    // (synthesized as mouse on X11) and a real mouse; taps still click through.
+    QScroller::grabGesture(scroll->viewport(), QScroller::LeftMouseButtonGesture);
 
     auto* outerLayout = new QVBoxLayout(this);
     outerLayout->setContentsMargins(0, 0, 0, 0);
