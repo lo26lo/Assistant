@@ -140,6 +140,9 @@ void MainWindow::createActions()
     m_actCalibrate = new QAction(tr("Calibrate Camera"), this);
     m_actCalibrate->setShortcut(Qt::Key_K);
     connect(m_actCalibrate, &QAction::triggered, this, &MainWindow::onCalibrate);
+    // Not in the menu/toolbar (calibration lives in the right panel now), but
+    // kept as a window-level action so the K shortcut still works.
+    addAction(m_actCalibrate);
 
     m_actInspect = new QAction(tr("Start Inspection"), this);
     m_actInspect->setShortcut(Qt::Key_I);
@@ -174,15 +177,10 @@ void MainWindow::createMenuBar()
 
     auto* cameraMenu = menuBar()->addMenu(tr("&Camera"));
     cameraMenu->addAction(m_actToggleCam);
-    cameraMenu->addAction(m_actCalibrate);
-    cameraMenu->addSeparator();
-    auto* actGenBoard = cameraMenu->addAction(tr("Generate Checkerboard..."));
-    actGenBoard->setToolTip(tr("Generate a printable checkerboard for camera calibration"));
-    connect(actGenBoard, &QAction::triggered, this, &MainWindow::onGenerateCheckerboard);
-
-    auto* actOpenPatterns = cameraMenu->addAction(tr("Open Calibration Patterns PDF..."));
-    actOpenPatterns->setToolTip(tr("Open pre-generated calibration patterns (0.5, 1, 2 mm squares)"));
-    connect(actOpenPatterns, &QAction::triggered, this, &MainWindow::onOpenCalibrationPDF);
+    // Calibration / checkerboard / alignment all live in the right-side
+    // "Calibration & Alignment" panel now (backend-aware) — not duplicated in
+    // the menu/toolbar. The K shortcut still triggers checkerboard calibration
+    // via m_actCalibrate, which is added to the window in createActions().
 
     auto* inspectMenu = menuBar()->addMenu(tr("&Inspection"));
     inspectMenu->addAction(m_actInspect);
@@ -232,7 +230,6 @@ void MainWindow::createToolBar()
     m_mainToolBar->addAction(m_actOpenIBom);
     m_mainToolBar->addSeparator();
     m_mainToolBar->addAction(m_actToggleCam);
-    m_mainToolBar->addAction(m_actCalibrate);
     m_mainToolBar->addSeparator();
     m_mainToolBar->addAction(m_actInspect);
     m_mainToolBar->addAction(m_actScreenshot);
@@ -283,6 +280,11 @@ void MainWindow::createDockWidgets()
     controlDock->setWidget(m_controlPanel);
     controlDock->setMinimumWidth(250);
     controlDock->setMaximumWidth(320);
+    // Checkerboard tools moved out of the Camera menu into the panel.
+    connect(m_controlPanel, &ControlPanel::generateCheckerboardRequested,
+            this, &MainWindow::onGenerateCheckerboard);
+    connect(m_controlPanel, &ControlPanel::openCalibrationPdfRequested,
+            this, &MainWindow::onOpenCalibrationPDF);
     addDockWidget(Qt::RightDockWidgetArea, controlDock);
     tabifyDockWidget(bomDock, controlDock);
     controlDock->raise(); // Show Controls tab by default
