@@ -127,6 +127,17 @@ Tests manuels :
 - Dock Inspection : faire défiler jusqu'aux boutons Report HTML/PDF (scroll doit apparaître si la fenêtre est trop petite)
 - Settings → Camera : onglet ouvert → Device doit afficher « 0: /dev/video0 » au lieu de « No camera detected »
 
+### Fix 4 — nouveau script `scripts/run_dev_shell.sh`
+L'utilisateur ne savait jamais quel script lancer pour avoir un **shell dev AVEC caméra**.
+Cause : `docker/run-dev.sh` n'utilise que `compose.yml` (pas de `/dev/video*`), et
+`run_local_gui.sh` lance le binaire directement (pas de shell). Aucun ne faisait
+« shell dev + vidéo ».
+
+Nouveau `scripts/run_dev_shell.sh` : même setup que `run_local_gui.sh` (override caméra
+dynamique `/tmp/microscope-ibom.cameras.yml` + X11 + xauth) mais dépose dans `bash` au
+lieu de lancer le binaire. README Docker corrigé (tableau des 3 scripts ; l'ancien README
+prétendait à tort que `run-dev.sh` donnait accès aux caméras).
+
 ### Reste à faire
 - [ ] Valider calibration `findChessboardCornersSB` (fix erreur #18 — déjà pushé, test demain)
 - [ ] Segfault à la fermeture (RemoteView teardown, non bloquant)

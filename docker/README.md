@@ -68,15 +68,32 @@ docker compose -f docker/compose.yml build dev
 
 ## Workflow développement
 
-### Démarrer le container dev
+### Quel script utiliser ? (3 entrées, ne pas confondre)
+
+| Script | Donne | Caméra `/dev/video*` | Quand l'utiliser |
+|--------|-------|:--:|------------------|
+| `bash scripts/run_dev_shell.sh` | **shell dev** | ✅ oui | **Cas général** : builder, debugger, lancer le binaire à la main avec la caméra |
+| `bash scripts/run_local_gui.sh` | lance le binaire directement | ✅ oui | Juste démarrer l'app (pas de shell) |
+| `bash docker/run-dev.sh` | shell dev | ❌ **non** | Build pur sans caméra (legacy) |
+
+> ⚠️ **Important** : `docker/run-dev.sh` n'utilise que `compose.yml` → **pas** de mapping
+> `/dev/video*`, donc l'app y logue « Found 0 camera(s) ». Pour avoir la caméra dans
+> un shell dev, utiliser **`scripts/run_dev_shell.sh`** (il génère l'override caméra
+> dynamique + monte X11, comme `run_local_gui.sh`, mais te dépose dans `bash`).
+
+### Démarrer un shell dev avec caméra (recommandé)
 ```bash
-bash docker/run-dev.sh
+bash scripts/run_dev_shell.sh
 ```
 
 Tu te retrouves dans le container avec :
 - Code source monté en `/opt/microscope-ibom` (édition live depuis l'hôte)
-- GPU + caméras + écran tactile + X11 accessibles
+- GPU + **caméras** (`/dev/video*` détectées au lancement) + écran tactile + X11
 - Outils : gcc-13, cmake, ninja, gdb, ccache, vcpkg
+
+Depuis ce shell : `bash scripts/build_jetson.sh` puis `./build/bin/MicroscopeIBOM`
+(la caméra est accessible). Brancher la caméra **avant** de lancer le script
+(le container est recréé avec les `/dev/video*` présents).
 
 ### Compiler le projet (dans le container dev)
 ```bash
