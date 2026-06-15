@@ -44,7 +44,7 @@ bool gstreamerAvailable()
 } // namespace
 
 CameraCapture::CameraCapture(int deviceIndex, QObject* parent)
-    : QObject(parent)
+    : ICameraSource(parent)
     , m_deviceIndex(deviceIndex)
 {
 }

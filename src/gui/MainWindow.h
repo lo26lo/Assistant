@@ -53,6 +53,9 @@ signals:
     void calibrationRequested();
     void fullscreenToggled(bool fs);
     void settingsChanged();
+    /// Open the RealSense sensor-controls panel (routed from the Settings
+    /// dialog; the live camera lives in Application).
+    void realSenseControlsRequested();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

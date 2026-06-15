@@ -20,6 +20,11 @@ class SettingsDialog : public QDialog
 public:
     explicit SettingsDialog(ibom::Config& config, QWidget* parent = nullptr);
 
+signals:
+    /// User asked to open the RealSense controls panel from the Camera tab.
+    /// MainWindow closes Settings and routes this to Application (live camera).
+    void realSenseControlsRequested();
+
 private slots:
     void accept() override;
 
@@ -37,6 +42,7 @@ private:
     ibom::Config& m_config;
 
     // Camera
+    QComboBox*    m_cameraBackend  = nullptr;
     QComboBox*    m_cameraDevice   = nullptr;
     QPushButton*  m_refreshCameras = nullptr;
     QSpinBox*     m_cameraWidth    = nullptr;

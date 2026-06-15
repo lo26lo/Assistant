@@ -14,6 +14,7 @@
 namespace ibom {
 
 class Config;
+enum class CameraBackend;
 struct IBomProject;
 class IBomParser;
 
@@ -22,6 +23,7 @@ class MainWindow;
 }
 
 namespace camera {
+class ICameraSource;
 class CameraCapture;
 class CameraCalibration;
 }
@@ -96,7 +98,28 @@ private:
     void parseCommandLine();
     void createSubsystems();
     void connectSignals();
+    /// Continuation of connectSignals() (control panel, BOM, inspection, …).
+    /// Split out only so the large camera frameReady lambda can live in its
+    /// own re-callable wireCameraSignals() unit.
+    void connectControlSignals();
     void initializeAI();
+
+    /// Instantiate the camera backend selected in Config (V4L2 microscope or
+    /// RealSense) and apply the current resolution/fps/device settings. Does
+    /// NOT wire signals — call wireCameraSignals() after.
+    void createCamera();
+    /// Connect the current m_camera's frameReady/captureError to the app.
+    /// Re-callable: a freshly created backend just needs this run again.
+    void wireCameraSignals();
+    /// Stop, destroy and recreate the camera for a new backend, then re-wire
+    /// and restart if it was capturing. Used by the Settings backend selector.
+    void switchCameraBackend(CameraBackend backend);
+    /// Enumerate devices for the active backend and refresh the ControlPanel.
+    void refreshCameraDeviceList();
+    /// Open the dynamic RealSense sensor-controls panel (from ControlPanel or
+    /// the Settings dialog). Shows a hint if the backend isn't RealSense / the
+    /// camera isn't running.
+    void openRealSenseControls();
 
     void loadIBomFile(const QString& path);
     void refreshRecentFilesMenu();
@@ -116,7 +139,8 @@ private:
     QApplication&                               m_qapp;
     std::unique_ptr<Config>                    m_config;
     std::unique_ptr<gui::MainWindow>           m_mainWindow;
-    std::unique_ptr<camera::CameraCapture>     m_camera;
+    std::unique_ptr<camera::ICameraSource>     m_camera;
+    CameraBackend                              m_activeBackend{};  // backend of the live m_camera
     std::unique_ptr<ai::InferenceEngine>       m_inferenceEngine;
     std::unique_ptr<ai::ModelManager>          m_modelManager;
     std::unique_ptr<ai::ComponentDetector>     m_componentDetector;
@@ -151,6 +175,8 @@ private:
 
     // Focus assist — last time the sharpness metric was computed (throttle).
     qint64 m_lastSharpnessMs = 0;
+    // Depth (RealSense) — last time distance/scale was computed (throttle).
+    qint64 m_lastDepthMs = 0;
 
     // Calibration image collection
     std::vector<cv::Mat> m_calibImages;

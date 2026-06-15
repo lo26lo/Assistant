@@ -62,22 +62,41 @@ COMPOSE_FILES=(-f docker/compose.yml -f docker/compose.local.yml)
 #     script suffit (le container est recree avec les nouveaux devices).
 # -----------------------------------------------------------------------------
 CAM_OVERRIDE=/tmp/microscope-ibom.cameras.yml
-if compgen -G "/dev/video*" > /dev/null; then
+HAVE_VIDEO=false
+compgen -G "/dev/video*" > /dev/null && HAVE_VIDEO=true
+
+# Intel RealSense (D405 = VID 8086) uses libusb (FORCE_RSUSB_BACKEND) — it needs
+# the USB bus mapped, NOT /dev/video*. Detect it so we add /dev/bus/usb.
+HAVE_REALSENSE=false
+# Match the D405 specifically (Intel VID 8086, PID 0b5b) — a broad "8086:0b"
+# match would catch unrelated Intel devices and needlessly map the USB bus.
+if command -v lsusb >/dev/null 2>&1 && lsusb | grep -qiE "8086:0b5b"; then
+    HAVE_REALSENSE=true
+fi
+
+if [ "$HAVE_VIDEO" = true ] || [ "$HAVE_REALSENSE" = true ]; then
     {
         echo "# Genere par run_local_gui.sh — ne pas editer (regenere a chaque lancement)"
         echo "services:"
         echo "  dev:"
         echo "    devices:"
-        for v in /dev/video*; do
-            echo "      - ${v}:${v}"
-        done
+        if [ "$HAVE_VIDEO" = true ]; then
+            for v in /dev/video*; do
+                echo "      - ${v}:${v}"
+            done
+        fi
+        if [ "$HAVE_REALSENSE" = true ]; then
+            # Whole USB bus for librealsense (RSUSB userspace backend).
+            echo "      - /dev/bus/usb:/dev/bus/usb"
+        fi
     } > "$CAM_OVERRIDE"
     COMPOSE_FILES+=(-f "$CAM_OVERRIDE")
-    echo "${GRN}[run-local]${NC} Cameras detectees: $(echo /dev/video* )"
+    [ "$HAVE_VIDEO" = true ] && echo "${GRN}[run-local]${NC} Cameras V4L2: $(echo /dev/video* )"
+    [ "$HAVE_REALSENSE" = true ] && echo "${GRN}[run-local]${NC} RealSense detectee (USB bus mappe pour librealsense)."
 else
     rm -f "$CAM_OVERRIDE"
-    echo "${YEL}[run-local]${NC} Aucune camera detectee (/dev/video*) — demarrage sans camera."
-    echo "             Brancher la camera puis relancer ce script pour l'activer."
+    echo "${YEL}[run-local]${NC} Aucune camera detectee — demarrage sans camera."
+    echo "             Brancher la camera (USB ou RealSense) puis relancer ce script."
 fi
 
 # -----------------------------------------------------------------------------

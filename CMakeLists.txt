@@ -32,6 +32,7 @@ option(IBOM_ENABLE_REMOTE     "Enable remote view streaming"           ON)
 option(IBOM_ENABLE_TESTS      "Build unit tests"                       ON)
 option(IBOM_ENABLE_ASAN       "Enable AddressSanitizer (debug)"        OFF)
 option(IBOM_ENABLE_UMA        "Back camera frames with CUDA Unified Memory (Jetson)" OFF)
+option(IBOM_ENABLE_REALSENSE  "Enable Intel RealSense camera backend (librealsense2)" ON)
 
 # ============================================================================
 # Custom CMake modules
@@ -92,6 +93,14 @@ if(NOT unofficial-libharu_FOUND)
         if(NOT HPDF_FOUND)
             find_library(HPDF_LIBRARY NAMES hpdf)
         endif()
+    endif()
+endif()
+
+# Intel RealSense (optional camera backend — librealsense2 built in base.Dockerfile)
+if(IBOM_ENABLE_REALSENSE)
+    find_package(realsense2 CONFIG QUIET)
+    if(NOT realsense2_FOUND)
+        message(STATUS "  realsense2 not found — RealSense backend disabled")
     endif()
 endif()
 
@@ -176,6 +185,7 @@ set(HEADERS
     src/app/Config.h
 
     # Camera
+    src/camera/ICameraSource.h
     src/camera/CameraCapture.h
     src/camera/CameraCalibration.h
     src/camera/UnifiedAllocator.h
@@ -233,6 +243,16 @@ set(HEADERS
     src/utils/ImageUtils.h
     src/utils/Paths.h
 )
+
+# RealSense backend — only compiled (and moc'd) when librealsense2 is present,
+# so a build without it (e.g. Windows legacy) drops the source cleanly and the
+# UI hides the backend.
+if(IBOM_ENABLE_REALSENSE AND realsense2_FOUND)
+    list(APPEND SOURCES src/camera/RealSenseCapture.cpp
+                        src/gui/RealSenseControlsDialog.cpp)
+    list(APPEND HEADERS src/camera/RealSenseCapture.h
+                        src/gui/RealSenseControlsDialog.h)
+endif()
 
 # ============================================================================
 # Resources
@@ -302,6 +322,13 @@ endif()
 if(CUDAToolkit_FOUND)
     target_link_libraries(${PROJECT_NAME} PRIVATE CUDA::cudart)
     target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_HAS_CUDA)
+endif()
+
+# Optional: Intel RealSense
+if(IBOM_ENABLE_REALSENSE AND realsense2_FOUND)
+    target_link_libraries(${PROJECT_NAME} PRIVATE realsense2::realsense2)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE IBOM_HAVE_REALSENSE)
+    message(STATUS "  RealSense:    ENABLED (${realsense2_VERSION})")
 endif()
 
 # Unified Memory allocator (Jetson) — requires CUDA. The allocator falls back
@@ -378,5 +405,6 @@ message(STATUS "  TensorRT:     ${IBOM_ENABLE_TENSORRT}")
 message(STATUS "  Tests:        ${IBOM_ENABLE_TESTS}")
 message(STATUS "  Voice:        ${IBOM_ENABLE_VOICE}")
 message(STATUS "  Remote:       ${IBOM_ENABLE_REMOTE}")
+message(STATUS "  RealSense:    ${IBOM_ENABLE_REALSENSE} (found: ${realsense2_FOUND})")
 message(STATUS "====================================")
 message(STATUS "")

@@ -7,7 +7,12 @@
 #include "gui/BomPanel.h"
 #include "gui/InspectionWizard.h"
 #include "gui/InspectionPanel.h"
+#include "camera/ICameraSource.h"
 #include "camera/CameraCapture.h"
+#ifdef IBOM_HAVE_REALSENSE
+#include "camera/RealSenseCapture.h"
+#include "gui/RealSenseControlsDialog.h"
+#endif
 #include "camera/CameraCalibration.h"
 #include "ai/InferenceEngine.h"
 #include "ai/ModelManager.h"
@@ -96,6 +101,9 @@ bool Application::initialize()
     // Register types for cross-thread signal/slot marshalling.
     qRegisterMetaType<cv::Mat>("cv::Mat");
     qRegisterMetaType<ibom::camera::FrameRef>("ibom::camera::FrameRef");
+    // DepthFrameRef is the same C++ type as FrameRef; register the alias name so
+    // RealSenseCapture::depthFrameReady can be queued across threads.
+    qRegisterMetaType<ibom::camera::FrameRef>("ibom::camera::DepthFrameRef");
     qRegisterMetaType<ibom::features::DatasetStatus>("ibom::features::DatasetStatus");
     qRegisterMetaType<std::shared_ptr<const IBomProject>>(
         "std::shared_ptr<const ibom::IBomProject>");
@@ -142,26 +150,15 @@ bool Application::initialize()
     // backend frequently fails to see /dev/video* even when V4L2 capture works
     // perfectly — relying on it alone yields "0 cameras" on a working device.
     {
-        QStringList cameraNames;
-        const auto v4lDevices = camera::CameraCapture::listDevices();
-        const auto qtCameras  = QMediaDevices::videoInputs();
-        for (size_t i = 0; i < v4lDevices.size(); ++i) {
-            const int qi = static_cast<int>(i);
-            QString label = (qi < qtCameras.size())
-                ? qtCameras[qi].description()
-                : QString::fromStdString(v4lDevices[i]);
-            cameraNames << QString("%1: %2").arg(qi).arg(label);
-        }
-        if (cameraNames.isEmpty())
-            cameraNames << tr("No camera detected");
-        m_mainWindow->controlPanel()->setCameraDevices(cameraNames);
+        refreshCameraDeviceList();
         // Select the configured camera index
         int idx = m_config->cameraIndex();
         if (auto* cp = m_mainWindow->controlPanel()) {
-            if (idx >= 0 && idx < cameraNames.size())
-                cp->findChild<QComboBox*>()->setCurrentIndex(idx);
+            if (auto* combo = cp->findChild<QComboBox*>()) {
+                if (idx >= 0 && idx < combo->count())
+                    combo->setCurrentIndex(idx);
+            }
         }
-        spdlog::info("Found {} camera(s) (V4L2 enumeration)", v4lDevices.size());
     }
 
     // Show main window
@@ -342,12 +339,10 @@ void Application::createSubsystems()
     spdlog::info("Creating InferenceEngine...");
     m_inferenceEngine = std::make_unique<ai::InferenceEngine>(*m_modelManager);
 
-    // Camera capture
-    spdlog::info("Creating CameraCapture...");
-    m_camera = std::make_unique<camera::CameraCapture>(m_config->cameraIndex());
-    m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
-    m_camera->setFps(m_config->cameraFps());
-    m_camera->setHardwareDecode(m_config->cameraHwDecode());
+    // Camera capture — backend chosen from config (microscope USB by default,
+    // RealSense D405 when selected). Both implementations satisfy ICameraSource
+    // so everything downstream is backend-agnostic.
+    createCamera();
 
     // Camera calibration
     spdlog::info("Creating CameraCalibration...");
@@ -500,6 +495,118 @@ void Application::initializeAI()
     });
 }
 
+void Application::createCamera()
+{
+    // Both backends implement ICameraSource, so everything downstream (overlay,
+    // tracking, dataset) is agnostic to which one is active.
+#ifdef IBOM_HAVE_REALSENSE
+    if (m_config->cameraBackend() == CameraBackend::RealSense) {
+        spdlog::info("Creating RealSenseCapture (D405)...");
+        m_camera = std::make_unique<camera::RealSenseCapture>();
+    } else
+#endif
+    {
+        spdlog::info("Creating CameraCapture (V4L2/UVC microscope)...");
+        m_camera = std::make_unique<camera::CameraCapture>(m_config->cameraIndex());
+    }
+    m_camera->setDeviceIndex(m_config->cameraIndex());
+    // RealSense keeps its own 848x480 default (optimal depth precision) unless
+    // the user set a non-generic resolution — don't push the V4L2-oriented
+    // 1920x1080 default onto the D405 (it would just fall back).
+    const bool genericRes = (m_config->cameraWidth() == 1920 && m_config->cameraHeight() == 1080);
+    if (!(m_config->cameraBackend() == CameraBackend::RealSense && genericRes))
+        m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
+    m_camera->setFps(m_config->cameraFps());
+    m_camera->setHardwareDecode(m_config->cameraHwDecode());
+    m_activeBackend = m_config->cameraBackend();
+}
+
+void Application::switchCameraBackend(CameraBackend backend)
+{
+    if (m_activeBackend == backend && m_camera)
+        return;  // no change
+
+    const bool wasCapturing = m_camera && m_camera->isCapturing();
+    if (m_camera) m_camera->stop();
+
+    m_config->setCameraBackend(backend);
+    m_config->save();
+
+    // Destroying the old source auto-removes its Qt connections; recreate and
+    // re-wire against the new backend.
+    m_camera.reset();
+    createCamera();
+    wireCameraSignals();
+
+    refreshCameraDeviceList();
+
+    spdlog::info("Camera backend switched to {}",
+                 backend == CameraBackend::RealSense ? "RealSense" : "V4L2");
+
+    if (wasCapturing) {
+        if (!m_camera->start())
+            m_mainWindow->updateStatusMessage(tr("Failed to start camera after backend switch"));
+    }
+}
+
+void Application::refreshCameraDeviceList()
+{
+    QStringList cameraNames;
+#ifdef IBOM_HAVE_REALSENSE
+    if (m_config->cameraBackend() == CameraBackend::RealSense) {
+        const auto rsDevices = camera::RealSenseCapture::listDevices();
+        for (size_t i = 0; i < rsDevices.size(); ++i)
+            cameraNames << QString("%1: %2").arg(i).arg(QString::fromStdString(rsDevices[i]));
+    } else
+#endif
+    {
+        const auto v4lDevices = camera::CameraCapture::listDevices();
+        const auto qtCameras  = QMediaDevices::videoInputs();
+        for (size_t i = 0; i < v4lDevices.size(); ++i) {
+            const int qi = static_cast<int>(i);
+            QString label = (qi < qtCameras.size())
+                ? qtCameras[qi].description()
+                : QString::fromStdString(v4lDevices[i]);
+            cameraNames << QString("%1: %2").arg(qi).arg(label);
+        }
+    }
+    if (cameraNames.isEmpty())
+        cameraNames << tr("No camera detected");
+    if (m_mainWindow && m_mainWindow->controlPanel())
+        m_mainWindow->controlPanel()->setCameraDevices(cameraNames);
+}
+
+void Application::openRealSenseControls()
+{
+#ifdef IBOM_HAVE_REALSENSE
+    auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get());
+    if (!rs) {
+        QMessageBox::information(m_mainWindow.get(), tr("RealSense Controls"),
+            tr("These controls read the live sensor options of a RealSense camera.\n\n"
+               "To use them:\n"
+               "  1. Connect the RealSense (D405) over USB3 and relaunch.\n"
+               "  2. Settings → Camera → Backend = « Intel RealSense (D405) ».\n"
+               "  3. Start the camera.\n\n"
+               "The active backend is currently the USB microscope (V4L2)."));
+        return;
+    }
+    if (!rs->isCapturing()) {
+        QMessageBox::information(m_mainWindow.get(), tr("RealSense Controls"),
+            tr("Start the camera first — sensor options are read from the live device.\n\n"
+               "If no RealSense is detected, check it is connected over USB3 and that "
+               "the container was launched with the camera plugged in "
+               "(run_local_gui.sh maps /dev/bus/usb when a RealSense is present)."));
+        return;
+    }
+    auto* dlg = new gui::RealSenseControlsDialog(rs, m_mainWindow.get());
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
+#else
+    QMessageBox::information(m_mainWindow.get(), tr("RealSense Controls"),
+        tr("This build has no RealSense support."));
+#endif
+}
+
 void Application::connectSignals()
 {
     connect(this, &Application::shutdownRequested, &m_qapp, &QApplication::quit);
@@ -570,15 +677,27 @@ void Application::connectSignals()
         }
     });
 
+    // ── Camera frame/error wiring ───────────────────────────────
+    // Extracted into wireCameraSignals() so a backend hot-swap (microscope ↔
+    // RealSense) can re-run it against the freshly created m_camera.
+    wireCameraSignals();
+
+    // Remaining UI/control connections (kept in a separate function only so the
+    // very large frameReady lambda above can live in its own re-callable unit).
+    connectControlSignals();
+}
+
+void Application::wireCameraSignals()
+{
     // ── Camera errors ───────────────────────────────────────────
-    connect(m_camera.get(), &camera::CameraCapture::captureError, this, [this](const QString& msg) {
+    connect(m_camera.get(), &camera::ICameraSource::captureError, this, [this](const QString& msg) {
         spdlog::error("Camera error: {}", msg.toStdString());
         m_mainWindow->updateStatusMessage(msg);
-    });
+    }, Qt::UniqueConnection);
 
     // ── Camera frame → CameraView + Overlay ─────────────────────
     // Slot receives a shared_ptr<const cv::Mat> — no pixel clone across threads.
-    connect(m_camera.get(), &camera::CameraCapture::frameReady, this,
+    connect(m_camera.get(), &camera::ICameraSource::frameReady, this,
             [this](ibom::camera::FrameRef frameRef) {
         if (!frameRef || frameRef->empty()) return;
         const cv::Mat& frame = *frameRef;
@@ -823,6 +942,57 @@ void Application::connectSignals()
         m_frameCount++;
     }, Qt::QueuedConnection);
 
+#ifdef IBOM_HAVE_REALSENSE
+    // ── Depth (RealSense only) → distance readout + auto px/mm scale ──
+    if (auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get())) {
+        connect(rs, &camera::RealSenseCapture::depthFrameReady, this,
+                [this, rs](ibom::camera::DepthFrameRef depth) {
+            if (!depth || depth->empty() || depth->type() != CV_16UC1) return;
+
+            // Throttle to ~3 Hz — distance/scale change slowly on a fixed rig.
+            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            if (nowMs - m_lastDepthMs < 300) return;
+            m_lastDepthMs = nowMs;
+
+            // Median depth over a central ROI (20%), ignoring 0 = invalid.
+            const cv::Mat& d = *depth;
+            const int rw = std::max(1, d.cols / 5), rh = std::max(1, d.rows / 5);
+            const cv::Rect roi((d.cols - rw) / 2, (d.rows - rh) / 2, rw, rh);
+            std::vector<uint16_t> vals;
+            vals.reserve(static_cast<size_t>(rw) * rh);
+            for (int y = roi.y; y < roi.y + roi.height; ++y) {
+                const auto* row = d.ptr<uint16_t>(y);
+                for (int x = roi.x; x < roi.x + roi.width; ++x)
+                    if (row[x] > 0) vals.push_back(row[x]);
+            }
+            if (vals.size() < 16) {            // too few valid samples
+                if (auto* sp = m_mainWindow->statsPanel()) sp->setDistance(0.0);
+                return;
+            }
+            std::nth_element(vals.begin(), vals.begin() + vals.size() / 2, vals.end());
+            const double distMm = vals[vals.size() / 2];
+
+            if (auto* sp = m_mainWindow->statsPanel()) sp->setDistance(distMm);
+
+            // Auto px/mm from pinhole geometry: pixelsPerMm = fx / distance_mm.
+            if (m_config->scaleMethod() == ScaleMethod::Depth) {
+                const double fx = rs->colorFx();
+                if (fx > 0 && distMm > 0) {
+                    const double ppmm = fx / distMm;
+                    m_currentPixelsPerMm = ppmm;
+                    if (m_calibration) m_calibration->setPixelsPerMm(ppmm);
+                    if (auto* sp = m_mainWindow->statsPanel()) sp->setScale(ppmm);
+                    if (m_measurement) m_measurement->setCalibration(ppmm);
+                    if (auto* cv = m_mainWindow->cameraView()) cv->setPixelsPerMm(ppmm);
+                }
+            }
+        }, Qt::QueuedConnection);
+    }
+#endif
+}
+
+void Application::connectControlSignals()
+{
     // ── Camera settings from control panel ──────────────────────
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::cameraSettingsChanged,
             this, [this](int index, int w, int h, int fps) {
@@ -840,6 +1010,13 @@ void Application::connectSignals()
         if (wasCapturing) m_camera->start();
         spdlog::info("Camera settings applied: device={} {}x{} @{}fps", index, w, h, fps);
     });
+
+    // ── RealSense sensor controls (dynamic options panel) ───────
+    // Reachable from the Control panel button and from Settings → Camera.
+    connect(m_mainWindow->controlPanel(), &gui::ControlPanel::realSenseControlsRequested,
+            this, &Application::openRealSenseControls);
+    connect(m_mainWindow.get(), &gui::MainWindow::realSenseControlsRequested,
+            this, &Application::openRealSenseControls);
 
     // ── Overlay opacity ─────────────────────────────────────────
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::overlayOpacityChanged,
@@ -1025,6 +1202,14 @@ void Application::connectSignals()
     // ── Settings changed ────────────────────────────────────────
     connect(m_mainWindow.get(), &gui::MainWindow::settingsChanged,
             this, [this]() {
+        // Backend changed in the dialog? Recreate the camera (this also applies
+        // resolution/fps/device and restarts if it was running) and stop here —
+        // the index/restart logic below would operate on the new backend anyway.
+        if (m_config->cameraBackend() != m_activeBackend) {
+            switchCameraBackend(m_config->cameraBackend());
+            return;
+        }
+
         // Check if camera index changed and restart if needed
         int newIdx = m_config->cameraIndex();
         bool wasCapturing = m_camera->isCapturing();

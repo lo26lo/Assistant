@@ -151,6 +151,14 @@ QGroupBox* ControlPanel::createCameraGroup()
     });
     layout->addRow(applyBtn);
 
+    auto* rsBtn = new QPushButton(tr("Camera Controls (RealSense)…"));
+    rsBtn->setToolTip(tr("Exposure, gain, laser power, depth presets… — every "
+                         "sensor option of a connected RealSense, each with its "
+                         "SDK description. Available only with the RealSense "
+                         "backend running."));
+    connect(rsBtn, &QPushButton::clicked, this, &ControlPanel::realSenseControlsRequested);
+    layout->addRow(rsBtn);
+
     return group;
 }
 

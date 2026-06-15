@@ -52,6 +52,9 @@ bool Config::load(const std::string& path)
             m_cameraHeight = cam.value("height", m_cameraHeight);
             m_cameraFps    = cam.value("fps", m_cameraFps);
             m_cameraHwDecode = cam.value("hw_decode", m_cameraHwDecode);
+            const std::string backend = cam.value("backend", std::string("v4l2"));
+            m_cameraBackend = (backend == "realsense")
+                ? CameraBackend::RealSense : CameraBackend::V4L2;
         }
 
         // iBOM
@@ -176,7 +179,8 @@ bool Config::save(const std::string& path) const
             {"width",  m_cameraWidth},
             {"height", m_cameraHeight},
             {"fps",    m_cameraFps},
-            {"hw_decode", m_cameraHwDecode}
+            {"hw_decode", m_cameraHwDecode},
+            {"backend", m_cameraBackend == CameraBackend::RealSense ? "realsense" : "v4l2"}
         };
 
         // iBOM

@@ -28,6 +28,9 @@ public:
     void setInferenceTime(double ms);
     void setGpuMemory(size_t usedMB, size_t totalMB);
     void setScale(double pixelsPerMm);
+    /// Live distance from a depth-capable camera (RealSense) to the board, in
+    /// millimetres. Pass <= 0 to show "—" (no depth / invalid).
+    void setDistance(double mm);
     /// Live focus assist: Laplacian variance of the current frame.
     /// `good` = above the sharpness threshold (same metric/scale as the
     /// dataset capture gate) — turn the focus ring until the value peaks.
@@ -68,6 +71,7 @@ private:
     QLabel* m_gpuMemLabel       = nullptr;
     QLabel* m_scaleLabel        = nullptr;
     QLabel* m_focusLabel        = nullptr;
+    QLabel* m_distanceLabel     = nullptr;
 
     // Event log (runtime logs + defects)
     QTableWidget* m_defectTable = nullptr;
