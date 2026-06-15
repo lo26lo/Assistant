@@ -293,7 +293,51 @@ rs-enumerate-devices -c         # streams/résolutions supportés
 
 ---
 
-## 11. Estimation
+## 11. Calibration de la D405
+
+⚠️ **Ne pas confondre deux calibrations distinctes** :
+
+| Calibration | Corrige | Cible imprimée ? |
+|---|---|:--:|
+| **Intrinsèques RGB** (distorsion objectif) | undistort image, mesure px/mm | ❌ non (usine) |
+| **Profondeur / stéréo** (depth accuracy) | exactitude des mm de depth | OCC sans cible, ou cibles Intel |
+
+### 11.1 Intrinsèques RGB — gratuites via librealsense
+
+La D405 est calibrée en usine ; librealsense **expose les intrinsèques**, pas besoin de damier OpenCV ni de cible :
+
+```cpp
+auto p = pipe.get_active_profile().get_stream(RS2_STREAM_COLOR)
+             .as<rs2::video_stream_profile>();
+rs2_intrinsics in = p.get_intrinsics();   // fx, fy, ppx, ppy, model, coeffs[5]
+```
+
+→ `RealSenseCapture` exposera ces intrinsèques pour alimenter l'undistort et le scale px/mm. **Le damier OpenCV (`CameraCalibration`) reste pour le backend microscope USB uniquement.**
+
+### 11.2 Profondeur — On-Chip Calibration (OCC), SANS cible — recommandé
+
+Problème des cibles imprimées Intel à courte distance — FOV D405 ≈ 87°×58° :
+
+| Distance | Champ visible (L×H) | Cibles Intel |
+|---|---|:--:|
+| 7 cm (mini-Z) | ~13×8 cm | ❌ trop petit |
+| 10 cm | ~19×11 cm | ❌ |
+| 20 cm | ~38×22 cm | A4 paysage juste, portrait non |
+
+- **`Calibration_Target_v1.pdf` (UCAL)** + **cible « 10 mm fixed-width bars »** = pour l'outil **Intel Dynamic Calibration** (rectification/extrinsèques stéréo). Les barres **10 mm sont à taille fixe → non redimensionnables** : inutilisables de près. La cible UCAL doit remplir le cadre → idem.
+- **Solution retenue : OCC** (`rs2::auto_calibrated_device::run_on_chip_calibration`) — pointer une **surface plane texturée** (PCB nu, feuille quelconque), quelques secondes, **aucune cible**. Idéal pour un rig fixe. Garder le résultat si `|health| < 0.25`.
+- **Échelle absolue** (mm exacts) : **Tare calibration** — un plan à distance connue (mesurée au pied à coulisse), sans motif particulier.
+
+### 11.3 À implémenter (Phase 2)
+
+- [ ] `RealSenseCapture::colorIntrinsics()` → expose `rs2_intrinsics`
+- [ ] Bouton "Auto-calibrer profondeur (OCC)" dans Settings → exécute `run_on_chip_calibration`, affiche le health score, écrit la table si OK
+- [ ] (optionnel) Tare calibration avec saisie de la distance connue
+- [ ] Ne **jamais** dépendre des cibles imprimées par défaut (documenter comme fallback expert)
+
+---
+
+## 12. Estimation
 
 | Phase | Effort | Livrable |
 |---|---|---|
