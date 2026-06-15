@@ -25,7 +25,10 @@ signals:
     /// MainWindow closes Settings and routes this to Application (live camera).
     void realSenseControlsRequested();
 
-private slots:
+public slots:
+    // QDialog::accept() is a public slot; the override stays public so callers
+    // (MainWindow closing Settings before opening the RealSense panel) can
+    // invoke it.
     void accept() override;
 
 private:
