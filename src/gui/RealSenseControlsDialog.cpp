@@ -9,6 +9,7 @@
 #include <QScroller>
 #include <QLabel>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QPushButton>
 #include <QDialogButtonBox>
@@ -86,6 +87,26 @@ void RealSenseControlsDialog::rebuild()
                 auto* lbl = new QLabel(label);
                 lbl->setToolTip(tip);
                 form->addRow(lbl, cb);
+            } else if (!c.enumValues.empty()) {
+                // Discrete enum (e.g. Visual Preset) → combo with named values.
+                auto* combo = new QComboBox;
+                int currentIdx = 0;
+                for (int i = 0; i < static_cast<int>(c.enumValues.size()); ++i) {
+                    const auto& [val, name] = c.enumValues[i];
+                    combo->addItem(QString::fromStdString(name), val);
+                    if (val == c.current) currentIdx = i;
+                }
+                combo->setCurrentIndex(currentIdx);
+                combo->setEnabled(!c.readOnly);
+                combo->setToolTip(tip);
+                connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                        this, [this, combo, sensorIdx, optionId](int) {
+                    m_camera->setControl(sensorIdx, optionId,
+                                         combo->currentData().toFloat());
+                });
+                auto* lbl = new QLabel(label);
+                lbl->setToolTip(tip);
+                form->addRow(lbl, combo);
             } else {
                 auto* spin = new QDoubleSpinBox;
                 spin->setRange(c.min, c.max);

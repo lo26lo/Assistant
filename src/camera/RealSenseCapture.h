@@ -6,6 +6,7 @@
 #include <mutex>
 #include <thread>
 #include <memory>
+#include <utility>
 
 namespace rs2 { class device; }
 
@@ -23,6 +24,9 @@ struct RsControl {
     float       min = 0, max = 0, step = 0, def = 0, current = 0;
     bool        isBool = false;      // range [0,1] step 1 → checkbox
     bool        readOnly = false;
+    /// Discrete named values (value → label) when the option is an enum
+    /// (e.g. Visual Preset). Empty for plain numeric options → render as combo.
+    std::vector<std::pair<float, std::string>> enumValues;
 };
 
 /**

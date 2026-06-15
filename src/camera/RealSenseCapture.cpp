@@ -255,6 +255,24 @@ std::vector<RsControl> RealSenseCapture::listControls() const
                 try { c.current = s.get_option(opt); } catch (const rs2::error&) {}
                 c.isBool   = (r.min == 0.f && r.max == 1.f && r.step == 1.f);
                 c.readOnly = s.is_option_read_only(opt);
+
+                // Discrete enum (e.g. Visual Preset): integer steps over a small
+                // range where the SDK provides a label per value. Skip booleans.
+                const bool integralStep = (r.step == 1.f);
+                const int  count = static_cast<int>((r.max - r.min) / 1.f) + 1;
+                if (!c.isBool && integralStep && count >= 2 && count <= 32) {
+                    bool allNamed = true;
+                    std::vector<std::pair<float, std::string>> values;
+                    for (int v = static_cast<int>(r.min); v <= static_cast<int>(r.max); ++v) {
+                        const char* desc = nullptr;
+                        try { desc = s.get_option_value_description(opt, static_cast<float>(v)); }
+                        catch (const rs2::error&) { desc = nullptr; }
+                        if (!desc || !*desc) { allNamed = false; break; }
+                        values.emplace_back(static_cast<float>(v), desc);
+                    }
+                    if (allNamed) c.enumValues = std::move(values);
+                }
+
                 out.push_back(std::move(c));
             }
         }
