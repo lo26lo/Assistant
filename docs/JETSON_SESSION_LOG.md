@@ -13,6 +13,8 @@
 
 ## État actuel — au 2026-06-15
 
+> **2026-06-15 (suite 2)** : **fix ascenseur dock gauche (souris)** — le `QScroller::LeftMouseButtonGesture` ajouté pour le tactile capturait le bouton gauche et cassait la molette + le glissement de l'ascenseur à la souris. Remplacé par `QScroller::TouchGesture` (vrai tactile uniquement, souris native) + policy scrollbar explicite sur `InspectionPanel`.
+>
 > **2026-06-15 (suite)** : **décodage MJPG hardware NVIDIA** (`CameraCapture`) — pipeline GStreamer `v4l2src ! image/jpeg ! nvv4l2decoder mjpeg=1 ! nvvidconv ! BGR ! appsink`, décodage sur NVDEC/VIC au lieu du CPU. Fallback automatique vers V4L2 si GStreamer absent ou pipeline KO. Toggle `camera.hw_decode` (Config, défaut ON) + case à cocher Settings → Camera. **H.264 écarté volontairement** : compression inter-frames → artefacts de bloc nuisibles au tracking ORB / mesure (cf échange utilisateur). ⚠️ À valider sur Jetson (vérifier `v4l2-ctl --list-formats-ext` que la caméra sort bien du MJPG, et que OpenCV a le backend GStreamer).
 >
 > **2026-06-15** : fix **mise en page InspectionPanel** (QScrollArea — boutons Export Report plus tronqués/chevauchants) + fix **caméra dans Settings** (SettingsDialog utilisait QMediaDevices au lieu de CameraCapture::listDevices, même bug que #17). Branche `claude/pr5-plus-fixes`. ⚠️ À valider sur Jetson.

@@ -30,6 +30,9 @@ void InspectionPanel::buildUI()
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    // Keep a usable vertical scrollbar for mouse (wheel + handle drag).
+    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
     auto* content = new QWidget;
     auto* main = new QVBoxLayout(content);
@@ -153,10 +156,11 @@ void InspectionPanel::buildUI()
 
     scroll->setWidget(content);
 
-    // Touchscreen kinetic scrolling: the 8px scrollbar is unusable with a
-    // finger, so enable drag-to-scroll on the viewport. Works with touch
-    // (synthesized as mouse on X11) and a real mouse; taps still click through.
-    QScroller::grabGesture(scroll->viewport(), QScroller::LeftMouseButtonGesture);
+    // Touchscreen kinetic scrolling — TouchGesture only, NOT LeftMouseButton:
+    // grabbing the left mouse button hijacks the cursor and breaks the normal
+    // scrollbar (wheel + handle drag) and click behaviour for mouse users.
+    // TouchGesture reacts to genuine touch events and leaves the mouse native.
+    QScroller::grabGesture(scroll->viewport(), QScroller::TouchGesture);
 
     auto* outerLayout = new QVBoxLayout(this);
     outerLayout->setContentsMargins(0, 0, 0, 0);
