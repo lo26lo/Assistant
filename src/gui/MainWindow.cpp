@@ -297,8 +297,8 @@ void MainWindow::createDockWidgets()
     auto* controlDock = new QDockWidget(tr("Controls"), this);
     controlDock->setObjectName("ControlDock");
     controlDock->setWidget(m_controlPanel);
-    controlDock->setMinimumWidth(250);
-    controlDock->setMaximumWidth(320);
+    controlDock->setMinimumWidth(260);
+    controlDock->setMaximumWidth(400);
     // Checkerboard tools moved out of the Camera menu into the panel.
     connect(m_controlPanel, &ControlPanel::generateCheckerboardRequested,
             this, &MainWindow::onGenerateCheckerboard);

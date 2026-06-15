@@ -128,6 +128,11 @@ QGroupBox* ControlPanel::createCameraGroup()
     devForm->setLabelAlignment(Qt::AlignRight);
     m_cameraDevice = new QComboBox;
     m_cameraDevice->addItem(tr("Default (0)"));
+    // Long device names (e.g. "Intel RealSense D405 <serial>") must not force
+    // the dock wider — let the combo shrink and elide instead.
+    m_cameraDevice->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_cameraDevice->setMinimumContentsLength(8);
+    m_cameraDevice->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     devForm->addRow(tr("Device:"), m_cameraDevice);
     vbox->addLayout(devForm);
 
@@ -181,25 +186,25 @@ QGroupBox* ControlPanel::createCalibrationGroup()
     layout->addWidget(m_calibInfo);
 
     // ── Microscope (V4L2): lens calibration via printed checkerboard ──
-    m_btnCalibrate = new QPushButton(tr("Calibrate Camera (Checkerboard)"));
+    m_btnCalibrate = new QPushButton(tr("Calibrate (Checkerboard)"));
     m_btnCalibrate->setToolTip(tr("Capture checkerboard views and compute lens "
                                   "distortion correction (OpenCV)."));
     connect(m_btnCalibrate, &QPushButton::clicked, this, &ControlPanel::recalibrateRequested);
     layout->addWidget(m_btnCalibrate);
 
-    m_btnGenPattern = new QPushButton(tr("Generate / Print Checkerboard…"));
+    m_btnGenPattern = new QPushButton(tr("Generate Checkerboard…"));
     m_btnGenPattern->setToolTip(tr("Generate a printable checkerboard at the "
                                    "configured square size."));
     connect(m_btnGenPattern, &QPushButton::clicked, this, &ControlPanel::generateCheckerboardRequested);
     layout->addWidget(m_btnGenPattern);
 
-    m_btnOpenPdf = new QPushButton(tr("Open Calibration Patterns PDF…"));
+    m_btnOpenPdf = new QPushButton(tr("Open Patterns PDF…"));
     m_btnOpenPdf->setToolTip(tr("Open the bundled patterns (0.5 / 1 / 2 mm squares)."));
     connect(m_btnOpenPdf, &QPushButton::clicked, this, &ControlPanel::openCalibrationPdfRequested);
     layout->addWidget(m_btnOpenPdf);
 
     // ── RealSense: factory-calibrated, expose live sensor controls ──
-    m_btnRealSense = new QPushButton(tr("Camera Controls (RealSense)…"));
+    m_btnRealSense = new QPushButton(tr("RealSense Controls…"));
     m_btnRealSense->setToolTip(tr("Exposure, gain, laser power, depth presets… — every "
                                   "sensor option of a connected RealSense, each with its "
                                   "SDK description. Requires the RealSense backend running."));
@@ -207,11 +212,12 @@ QGroupBox* ControlPanel::createCalibrationGroup()
     layout->addWidget(m_btnRealSense);
 
     // ── Alignment + live tracking (both backends) ──
-    m_btnAlign = new QPushButton(tr("Set Alignment Points (4 corners)"));
+    m_btnAlign = new QPushButton(tr("Align: 4 Corners"));
+    m_btnAlign->setToolTip(tr("Set alignment by clicking the 4 board corners."));
     connect(m_btnAlign, &QPushButton::clicked, this, &ControlPanel::alignHomographyRequested);
     layout->addWidget(m_btnAlign);
 
-    m_btnAlignComps = new QPushButton(tr("Align on 2 Components"));
+    m_btnAlignComps = new QPushButton(tr("Align: 2 Components"));
     m_btnAlignComps->setToolTip(tr("Align overlay by clicking 2 known components — best for small FOV microscopes"));
     connect(m_btnAlignComps, &QPushButton::clicked, this, &ControlPanel::alignOnComponentsRequested);
     layout->addWidget(m_btnAlignComps);
