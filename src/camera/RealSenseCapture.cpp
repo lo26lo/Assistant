@@ -140,6 +140,12 @@ void RealSenseCapture::captureLoop()
     } catch (const rs2::error&) { /* keep default */ }
     rs2::align alignToColor(RS2_STREAM_COLOR);
 
+    // Publish the device handle so the GUI can query/set sensor options live.
+    try {
+        std::lock_guard<std::mutex> lk(m_deviceMutex);
+        m_device = std::make_unique<rs2::device>(profile.get_device());
+    } catch (const rs2::error&) { /* options panel will be empty */ }
+
     // Report the mode the camera actually settled on + cache color intrinsics.
     try {
         auto vsp = profile.get_stream(RS2_STREAM_COLOR).as<rs2::video_stream_profile>();
@@ -210,9 +216,69 @@ void RealSenseCapture::captureLoop()
         }
     }
 
+    {
+        std::lock_guard<std::mutex> lk(m_deviceMutex);
+        m_device.reset();
+    }
+
     try {
         pipe.stop();
     } catch (const rs2::error&) { /* already stopped */ }
+}
+
+std::vector<RsControl> RealSenseCapture::listControls() const
+{
+    std::vector<RsControl> out;
+    std::lock_guard<std::mutex> lk(m_deviceMutex);
+    if (!m_device) return out;
+    try {
+        const auto sensors = m_device->query_sensors();
+        for (int si = 0; si < static_cast<int>(sensors.size()); ++si) {
+            const rs2::sensor& s = sensors[si];
+            const std::string sname = s.supports(RS2_CAMERA_INFO_NAME)
+                ? s.get_info(RS2_CAMERA_INFO_NAME) : ("Sensor " + std::to_string(si));
+            for (int o = 0; o < static_cast<int>(RS2_OPTION_COUNT); ++o) {
+                const auto opt = static_cast<rs2_option>(o);
+                if (!s.supports(opt)) continue;
+                rs2::option_range r;
+                try { r = s.get_option_range(opt); }
+                catch (const rs2::error&) { continue; }
+
+                RsControl c;
+                c.sensorIndex = si;
+                c.sensorName  = sname;
+                c.optionId    = o;
+                c.name        = rs2_option_to_string(opt);
+                try { c.description = s.get_option_description(opt); }
+                catch (const rs2::error&) {}
+                c.min = r.min; c.max = r.max; c.step = r.step; c.def = r.def;
+                try { c.current = s.get_option(opt); } catch (const rs2::error&) {}
+                c.isBool   = (r.min == 0.f && r.max == 1.f && r.step == 1.f);
+                c.readOnly = s.is_option_read_only(opt);
+                out.push_back(std::move(c));
+            }
+        }
+    } catch (const rs2::error& e) {
+        spdlog::warn("RealSense listControls failed: {}", e.what());
+    }
+    return out;
+}
+
+bool RealSenseCapture::setControl(int sensorIndex, int optionId, float value)
+{
+    std::lock_guard<std::mutex> lk(m_deviceMutex);
+    if (!m_device) return false;
+    try {
+        const auto sensors = m_device->query_sensors();
+        if (sensorIndex < 0 || sensorIndex >= static_cast<int>(sensors.size()))
+            return false;
+        sensors[sensorIndex].set_option(static_cast<rs2_option>(optionId), value);
+        return true;
+    } catch (const rs2::error& e) {
+        spdlog::warn("RealSense setControl(sensor {}, opt {}, {}) failed: {}",
+                     sensorIndex, optionId, value, e.what());
+        return false;
+    }
 }
 
 } // namespace ibom::camera

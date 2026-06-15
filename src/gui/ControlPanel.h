@@ -44,6 +44,7 @@ signals:
     void showHeatmapChanged(bool show);
     void autoInspectChanged(bool enabled);
     void cameraSettingsChanged(int index, int w, int h, int fps);
+    void realSenseControlsRequested();
     void recalibrateRequested();
     void alignHomographyRequested();
     void alignOnComponentsRequested();

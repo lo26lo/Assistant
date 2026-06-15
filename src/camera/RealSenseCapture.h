@@ -5,8 +5,25 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <memory>
+
+namespace rs2 { class device; }
 
 namespace ibom::camera {
+
+/// Plain descriptor of one librealsense sensor option, queried live from the
+/// device. Mirrors what the RealSense Viewer shows — `description` comes from
+/// the SDK (rs2::sensor::get_option_description) and is meant for a tooltip.
+struct RsControl {
+    int         sensorIndex = 0;     // index into device.query_sensors()
+    std::string sensorName;          // e.g. "Stereo Module", "RGB Camera"
+    int         optionId = 0;        // rs2_option value
+    std::string name;                // rs2_option_to_string
+    std::string description;         // SDK help text → UI tooltip
+    float       min = 0, max = 0, step = 0, def = 0, current = 0;
+    bool        isBool = false;      // range [0,1] step 1 → checkbox
+    bool        readOnly = false;
+};
 
 /**
  * @brief Captures frames from an Intel RealSense camera (e.g. D405) via
@@ -50,6 +67,15 @@ public:
     /// Returns an empty vector when none are present or librealsense fails.
     static std::vector<std::string> listDevices();
 
+    /// Enumerate every supported option of every sensor on the live device,
+    /// with its range/current value and SDK help text. Empty until the
+    /// pipeline has started. Thread-safe (GUI thread may call while streaming).
+    std::vector<RsControl> listControls() const;
+
+    /// Set one sensor option. Returns false if the device isn't live, the
+    /// sensor index is out of range, or librealsense rejects the value.
+    bool setControl(int sensorIndex, int optionId, float value);
+
 signals:
     /// Emitted alongside frameReady when depth is available: a CV_16UC1 depth
     /// map in millimetres, aligned to the color frame. Shared (no pixel copy).
@@ -69,6 +95,11 @@ private:
 
     mutable std::mutex m_frameMutex;
     FrameRef           m_latestFrame;
+
+    // Live device handle for option get/set, published once the pipeline
+    // starts. rs2::device is forward-declared; the dtor lives in the .cpp.
+    mutable std::mutex            m_deviceMutex;
+    std::unique_ptr<rs2::device>  m_device;
 };
 
 } // namespace ibom::camera

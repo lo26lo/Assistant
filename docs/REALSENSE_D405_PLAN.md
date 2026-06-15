@@ -187,6 +187,17 @@ Tous les `connect(m_camera.get(), &CameraCapture::frameReady, …)` deviennent `
 4. ✅ **Scale px/mm auto** : `pixelsPerMm = colorFx / distance_mm` (géométrie pinhole, intrinsèques usine), distance = médiane ROI centrale 20% (0 ignorés). Actif quand `ScaleMethod::Depth`. Met à jour calibration + measurement + CameraView.
 5. ✅ `StatsPanel::setDistance()` : "Distance : 23.4 mm" live (throttle 3 Hz).
 
+### Phase 2.5 — Panneau d'options capteur (comme le RealSense Viewer) — ✅ IMPLÉMENTÉE (2026-06-15)
+
+**But** : exposer **toutes** les options du capteur (exposition, gain, puissance laser, emitter, presets depth, white balance…) avec une **info-bulle explicative sur chacune**, exactement comme l'app Windows.
+
+Principe : on n'écrit pas la liste en dur — librealsense la fournit. Pour chaque sensor (`device.query_sensors()`) on parcourt les `rs2_option` supportées et on lit `range` (min/max/step/def), `get_option()`, `is_option_read_only()` et surtout **`get_option_description()`** (le texte d'aide du SDK → tooltip).
+
+1. ✅ `RealSenseCapture` publie le `rs2::device` live (mutex) ; `listControls()` → `vector<RsControl>` (descripteurs), `setControl(sensor, option, value)`.
+2. ✅ `gui/RealSenseControlsDialog` génère **dynamiquement** un contrôle par option : checkbox (bool) ou spinbox (numérique), groupés par sensor, tooltip = description SDK, application immédiate, bouton Refresh.
+3. ✅ `ControlPanel` : bouton « Camera Controls (RealSense)… » → `Application` ouvre le dialog (message si backend ≠ RealSense ou caméra arrêtée).
+4. ✅ Compilé conditionnellement (`IBOM_HAVE_REALSENSE`).
+
 ### Phase 3 — Inspection 3D (différenciateur, à planifier séparément)
 
 - Heatmap hauteur (overlay sur `CameraView`).

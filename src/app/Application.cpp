@@ -11,6 +11,7 @@
 #include "camera/CameraCapture.h"
 #ifdef IBOM_HAVE_REALSENSE
 #include "camera/RealSenseCapture.h"
+#include "gui/RealSenseControlsDialog.h"
 #endif
 #include "camera/CameraCalibration.h"
 #include "ai/InferenceEngine.h"
@@ -972,6 +973,30 @@ void Application::connectControlSignals()
         m_camera->setHardwareDecode(m_config->cameraHwDecode());
         if (wasCapturing) m_camera->start();
         spdlog::info("Camera settings applied: device={} {}x{} @{}fps", index, w, h, fps);
+    });
+
+    // ── RealSense sensor controls (dynamic options panel) ───────
+    connect(m_mainWindow->controlPanel(), &gui::ControlPanel::realSenseControlsRequested,
+            this, [this]() {
+#ifdef IBOM_HAVE_REALSENSE
+        auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get());
+        if (!rs) {
+            m_mainWindow->updateStatusMessage(
+                tr("RealSense controls need the RealSense backend (Settings → Camera → Backend)."));
+            return;
+        }
+        if (!rs->isCapturing()) {
+            m_mainWindow->updateStatusMessage(
+                tr("Start the camera first — sensor options are read from the live device."));
+            return;
+        }
+        auto* dlg = new gui::RealSenseControlsDialog(rs, m_mainWindow.get());
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->show();
+#else
+        m_mainWindow->updateStatusMessage(
+            tr("This build has no RealSense support."));
+#endif
     });
 
     // ── Overlay opacity ─────────────────────────────────────────

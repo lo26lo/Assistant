@@ -248,8 +248,10 @@ set(HEADERS
 # so a build without it (e.g. Windows legacy) drops the source cleanly and the
 # UI hides the backend.
 if(IBOM_ENABLE_REALSENSE AND realsense2_FOUND)
-    list(APPEND SOURCES src/camera/RealSenseCapture.cpp)
-    list(APPEND HEADERS src/camera/RealSenseCapture.h)
+    list(APPEND SOURCES src/camera/RealSenseCapture.cpp
+                        src/gui/RealSenseControlsDialog.cpp)
+    list(APPEND HEADERS src/camera/RealSenseCapture.h
+                        src/gui/RealSenseControlsDialog.h)
 endif()
 
 # ============================================================================
