@@ -106,9 +106,18 @@ Includes ajoutés : `<QScrollArea>`, `<QFrame>`.
 ### Fix 2 — SettingsDialog : V4L2 enumeration (`src/gui/SettingsDialog.cpp`)
 `SettingsDialog::enumerateCameras()` utilisait `QMediaDevices::videoInputs()` (aveugle sur Jetson/Docker) → même cause que l'erreur #17 dans Application.cpp. Fix : remplacé par `ibom::camera::CameraCapture::listDevices()` (V4L2 OpenCV), `QMediaDevices` conservé uniquement pour les libellés. Include `CameraCapture.h` ajouté.
 
+### Fix 3 — MainWindow : corner ownership (`src/gui/MainWindow.cpp`)
+La capture d'écran montrait que le dock **Inspection** (gauche) et le dock **Statistics** (bas) se chevauchaient dans le coin bas-gauche. Par défaut Qt attribue les deux coins du bas au `BottomDockWidgetArea` → le dock Statistics s'étend pleine largeur **sous** le dock Inspection, et quand le contenu du panel débordait (problème Fix 1) il se dessinait par-dessus. Ajout dans `createDockWidgets()` :
+```cpp
+setCorner(Qt::BottomLeftCorner,  Qt::LeftDockWidgetArea);
+setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
+```
+→ les docks gauche/droite occupent toute la hauteur, le dock bas reste dans la colonne centrale. Layout type IDE, plus de conflit de coin.
+
 ### Fichiers modifiés
 - `src/gui/InspectionPanel.cpp` — QScrollArea pattern
 - `src/gui/SettingsDialog.cpp` — V4L2 enumeration + include CameraCapture.h
+- `src/gui/MainWindow.cpp` — setCorner (bottom corners → side dock areas)
 
 ### ⚠️ À valider sur le Jetson
 ```bash

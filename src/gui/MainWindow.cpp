@@ -261,6 +261,14 @@ void MainWindow::createStatusBar()
 
 void MainWindow::createDockWidgets()
 {
+    // Let the left/right dock areas own the bottom corners so they span the
+    // full window height; the bottom dock (Statistics) then occupies only the
+    // central column instead of underlapping the side docks. Prevents the
+    // left Inspection dock from fighting the Statistics dock for the
+    // bottom-left corner.
+    setCorner(Qt::BottomLeftCorner,  Qt::LeftDockWidgetArea);
+    setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
+
     // BOM panel (right)
     m_bomPanel = new BomPanel(this);
     auto* bomDock = new QDockWidget(tr("BOM"), this);
