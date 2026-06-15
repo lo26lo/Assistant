@@ -151,6 +151,60 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     });
     toolsLay->addWidget(calBtn);
 
+    // Advanced-mode JSON presets (load/save full device config).
+    auto* presetRow = new QHBoxLayout;
+    auto* loadJson = new QPushButton(tr("Charger preset JSON…"));
+    loadJson->setToolTip(tr("Applique une configuration complète (advanced mode) "
+                            "depuis un fichier .json — presets recommandés Intel."));
+    connect(loadJson, &QPushButton::clicked, this, [this]() {
+        if (!m_camera) return;
+        const QString path = QFileDialog::getOpenFileName(
+            this, tr("Charger un preset"), QString(), tr("JSON (*.json)"));
+        if (path.isEmpty()) return;
+        const bool ok = m_camera->loadJsonPreset(path.toStdString());
+        QMessageBox::information(this, tr("Preset"),
+            ok ? tr("Preset appliqué.") : tr("Échec du chargement du preset."));
+        if (ok) rebuild();  // reflect the new option values
+    });
+    auto* saveJson = new QPushButton(tr("Enregistrer preset JSON…"));
+    saveJson->setToolTip(tr("Sauve la configuration courante du capteur en .json."));
+    connect(saveJson, &QPushButton::clicked, this, [this]() {
+        if (!m_camera) return;
+        const QString path = QFileDialog::getSaveFileName(
+            this, tr("Enregistrer le preset"), "realsense_preset.json",
+            tr("JSON (*.json)"));
+        if (path.isEmpty()) return;
+        const bool ok = m_camera->saveJsonPreset(path.toStdString());
+        QMessageBox::information(this, tr("Preset"),
+            ok ? tr("Preset enregistré.") : tr("Échec de l'enregistrement."));
+    });
+    presetRow->addWidget(loadJson);
+    presetRow->addWidget(saveJson);
+    toolsLay->addLayout(presetRow);
+
+    // Rosbag recording (takes effect on next camera restart).
+    auto* recBtn = new QPushButton(tr("Enregistrer en .bag (au prochain start)…"));
+    recBtn->setCheckable(true);
+    recBtn->setToolTip(tr("Enregistre tous les flux dans un rosbag .bag, comme le "
+                          "bouton Record du Viewer. Prend effet au prochain "
+                          "démarrage caméra. Recliquer pour désactiver."));
+    connect(recBtn, &QPushButton::toggled, this, [this, recBtn](bool on) {
+        if (!m_camera) { recBtn->setChecked(false); return; }
+        if (on) {
+            const QString def = QString("capture_%1.bag")
+                .arg(QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"));
+            const QString path = QFileDialog::getSaveFileName(
+                this, tr("Fichier d'enregistrement"), def, tr("Rosbag (*.bag)"));
+            if (path.isEmpty()) { recBtn->setChecked(false); return; }
+            m_camera->setRecordFile(path.toStdString());
+            recBtn->setText(tr("Enregistrement armé — redémarre la caméra"));
+        } else {
+            m_camera->setRecordFile("");
+            recBtn->setText(tr("Enregistrer en .bag (au prochain start)…"));
+        }
+    });
+    toolsLay->addWidget(recBtn);
+
     root->addWidget(toolsBox);
 
     // Surface async results from the capture thread.

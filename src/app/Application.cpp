@@ -1025,8 +1025,14 @@ void Application::wireCameraSignals()
             if (nowMs - m_lastDepthMs < 300) return;
             m_lastDepthMs = nowMs;
 
-            // Median depth over a central ROI (20%), ignoring 0 = invalid.
+            // Depth fill rate over the whole frame (valid = non-zero).
             const cv::Mat& d = *depth;
+            if (auto* sp = m_mainWindow->statsPanel()) {
+                const double area = static_cast<double>(d.rows) * d.cols;
+                sp->setFillRate(area > 0 ? cv::countNonZero(d) / area : -1.0);
+            }
+
+            // Median depth over a central ROI (20%), ignoring 0 = invalid.
             const int rw = std::max(1, d.cols / 5), rh = std::max(1, d.rows / 5);
             const cv::Rect roi((d.cols - rw) / 2, (d.rows - rh) / 2, rw, rh);
             std::vector<uint16_t> vals;

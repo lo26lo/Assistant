@@ -62,6 +62,10 @@ private:
     std::unique_ptr<QOpenGLShaderProgram> m_program;
     QOpenGLVertexArrayObject m_vao;
     QOpenGLBuffer m_vbo{QOpenGLBuffer::VertexBuffer};
+    // Static XYZ axis gizmo at the origin (the camera) — orientation aid.
+    QOpenGLVertexArrayObject m_axesVao;
+    QOpenGLBuffer m_axesVbo{QOpenGLBuffer::VertexBuffer};
+    int  m_axesVertices = 0;
     bool m_glReady = false;
 
     // Interleaved vertex data: x,y,z (mm, Y/Z flipped for a natural view), r,g,b.

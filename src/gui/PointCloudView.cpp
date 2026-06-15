@@ -25,6 +25,8 @@ PointCloudView::~PointCloudView()
         makeCurrent();
         m_vbo.destroy();
         m_vao.destroy();
+        m_axesVbo.destroy();
+        m_axesVao.destroy();
         doneCurrent();
     }
 }
@@ -139,6 +141,23 @@ void PointCloudView::initializeGL()
 
     m_vao.create();
     m_vbo.create();
+
+    // Build the static axis gizmo: three colored lines from the origin.
+    // X=red, Y=green, Z=blue, 5 cm long. rs2 frame is X right, Y down, Z fwd;
+    // we render in the flipped (display) frame so Z points toward the viewer.
+    const float L = 0.05f;
+    const float axes[] = {
+        0,0,0,  1,0,0,   L,0,0,  1,0,0,   // X
+        0,0,0,  0,1,0,   0,-L,0, 0,1,0,   // Y (flipped)
+        0,0,0,  0,0,1,   0,0,-L, 0,0,1,   // Z (flipped)
+    };
+    m_axesVertices = 6;
+    m_axesVao.create();
+    m_axesVbo.create();
+    m_axesVbo.bind();
+    m_axesVbo.allocate(axes, sizeof(axes));
+    m_axesVbo.release();
+
     m_glReady = true;
 }
 
@@ -190,8 +209,21 @@ void PointCloudView::paintGL()
         return;
     }
 
+    const QMatrix4x4 mvp = cameraMatrix();
     m_program->bind();
-    m_program->setUniformValue("uMvp", cameraMatrix());
+    m_program->setUniformValue("uMvp", mvp);
+
+    // Origin axis gizmo (orientation aid).
+    if (m_axesVertices > 0) {
+        QOpenGLVertexArrayObject::Binder axBinder(&m_axesVao);
+        m_axesVbo.bind();
+        m_program->enableAttributeArray(0);
+        m_program->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * sizeof(float));
+        m_program->enableAttributeArray(1);
+        m_program->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, 6 * sizeof(float));
+        glDrawArrays(GL_LINES, 0, m_axesVertices);
+        m_axesVbo.release();
+    }
 
     QOpenGLVertexArrayObject::Binder vaoBinder(&m_vao);
     m_vbo.bind();

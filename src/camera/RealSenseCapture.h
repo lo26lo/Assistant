@@ -116,6 +116,18 @@ public:
     /// onChipCalibrationFinished() with the health score. Experimental.
     void requestOnChipCalibration() { m_calibPending.store(true); }
 
+    /// Advanced-mode JSON preset I/O (rs2::serializable_device), like the
+    /// Viewer's load/save. Applied/queried live on the device. Return false on
+    /// failure (no device, unsupported, or file error).
+    bool saveJsonPreset(const std::string& path) const;
+    bool loadJsonPreset(const std::string& path);
+
+    /// Record all streams to a rosbag (.bag) starting at the next (re)start,
+    /// like the Viewer's record button. Empty string disables recording.
+    /// Takes effect after stop()+start().
+    void setRecordFile(const std::string& path);
+    std::string recordFile() const;
+
     /// Enable/disable computing the 3D point cloud on the capture thread.
     /// Off by default (avoids the per-frame rs2::pointcloud cost when the 3D
     /// view is not shown). When on, pointCloudReady() fires each frame.
@@ -164,6 +176,9 @@ private:
 
     mutable std::mutex  m_plyMutex;               // guards the pending PLY path
     std::string         m_pendingPly;             // export path; empty = none
+
+    mutable std::mutex  m_recordMutex;            // guards the record path
+    std::string         m_recordFile;             // .bag to record to; empty = off
 
     std::atomic<bool>            m_capturing{false};
     std::unique_ptr<std::thread> m_thread;

@@ -31,6 +31,9 @@ public:
     /// Live distance from a depth-capable camera (RealSense) to the board, in
     /// millimetres. Pass <= 0 to show "—" (no depth / invalid).
     void setDistance(double mm);
+    /// Depth fill rate: fraction [0..1] of valid (non-zero) depth pixels.
+    /// Pass < 0 to show "—" (no depth source).
+    void setFillRate(double fraction);
     /// Live focus assist: Laplacian variance of the current frame.
     void setSharpness(double variance, bool good);
     /// Calibration status line.
@@ -78,6 +81,7 @@ private:
     QLabel* m_scaleLabel        = nullptr;
     QLabel* m_focusLabel        = nullptr;
     QLabel* m_distanceLabel     = nullptr;
+    QLabel* m_fillRateLabel     = nullptr;
     QLabel* m_calibLabel        = nullptr;
 
     // Event log (runtime logs + defects)

@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <fstream>
+#include <iterator>
 
 namespace ibom::camera {
 
@@ -177,6 +179,57 @@ void RealSenseCapture::requestPlyExport(const std::string& path)
     m_pendingPly = path;
 }
 
+bool RealSenseCapture::saveJsonPreset(const std::string& path) const
+{
+    std::lock_guard<std::mutex> lk(m_deviceMutex);
+    if (!m_device) return false;
+    try {
+        auto ser = m_device->as<rs2::serializable_device>();
+        if (!ser) return false;
+        const std::string json = ser.serialize_json();
+        std::ofstream f(path, std::ios::binary);
+        if (!f) return false;
+        f << json;
+        spdlog::info("RealSense preset saved: {}", path);
+        return true;
+    } catch (const rs2::error& e) {
+        spdlog::warn("RealSense save preset failed: {}", e.what());
+        return false;
+    }
+}
+
+bool RealSenseCapture::loadJsonPreset(const std::string& path)
+{
+    std::lock_guard<std::mutex> lk(m_deviceMutex);
+    if (!m_device) return false;
+    try {
+        std::ifstream f(path, std::ios::binary);
+        if (!f) return false;
+        const std::string json((std::istreambuf_iterator<char>(f)),
+                                std::istreambuf_iterator<char>());
+        auto ser = m_device->as<rs2::serializable_device>();
+        if (!ser) return false;
+        ser.load_json(json);
+        spdlog::info("RealSense preset loaded: {}", path);
+        return true;
+    } catch (const rs2::error& e) {
+        spdlog::warn("RealSense load preset failed: {}", e.what());
+        return false;
+    }
+}
+
+void RealSenseCapture::setRecordFile(const std::string& path)
+{
+    std::lock_guard<std::mutex> lk(m_recordMutex);
+    m_recordFile = path;
+}
+
+std::string RealSenseCapture::recordFile() const
+{
+    std::lock_guard<std::mutex> lk(m_recordMutex);
+    return m_recordFile;
+}
+
 void RealSenseCapture::captureLoop()
 {
     rs2::pipeline pipe;
@@ -200,6 +253,19 @@ void RealSenseCapture::captureLoop()
     // the color frame so depth[y,x] maps to color pixel [y,x].
     cfg.enable_stream(RS2_STREAM_COLOR, m_width, m_height, RS2_FORMAT_BGR8, m_fps);
     cfg.enable_stream(RS2_STREAM_DEPTH, m_width, m_height, RS2_FORMAT_Z16, m_fps);
+
+    // Optional rosbag recording (Viewer-style): record all streams to a .bag.
+    {
+        std::lock_guard<std::mutex> lk(m_recordMutex);
+        if (!m_recordFile.empty()) {
+            try {
+                cfg.enable_record_to_file(m_recordFile);
+                spdlog::info("RealSense recording to {}", m_recordFile);
+            } catch (const rs2::error& e) {
+                spdlog::warn("RealSense record-to-file failed: {}", e.what());
+            }
+        }
+    }
 
     rs2::pipeline_profile profile;
     bool started = false;
