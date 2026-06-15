@@ -45,6 +45,9 @@ public:
     void updateAiStatus(bool ready, const QString& message);
     /// Rebuild the File → Open Recent submenu (most recent first).
     void setRecentFiles(const QStringList& files);
+    /// Enable the View → Depth View toggle (only meaningful for RealSense).
+    /// Unchecks and disables it when the depth stream is unavailable.
+    void setDepthViewAvailable(bool available);
 
 signals:
     void ibomFileRequested(const QString& path);
@@ -53,6 +56,8 @@ signals:
     void calibrationRequested();
     void fullscreenToggled(bool fs);
     void settingsChanged();
+    /// Toggle the live view between color and colorized depth (RealSense only).
+    void depthViewToggled(bool depth);
     /// Open the RealSense sensor-controls panel (routed from the Settings
     /// dialog; the live camera lives in Application).
     void realSenseControlsRequested();
@@ -114,6 +119,7 @@ private:
     QAction*  m_actExport     = nullptr;
     QAction*  m_actSettings   = nullptr;
     QAction*  m_actDarkMode   = nullptr;
+    QAction*  m_actDepthView  = nullptr;
 
     // Status bar widgets
     QLabel* m_fpsLabel    = nullptr;

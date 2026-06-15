@@ -116,7 +116,10 @@ std::vector<std::string> RealSenseCapture::listDevices()
             devices.push_back(serial.empty() ? name : (name + " " + serial));
         }
     } catch (const rs2::error& e) {
-        spdlog::warn("RealSense enumeration failed: {}", e.what());
+        // "failed to set power state" and similar happen when the device is
+        // busy streaming (e.g. Settings re-enumerates while the camera runs).
+        // Benign and transient — the existing device list stays valid.
+        spdlog::debug("RealSense enumeration skipped (device busy?): {}", e.what());
     } catch (const std::exception& e) {
         spdlog::warn("RealSense enumeration error: {}", e.what());
     }

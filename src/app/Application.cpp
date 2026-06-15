@@ -617,6 +617,10 @@ void Application::updateCalibrationUI()
     if (auto* cp = m_mainWindow->controlPanel())
         cp->setCameraBackendUI(isRS);
 
+    // Depth view is only available with the RealSense backend (depth stream).
+    m_mainWindow->setDepthViewAvailable(isRS);
+    if (!isRS) m_depthViewMode = false;
+
     // Update calibration info in the stats panel.
     if (auto* sp = m_mainWindow->statsPanel()) {
 #ifdef IBOM_HAVE_REALSENSE
@@ -810,7 +814,11 @@ void Application::wireCameraSignals()
         // scope. The copy is shared (COW) between the camera view and the
         // remote stream.
         const QImage display = qimg.copy();
-        m_mainWindow->cameraView()->updateFrame(display);
+        // In depth-view mode the colorized depth map drives the view instead
+        // (pushed by the depthFrameReady handler). Keep the overlay/remote
+        // paths fed with the color image regardless.
+        if (!m_depthViewMode)
+            m_mainWindow->cameraView()->updateFrame(display);
 
         // Mirror to remote browser clients (RemoteView throttles internally).
         if (m_remoteView && m_remoteView->isRunning() && m_remoteView->clientCount() > 0)
@@ -1005,6 +1013,25 @@ void Application::wireCameraSignals()
         connect(rs, &camera::RealSenseCapture::depthFrameReady, this,
                 [this, rs](ibom::camera::DepthFrameRef depth) {
             if (!depth || depth->empty() || depth->type() != CV_16UC1) return;
+            const cv::Mat& dmat = *depth;
+
+            // ── Depth view: colorize and display every frame (no throttle) ──
+            // Map the D405 working range (~30–600 mm) to a JET colormap; invalid
+            // (0) samples render black. Reuses the depth already aligned to color.
+            if (m_depthViewMode) {
+                constexpr double kNearMm = 30.0, kFarMm = 600.0;
+                const double scale = 255.0 / (kFarMm - kNearMm);
+                cv::Mat disp8, colored;
+                dmat.convertTo(disp8, CV_8U, scale, -kNearMm * scale);
+                cv::applyColorMap(disp8, colored, cv::COLORMAP_JET);
+                colored.setTo(cv::Scalar(0, 0, 0), dmat == 0);  // mask invalid
+                cv::Mat rgb;
+                cv::cvtColor(colored, rgb, cv::COLOR_BGR2RGB);
+                QImage qimg(rgb.data, rgb.cols, rgb.rows,
+                            static_cast<int>(rgb.step), QImage::Format_RGB888);
+                if (auto* view = m_mainWindow->cameraView())
+                    view->updateFrame(qimg.copy());
+            }
 
             // Throttle to ~3 Hz — distance/scale change slowly on a fixed rig.
             const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -1257,6 +1284,13 @@ void Application::connectControlSignals()
             m_mainWindow->showFullScreen();
         else
             m_mainWindow->showNormal();
+    });
+
+    // ── Depth view toggle (RealSense) ───────────────────────────
+    connect(m_mainWindow.get(), &gui::MainWindow::depthViewToggled,
+            this, [this](bool depth) {
+        m_depthViewMode = depth;
+        spdlog::info("View mode: {}", depth ? "colorized depth" : "color");
     });
 
     // ── Settings changed ────────────────────────────────────────

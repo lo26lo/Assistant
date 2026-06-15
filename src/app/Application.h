@@ -178,6 +178,9 @@ private:
     qint64 m_lastSharpnessMs = 0;
     // Depth (RealSense) — last time distance/scale was computed (throttle).
     qint64 m_lastDepthMs = 0;
+    // Live view mode: false = color image, true = colorized depth map.
+    // Only meaningful for the RealSense backend (depth stream).
+    bool m_depthViewMode = false;
 
     // Calibration image collection
     std::vector<cv::Mat> m_calibImages;

@@ -114,6 +114,16 @@ void MainWindow::setRecentFiles(const QStringList& files)
     m_recentMenu->setEnabled(!files.isEmpty());
 }
 
+void MainWindow::setDepthViewAvailable(bool available)
+{
+    if (!m_actDepthView) return;
+    m_actDepthView->setEnabled(available);
+    if (!available && m_actDepthView->isChecked()) {
+        // Backend lost the depth stream — fall back to color and notify.
+        m_actDepthView->setChecked(false);  // emits depthViewToggled(false)
+    }
+}
+
 // ── Actions ──────────────────────────────────────────────────────
 
 void MainWindow::createActions()
@@ -160,6 +170,14 @@ void MainWindow::createActions()
     m_actDarkMode->setCheckable(true);
     m_actDarkMode->setChecked(m_darkMode);
     connect(m_actDarkMode, &QAction::toggled, this, &MainWindow::setDarkMode);
+
+    m_actDepthView = new QAction(tr("Depth View (colorized)"), this);
+    m_actDepthView->setCheckable(true);
+    m_actDepthView->setShortcut(Qt::Key_D);
+    m_actDepthView->setEnabled(false);  // enabled once a RealSense stream is live
+    m_actDepthView->setToolTip(tr("Show the colorized depth map instead of the "
+                                  "color image (RealSense only)."));
+    connect(m_actDepthView, &QAction::toggled, this, &MainWindow::depthViewToggled);
 }
 
 void MainWindow::createMenuBar()
@@ -187,6 +205,7 @@ void MainWindow::createMenuBar()
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(m_actFullscreen);
+    viewMenu->addAction(m_actDepthView);
     viewMenu->addAction(m_actDarkMode);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
