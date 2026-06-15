@@ -986,20 +986,28 @@ void Application::connectControlSignals()
 #ifdef IBOM_HAVE_REALSENSE
         auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get());
         if (!rs) {
-            m_mainWindow->updateStatusMessage(
-                tr("RealSense controls need the RealSense backend (Settings → Camera → Backend)."));
+            QMessageBox::information(m_mainWindow.get(), tr("RealSense Controls"),
+                tr("These controls read the live sensor options of a RealSense camera.\n\n"
+                   "To use them:\n"
+                   "  1. Connect the RealSense (D405) over USB3 and relaunch.\n"
+                   "  2. Settings → Camera → Backend = « Intel RealSense (D405) ».\n"
+                   "  3. Start the camera.\n\n"
+                   "The active backend is currently the USB microscope (V4L2)."));
             return;
         }
         if (!rs->isCapturing()) {
-            m_mainWindow->updateStatusMessage(
-                tr("Start the camera first — sensor options are read from the live device."));
+            QMessageBox::information(m_mainWindow.get(), tr("RealSense Controls"),
+                tr("Start the camera first — sensor options are read from the live device.\n\n"
+                   "If no RealSense is detected, check it is connected over USB3 and that "
+                   "the container was launched with the camera plugged in "
+                   "(run_local_gui.sh maps /dev/bus/usb when a RealSense is present)."));
             return;
         }
         auto* dlg = new gui::RealSenseControlsDialog(rs, m_mainWindow.get());
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->show();
 #else
-        m_mainWindow->updateStatusMessage(
+        QMessageBox::information(m_mainWindow.get(), tr("RealSense Controls"),
             tr("This build has no RealSense support."));
 #endif
     });
