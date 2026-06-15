@@ -140,6 +140,15 @@ void RealSenseCapture::captureLoop()
     } catch (const rs2::error&) { /* keep default */ }
     rs2::align alignToColor(RS2_STREAM_COLOR);
 
+    // Depth post-processing chain — drastically reduces stereo noise, which is
+    // significant on the D405 (no IR projector → noisier on low-texture areas;
+    // cf. librealsense #10682). Spatial = edge-preserving smoothing; Temporal =
+    // multi-frame stabilization (defaults: alpha 0.4, delta 20, persistency 3,
+    // matching the values used in that issue). Both preserve resolution, so the
+    // color↔depth alignment stays valid. State is per-thread → declared here.
+    rs2::spatial_filter  spatialFilter;
+    rs2::temporal_filter temporalFilter;
+
     // Publish the device handle so the GUI can query/set sensor options live.
     try {
         std::lock_guard<std::mutex> lk(m_deviceMutex);
@@ -204,10 +213,14 @@ void RealSenseCapture::captureLoop()
         }
         emit frameReady(shared);
 
-        // Publish depth as CV_16UC1 in millimetres (aligned to color).
+        // Publish depth as CV_16UC1 in millimetres (aligned to color), after
+        // spatial + temporal post-processing to cut stereo noise.
         if (rs2::depth_frame depth = aligned.get_depth_frame()) {
-            const cv::Mat raw(cv::Size(depth.get_width(), depth.get_height()),
-                              CV_16UC1, const_cast<void*>(depth.get_data()),
+            rs2::frame filtered = spatialFilter.process(depth);
+            filtered = temporalFilter.process(filtered);
+            const rs2::depth_frame fdepth = filtered.as<rs2::depth_frame>();
+            const cv::Mat raw(cv::Size(fdepth.get_width(), fdepth.get_height()),
+                              CV_16UC1, const_cast<void*>(fdepth.get_data()),
                               cv::Mat::AUTO_STEP);
             // raw units → mm. depthUnits is metres/unit, so mm = raw * units * 1000.
             cv::Mat depthMm;

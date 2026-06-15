@@ -146,7 +146,7 @@ Cible : composants 2 pins (0402/0603/0805 — `comp.pads.size()==2`).
 ## 10. Calibration & limites
 
 - **Pas de cible imprimée** : OCC (Phase 2 §11) suffit pour une depth fiable ; la hauteur est **relative au plan estimé**, donc robuste aux petits biais d'échelle.
-- **Bruit depth D405** : ~quelques dixièmes de mm à 10–20 cm. Les seuils (tolérance ≥ 0.4–0.5 mm) tiennent compte de ce bruit ; un filtrage temporel (moyenne sur N frames immobiles) améliore la stabilité.
+- **Bruit depth D405** : ~quelques dixièmes de mm à 10–20 cm. Les seuils (tolérance ≥ 0.4–0.5 mm) tiennent compte de ce bruit ; un filtrage temporel (moyenne sur N frames immobiles) améliore la stabilité. **Déjà actif** : `RealSenseCapture` applique Spatial + Temporal filter (cf. issue librealsense #10682). La D405 **n'a pas d'IR/projecteur** → sur surfaces lisses (plan de masse, solder mask) la depth est bruitée : prévoir un **bon éclairage rasant / motif visible** pour ajouter de la texture (recommandation Intel/MartyG dans l'issue).
 - **Occlusions / réflexions** : composants brillants (capots métal, connecteurs) → trous depth. Gérer via `min_valid_frac` → statut `INCERTAIN` plutôt que faux positif.
 - **Alignement** : dépend de la qualité de l'homographie iBOM (tracking) pour la projection bbox. Mauvais tracking = mauvaises ROIs → ne valider que si `homographyAge` récent + inliers suffisants (mêmes gates que le `DatasetCreator`).
 
