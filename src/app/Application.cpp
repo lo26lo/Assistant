@@ -1016,25 +1016,9 @@ void Application::wireCameraSignals()
         connect(rs, &camera::RealSenseCapture::depthFrameReady, this,
                 [this, rs](ibom::camera::DepthFrameRef depth) {
             if (!depth || depth->empty() || depth->type() != CV_16UC1) return;
-            const cv::Mat& dmat = *depth;
-
-            // ── Depth view: colorize and display every frame (no throttle) ──
-            // Map the D405 working range (~30–600 mm) to a JET colormap; invalid
-            // (0) samples render black. Reuses the depth already aligned to color.
-            if (m_depthViewMode) {
-                constexpr double kNearMm = 30.0, kFarMm = 600.0;
-                const double scale = 255.0 / (kFarMm - kNearMm);
-                cv::Mat disp8, colored;
-                dmat.convertTo(disp8, CV_8U, scale, -kNearMm * scale);
-                cv::applyColorMap(disp8, colored, cv::COLORMAP_JET);
-                colored.setTo(cv::Scalar(0, 0, 0), dmat == 0);  // mask invalid
-                cv::Mat rgb;
-                cv::cvtColor(colored, rgb, cv::COLOR_BGR2RGB);
-                QImage qimg(rgb.data, rgb.cols, rgb.rows,
-                            static_cast<int>(rgb.step), QImage::Format_RGB888);
-                if (auto* view = m_mainWindow->cameraView())
-                    view->updateFrame(qimg.copy());
-            }
+            // Note: the depth-view image is produced by rs2::colorizer on the
+            // capture thread (colorizedDepthReady), not here — better histogram
+            // equalization than a fixed-range colormap.
 
             // Throttle to ~3 Hz — distance/scale change slowly on a fixed rig.
             const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -1082,8 +1066,22 @@ void Application::wireCameraSignals()
                 pcv->setCloud(cloud);
         }, Qt::QueuedConnection);
 
-        // Only pay the pointcloud cost while the 3D view is actually shown.
+        // Histogram-equalized colorized depth (rs2::colorizer) → camera view
+        // when the 2D depth view mode is active. Emitted as a BGR Mat.
+        connect(rs, &camera::RealSenseCapture::colorizedDepthReady, this,
+                [this](ibom::camera::FrameRef rgb) {
+            if (!m_depthViewMode || !rgb || rgb->empty()) return;
+            cv::Mat disp;
+            cv::cvtColor(*rgb, disp, cv::COLOR_BGR2RGB);
+            QImage qimg(disp.data, disp.cols, disp.rows,
+                        static_cast<int>(disp.step), QImage::Format_RGB888);
+            if (auto* view = m_mainWindow->cameraView())
+                view->updateFrame(qimg.copy());
+        }, Qt::QueuedConnection);
+
+        // Only pay these costs while the respective views are shown.
         rs->setEmitPointCloud(m_pointCloudMode);
+        rs->setEmitColorizedDepth(m_depthViewMode);
     }
 #endif
 
@@ -1304,6 +1302,10 @@ void Application::connectControlSignals()
             this, [this](bool depth) {
         m_depthViewMode = depth;
         spdlog::info("View mode: {}", depth ? "colorized depth" : "color");
+#ifdef IBOM_HAVE_REALSENSE
+        if (auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get()))
+            rs->setEmitColorizedDepth(depth);
+#endif
     });
 
     // ── 3D point cloud toggle (RealSense) ───────────────────────

@@ -249,6 +249,13 @@ void RealSenseCapture::captureLoop()
     rs2::pointcloud pc;
     auto lastCloud = std::chrono::steady_clock::now() - std::chrono::seconds(1);
 
+    // Depth colorizer (histogram-equalized, like the Viewer's Depth panel).
+    // Only run when the colorized-depth view is active.
+    rs2::colorizer colorizer;
+    colorizer.set_option(RS2_OPTION_COLOR_SCHEME, 0.f);  // 0 = Jet (Viewer default)
+    // Histogram equalization is on by default — that's what makes near/far
+    // detail readable regardless of the absolute depth range.
+
     int consecutiveFailures = 0;
     while (m_capturing.load()) {
         rs2::frameset fs;
@@ -310,6 +317,26 @@ void RealSenseCapture::captureLoop()
             cv::Mat depthMm;
             raw.convertTo(depthMm, CV_16UC1, depthUnits * 1000.0);
             emit depthFrameReady(std::make_shared<const cv::Mat>(std::move(depthMm)));
+
+            // ── Colorized depth (rs2::colorizer) for the 2D depth view ──
+            // Histogram-equalized RGB, like the Viewer's Depth panel. Only when
+            // that view is active.
+            if (m_emitColorDepth.load()) {
+                try {
+                    rs2::video_frame cd = colorizer.colorize(fdepth);
+                    const cv::Mat bgr(cv::Size(cd.get_width(), cd.get_height()),
+                                      CV_8UC3, const_cast<void*>(cd.get_data()),
+                                      cv::Mat::AUTO_STEP);
+                    // colorizer outputs RGB8; emit as an owned BGR Mat to match
+                    // the app's color convention (Application converts BGR→RGB).
+                    cv::Mat bgrOwned;
+                    cv::cvtColor(bgr, bgrOwned, cv::COLOR_RGB2BGR);
+                    emit colorizedDepthReady(
+                        std::make_shared<const cv::Mat>(std::move(bgrOwned)));
+                } catch (const rs2::error& e) {
+                    spdlog::debug("RealSense colorize failed: {}", e.what());
+                }
+            }
 
             // ── 3D point cloud (SDK path) — canonical librealsense method ──
             // pc.map_to(color) + pc.calculate(depth). Reuses the SAME filtered

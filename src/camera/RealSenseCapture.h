@@ -105,6 +105,11 @@ public:
     /// view is not shown). When on, pointCloudReady() fires each frame.
     void setEmitPointCloud(bool on) { m_emitCloud.store(on); }
 
+    /// Enable/disable a histogram-equalized colorized depth image
+    /// (rs2::colorizer, like the RealSense Viewer's Depth panel). Off by
+    /// default. When on, colorizedDepthReady() fires each frame.
+    void setEmitColorizedDepth(bool on) { m_emitColorDepth.store(on); }
+
 signals:
     /// Emitted alongside frameReady when depth is available: a CV_16UC1 depth
     /// map in millimetres, aligned to the color frame. Shared (no pixel copy).
@@ -113,6 +118,10 @@ signals:
     /// Emitted when point-cloud emission is enabled: a colored 3D cloud built
     /// via rs2::pointcloud (vertices in metres, camera frame). Shared.
     void pointCloudReady(ibom::camera::PointCloudRef cloud);
+
+    /// Emitted when colorized-depth emission is enabled: an RGB image of the
+    /// depth, histogram-equalized by rs2::colorizer (aligned to color). Shared.
+    void colorizedDepthReady(ibom::camera::FrameRef rgb);
 
 private:
     void captureLoop();
@@ -127,6 +136,7 @@ private:
     std::atomic<double> m_colorPpy{0.0};
     std::atomic<float>  m_pendingPreset{-1.0f};  // Visual Preset to apply on start
     std::atomic<bool>   m_emitCloud{false};       // compute rs2::pointcloud when true
+    std::atomic<bool>   m_emitColorDepth{false};  // colorize depth via rs2::colorizer
 
     std::atomic<bool>            m_capturing{false};
     std::unique_ptr<std::thread> m_thread;
