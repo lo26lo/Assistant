@@ -212,6 +212,9 @@ void RealSenseCapture::captureLoop()
         m_fps    = vsp.fps();
         const rs2_intrinsics in = vsp.get_intrinsics();
         m_colorFx.store(static_cast<double>(in.fx));
+        m_colorFy.store(static_cast<double>(in.fy));
+        m_colorPpx.store(static_cast<double>(in.ppx));
+        m_colorPpy.store(static_cast<double>(in.ppy));
         spdlog::info("RealSense color opened: {}x{} @ {} fps (BGR8), fx={:.1f}px, "
                      "depth_units={} m",
                      m_width, m_height, m_fps, in.fx, depthUnits);

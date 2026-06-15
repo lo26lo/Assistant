@@ -37,7 +37,10 @@ public:
     /// V4L2 + calibrated: setCalibration(rms, ppmm, false)
     /// V4L2 + not calibrated: setCalibration(0, 0, false)
     /// RealSense: setCalibration(0, fx, true)
-    void setCalibration(double rmsOrFx, double ppmm, bool isFactory);
+    /// `tooltip`, when non-empty, replaces the default hover text (used to show
+    /// the full RealSense intrinsics / computed FOV).
+    void setCalibration(double rmsOrFx, double ppmm, bool isFactory,
+                        const QString& tooltip = {});
     void addDefectEntry(const std::string& reference, const std::string& type);
 
 public slots:

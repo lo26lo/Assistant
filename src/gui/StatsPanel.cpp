@@ -264,8 +264,14 @@ void StatsPanel::setSharpness(double variance, bool good)
     m_focusLabel->setStyleSheet(good ? theme::placedCSS() : theme::defectCSS());
 }
 
-void StatsPanel::setCalibration(double rmsOrFx, double ppmm, bool isFactory)
+void StatsPanel::setCalibration(double rmsOrFx, double ppmm, bool isFactory,
+                                const QString& tooltip)
 {
+    const QString defaultTip =
+        tr("USB microscope: OpenCV checkerboard RMS + px/mm.\n"
+           "RealSense: factory intrinsics (focal length).");
+    m_calibLabel->setToolTip(tooltip.isEmpty() ? defaultTip : tooltip);
+
     if (isFactory) {
         // RealSense: show factory focal length
         m_calibLabel->setText(QString("Factory  fx=%1 px").arg(rmsOrFx, 0, 'f', 1));

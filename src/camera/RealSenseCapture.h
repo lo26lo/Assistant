@@ -70,6 +70,11 @@ public:
     /// intrinsics). 0 until the pipeline has started. Used to derive px/mm
     /// from depth: pixelsPerMm = colorFx / distance_mm.
     double colorFx() const { return m_colorFx.load(); }
+    /// Remaining factory intrinsics of the color stream (0 until started):
+    /// vertical focal length and principal point, both in pixels.
+    double colorFy()  const { return m_colorFy.load(); }
+    double colorPpx() const { return m_colorPpx.load(); }
+    double colorPpy() const { return m_colorPpy.load(); }
 
     /// List connected RealSense devices ("Intel RealSense D405 <serial>").
     /// Returns an empty vector when none are present or librealsense fails.
@@ -107,6 +112,9 @@ private:
     int m_height = 480;
     int m_fps    = 30;
     std::atomic<double> m_colorFx{0.0};
+    std::atomic<double> m_colorFy{0.0};
+    std::atomic<double> m_colorPpx{0.0};
+    std::atomic<double> m_colorPpy{0.0};
     std::atomic<float>  m_pendingPreset{-1.0f};  // Visual Preset to apply on start
 
     std::atomic<bool>            m_capturing{false};

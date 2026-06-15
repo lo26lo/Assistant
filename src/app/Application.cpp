@@ -55,6 +55,7 @@
 #include <QFile>
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <cmath>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
@@ -622,7 +623,32 @@ void Application::updateCalibrationUI()
         if (isRS) {
             auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get());
             const double fx = rs ? rs->colorFx() : 0.0;
-            sp->setCalibration(fx, 0.0, true);
+            QString tip;
+            if (rs && fx > 0.0) {
+                const double fy  = rs->colorFy();
+                const double ppx = rs->colorPpx();
+                const double ppy = rs->colorPpy();
+                const auto   res = m_camera->resolution();
+                const int    w   = res.width();
+                const int    h   = res.height();
+                // Field of view from the pinhole model: FOV = 2·atan(size / 2f).
+                const double rad2deg = 180.0 / 3.14159265358979323846;
+                const double hfov = (w > 0 && fx > 0) ? 2.0 * std::atan(w / (2.0 * fx)) * rad2deg : 0.0;
+                const double vfov = (h > 0 && fy > 0) ? 2.0 * std::atan(h / (2.0 * fy)) * rad2deg : 0.0;
+                tip = tr(
+                    "Intel RealSense — factory intrinsics (no calibration needed).\n"
+                    "Resolution: %1×%2\n"
+                    "Focal length: fx=%3 px, fy=%4 px\n"
+                    "Principal point: (%5, %6) px\n"
+                    "Field of view: %7° H × %8° V\n\n"
+                    "fx scales with width; cross-check on the Jetson with "
+                    "`rs-enumerate-devices -c`.")
+                    .arg(w).arg(h)
+                    .arg(fx, 0, 'f', 1).arg(fy, 0, 'f', 1)
+                    .arg(ppx, 0, 'f', 1).arg(ppy, 0, 'f', 1)
+                    .arg(hfov, 0, 'f', 1).arg(vfov, 0, 'f', 1);
+            }
+            sp->setCalibration(fx, 0.0, true, tip);
             return;
         }
 #endif
