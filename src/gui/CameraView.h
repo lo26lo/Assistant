@@ -24,6 +24,12 @@ public:
     void setZoomLevel(float zoom);
     void setMeasurementMode(bool enabled);
 
+    /// Show/hide the in-image "view mode" toggle button (top-right corner).
+    /// Visible only when a depth-capable backend (RealSense) is streaming.
+    void setViewToggleVisible(bool visible);
+    /// Reflect the current view mode on the toggle button label.
+    void setDepthViewActive(bool active);
+
     /// kind: -1=off, 0=Distance, 1=Angle, 2=Area, 3=PinPitch.
     /// Setting clears the in-progress points list.
     void setMeasureModeKind(int kind);
@@ -51,6 +57,8 @@ signals:
     void measurePoint(QPointF imagePos);
     void measureCanceled();
     void areaCloseRequested();
+    /// The in-image view-mode toggle button was clicked.
+    void viewToggleClicked();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -66,6 +74,7 @@ private:
     void drawCrosshair(QPainter& painter);
     void drawMeasurement(QPainter& painter);
     void drawZoomIndicator(QPainter& painter);
+    void drawViewToggle(QPainter& painter);
 
     QPointF imageToWidget(QPointF imagePos) const;
 
@@ -90,6 +99,12 @@ private:
     float m_overlayOpacity  = 0.5f;
     bool  m_crosshairVisible = true;
     bool  m_measureMode      = false;
+
+    // In-image view-mode toggle (top-right). Drawn in paintEvent, hit-tested
+    // in mousePressEvent via m_viewToggleRect.
+    bool   m_viewToggleVisible = false;
+    bool   m_depthViewActive   = false;
+    QRectF m_viewToggleRect;
 
     // Measurement (image-space coords)
     int     m_measureModeKind   = -1;     // -1=off, 0=Dist, 1=Angle, 2=Area, 3=Pitch

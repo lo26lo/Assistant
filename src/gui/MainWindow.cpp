@@ -122,6 +122,9 @@ void MainWindow::setDepthViewAvailable(bool available)
         // Backend lost the depth stream — fall back to color and notify.
         m_actDepthView->setChecked(false);  // emits depthViewToggled(false)
     }
+    // Show the in-image toggle button only when depth is available.
+    if (m_cameraView)
+        m_cameraView->setViewToggleVisible(available);
 }
 
 // ── Actions ──────────────────────────────────────────────────────
@@ -178,6 +181,12 @@ void MainWindow::createActions()
     m_actDepthView->setToolTip(tr("Show the colorized depth map instead of the "
                                   "color image (RealSense only)."));
     connect(m_actDepthView, &QAction::toggled, this, &MainWindow::depthViewToggled);
+    // Keep the in-image toggle button label in sync with the action.
+    connect(m_actDepthView, &QAction::toggled, m_cameraView, &CameraView::setDepthViewActive);
+    // The in-image button drives the same action (menu + button stay in sync).
+    connect(m_cameraView, &CameraView::viewToggleClicked, this, [this]() {
+        if (m_actDepthView->isEnabled()) m_actDepthView->toggle();
+    });
 }
 
 void MainWindow::createMenuBar()
