@@ -115,7 +115,7 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
     // index maps to kRsProfiles[] in accept() / loadFromConfig()
     m_rsResCombo->addItem(tr("848 × 480 @ 30 fps  —  Depth Precision (recommended)"));
     m_rsResCombo->addItem(tr("1280 × 720 @ 30 fps  —  Visual Detail"));
-    m_rsResCombo->addItem(tr("480 × 270 @ 90 fps  —  Fast Preview"));
+    m_rsResCombo->addItem(tr("480 × 270 @ 60 fps  —  Fast Preview"));
     rsForm->addRow(tr("Resolution:"), m_rsResCombo);
 
     form->addRow(m_rsResWidget);
@@ -480,7 +480,7 @@ void SettingsDialog::accept()
         static const struct { int w, h, fps; } kRsProfiles[] = {
             {848,  480, 30},
             {1280, 720, 30},
-            {480,  270, 90},
+            {480,  270, 60},
         };
         const int pi = qBound(0, m_rsResCombo->currentIndex(), 2);
         m_config.setCameraWidth (kRsProfiles[pi].w);

@@ -76,10 +76,11 @@ private:
     QCheckBox*      m_autoInspect    = nullptr;
 
     // Camera controls
-    QComboBox* m_cameraDevice = nullptr;
-    QSpinBox*  m_camWidth     = nullptr;
-    QSpinBox*  m_camHeight    = nullptr;
-    QSpinBox*  m_camFps       = nullptr;
+    QComboBox* m_cameraDevice  = nullptr;
+    QSpinBox*  m_camWidth      = nullptr;
+    QSpinBox*  m_camHeight     = nullptr;
+    QSpinBox*  m_camFps        = nullptr;
+    QWidget*   m_camResWidget  = nullptr;  // container W/H/FPS — hidden for RealSense
 
     // Calibration & Alignment group. Widgets are shown/hidden by backend:
     // microscope → checkerboard tools; RealSense → factory note + sensor

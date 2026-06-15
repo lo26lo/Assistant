@@ -55,6 +55,15 @@ bool Config::load(const std::string& path)
             const std::string backend = cam.value("backend", std::string("v4l2"));
             m_cameraBackend = (backend == "realsense")
                 ? CameraBackend::RealSense : CameraBackend::V4L2;
+
+            // Migration: if RealSense selected but old V4L2 default (1920×1080)
+            // is still stored, reset to the recommended D405 profile (848×480@30).
+            if (m_cameraBackend == CameraBackend::RealSense
+                && m_cameraWidth == 1920 && m_cameraHeight == 1080) {
+                m_cameraWidth  = 848;
+                m_cameraHeight = 480;
+                m_cameraFps    = 30;
+            }
         }
 
         // iBOM

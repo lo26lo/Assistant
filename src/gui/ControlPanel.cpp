@@ -118,30 +118,40 @@ QGroupBox* ControlPanel::createAiGroup()
 QGroupBox* ControlPanel::createCameraGroup()
 {
     auto* group  = new QGroupBox(tr("Camera"));
-    auto* layout = new QFormLayout(group);
-    layout->setSpacing(theme::GroupSpacing);
-    layout->setContentsMargins(theme::GroupMarginH, theme::GroupMarginV,
-                               theme::GroupMarginH, theme::GroupMarginV);
-    layout->setLabelAlignment(Qt::AlignRight);
+    auto* vbox   = new QVBoxLayout(group);
+    vbox->setSpacing(theme::GroupSpacing);
+    vbox->setContentsMargins(theme::GroupMarginH, theme::GroupMarginV,
+                             theme::GroupMarginH, theme::GroupMarginV);
 
+    // Device selector — always visible
+    auto* devForm = new QFormLayout;
+    devForm->setLabelAlignment(Qt::AlignRight);
     m_cameraDevice = new QComboBox;
     m_cameraDevice->addItem(tr("Default (0)"));
-    layout->addRow(tr("Device:"), m_cameraDevice);
+    devForm->addRow(tr("Device:"), m_cameraDevice);
+    vbox->addLayout(devForm);
+
+    // W/H/FPS + Apply — hidden when RealSense is active (fixed resolution profiles)
+    m_camResWidget = new QWidget;
+    auto* resForm  = new QFormLayout(m_camResWidget);
+    resForm->setContentsMargins(0, 0, 0, 0);
+    resForm->setSpacing(theme::GroupSpacing);
+    resForm->setLabelAlignment(Qt::AlignRight);
 
     m_camWidth = new QSpinBox;
     m_camWidth->setRange(320, 4096);
     m_camWidth->setValue(1920);
-    layout->addRow(tr("Width:"), m_camWidth);
+    resForm->addRow(tr("Width:"), m_camWidth);
 
     m_camHeight = new QSpinBox;
     m_camHeight->setRange(240, 2160);
     m_camHeight->setValue(1080);
-    layout->addRow(tr("Height:"), m_camHeight);
+    resForm->addRow(tr("Height:"), m_camHeight);
 
     m_camFps = new QSpinBox;
     m_camFps->setRange(1, 120);
     m_camFps->setValue(30);
-    layout->addRow(tr("FPS:"), m_camFps);
+    resForm->addRow(tr("FPS:"), m_camFps);
 
     auto* applyBtn = new QPushButton(tr("Apply Camera"));
     connect(applyBtn, &QPushButton::clicked, this, [this]() {
@@ -149,7 +159,9 @@ QGroupBox* ControlPanel::createCameraGroup()
                                     m_camWidth->value(), m_camHeight->value(),
                                     m_camFps->value());
     });
-    layout->addRow(applyBtn);
+    resForm->addRow(applyBtn);
+
+    vbox->addWidget(m_camResWidget);
 
     return group;
 }
@@ -255,6 +267,9 @@ void ControlPanel::setConfidenceThreshold(float conf)
 void ControlPanel::setCameraBackendUI(bool isRealSense)
 {
     if (!m_btnCalibrate) return;  // group not built yet
+
+    // Camera group: hide free W/H/FPS spinboxes for RealSense (fixed profiles)
+    if (m_camResWidget) m_camResWidget->setVisible(!isRealSense);
 
     // Show only the tools relevant to the active backend. Alignment + live
     // tracking stay visible for both.
