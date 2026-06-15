@@ -181,6 +181,22 @@ void RealSenseCapture::captureLoop()
         m_device = std::make_unique<rs2::device>(profile.get_device());
     } catch (const rs2::error&) { /* options panel will be empty */ }
 
+    // Apply a pending Visual Preset (from a resolution profile) now that the
+    // device is live — the reliable point to set it.
+    const float pendingPreset = m_pendingPreset.exchange(-1.0f);
+    if (pendingPreset >= 0.0f) {
+        try {
+            for (auto&& s : profile.get_device().query_sensors()) {
+                if (s.supports(RS2_OPTION_VISUAL_PRESET)) {
+                    s.set_option(RS2_OPTION_VISUAL_PRESET, pendingPreset);
+                    break;
+                }
+            }
+        } catch (const rs2::error& e) {
+            spdlog::warn("RealSense visual preset apply failed: {}", e.what());
+        }
+    }
+
     // Report the mode the camera actually settled on + cache color intrinsics.
     try {
         auto vsp = profile.get_stream(RS2_STREAM_COLOR).as<rs2::video_stream_profile>();

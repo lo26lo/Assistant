@@ -214,6 +214,19 @@ Principe : on n'écrit pas la liste en dur — librealsense la fournit. Pour cha
 
 Ordre de réglage : preset High Accuracy → exposition manuelle + gain 16 → 848×480 → temporal+spatial → polariseur si reflets → disparity shift seulement si < 7 cm.
 
+#### Profils 1-clic (dans le panneau RealSense)
+
+Quatre profils prêts à l'emploi (combo « Profil » + description gains/pertes + bouton Appliquer) qui règlent **résolution + FPS + Visual Preset + filtres** d'un coup :
+
+| Profil | Rés. | Preset | Gain / Perte |
+|---|---|---|---|
+| **Précision depth** (recommandé) | 848×480@30 | High Accuracy | + depth précise/stable pour mesure / − RGB moins fin, quelques trous |
+| **Détail visuel** | 1280×720@30 | Medium Density | + image/overlay nets / − précision depth ↓, charge USB ↑ |
+| **Remplissage maximal** | 848×480@30 | High Density + hole filling | + surfaces lisses couvertes / − plus de bruit, moins fiable |
+| **Aperçu rapide** | 480×270@60 | — | + fluide, latence basse / − précision/détail faibles |
+
+Appliquer redémarre le flux (changement de résolution) et applique le preset au (re)start.
+
 ### Phase 3 — Inspection 3D (différenciateur, à planifier séparément)
 
 - Heatmap hauteur (overlay sur `CameraView`).

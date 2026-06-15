@@ -89,6 +89,11 @@ public:
     static constexpr int kFilterBase   = 1000;  // ownerId offset for filters
     static constexpr int kEnableOption = -1;     // synthetic per-filter on/off
 
+    /// Request a Visual Preset value to be applied by the capture thread right
+    /// after the next (re)start — the reliable moment, once the device is live.
+    /// < 0 = leave the preset untouched. Used when applying resolution profiles.
+    void setPendingVisualPreset(float value) { m_pendingPreset.store(value); }
+
 signals:
     /// Emitted alongside frameReady when depth is available: a CV_16UC1 depth
     /// map in millimetres, aligned to the color frame. Shared (no pixel copy).
@@ -102,6 +107,7 @@ private:
     int m_height = 480;
     int m_fps    = 30;
     std::atomic<double> m_colorFx{0.0};
+    std::atomic<float>  m_pendingPreset{-1.0f};  // Visual Preset to apply on start
 
     std::atomic<bool>            m_capturing{false};
     std::unique_ptr<std::thread> m_thread;

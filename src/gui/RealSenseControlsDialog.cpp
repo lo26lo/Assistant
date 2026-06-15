@@ -13,10 +13,55 @@
 #include <QDoubleSpinBox>
 #include <QPushButton>
 #include <QDialogButtonBox>
+#include <QTimer>
+#include <QVector>
 
 #include <map>
 
 namespace ibom::gui {
+
+namespace {
+
+/// A one-click resolution/parameter profile for the D405 in PCB inspection.
+struct UiProfile {
+    QString name;
+    QString description;     // what you gain / what you lose
+    int     w, h, fps;
+    QString presetLabel;     // Visual Preset to match ("" = leave as-is)
+    bool    spatial, temporal, threshold, holeFill;
+};
+
+QVector<UiProfile> profiles()
+{
+    return {
+        { QObject::tr("Précision depth (recommandé) — 848×480 @30"),
+          QObject::tr("Le meilleur compromis pour l'inspection.\n"
+                      "✓ Gain : depth la plus précise et stable, idéale pour mesurer des hauteurs.\n"
+                      "✗ Perte : image couleur moins fine que le 720p ; quelques trous sur surfaces "
+                      "difficiles (High Accuracy écarte les points peu fiables)."),
+          848, 480, 30, "High Accuracy", true, true, false, false },
+
+        { QObject::tr("Détail visuel — 1280×720 @30"),
+          QObject::tr("Pour bien lire références, pistes et marquages.\n"
+                      "✓ Gain : image RGB / overlay la plus nette.\n"
+                      "✗ Perte : précision depth légèrement réduite vs 848×480 ; plus de charge USB/CPU."),
+          1280, 720, 30, "Medium Density", true, true, false, false },
+
+        { QObject::tr("Remplissage maximal — 848×480 @30"),
+          QObject::tr("Depth la plus « pleine », peu de trous.\n"
+                      "✓ Gain : surfaces lisses/brillantes mieux couvertes (hole filling).\n"
+                      "✗ Perte : plus de faux points / bruit — moins fiable pour une mesure fine."),
+          848, 480, 30, "High Density", true, true, false, true },
+
+        { QObject::tr("Aperçu rapide — 480×270 @60"),
+          QObject::tr("Pour cadrer / positionner la carte rapidement.\n"
+                      "✓ Gain : fluidité et latence basses.\n"
+                      "✗ Perte : précision et détail faibles — pas pour la mesure."),
+          480, 270, 60, "", true, false, false, false },
+    };
+}
+
+} // namespace
 
 RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camera,
                                                  QWidget* parent)
@@ -27,6 +72,33 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     setMinimumSize(440, 560);
 
     auto* root = new QVBoxLayout(this);
+
+    // ── Resolution / parameter profiles ──
+    auto* profBox = new QGroupBox(tr("Profil"), this);
+    auto* profLay = new QVBoxLayout(profBox);
+    auto* profRow = new QHBoxLayout;
+    auto* profCombo = new QComboBox;
+    const auto profs = profiles();
+    for (const auto& p : profs) profCombo->addItem(p.name);
+    auto* applyProf = new QPushButton(tr("Appliquer"));
+    profRow->addWidget(profCombo, 1);
+    profRow->addWidget(applyProf);
+    profLay->addLayout(profRow);
+
+    m_profileDesc = new QLabel(profs.isEmpty() ? QString() : profs[0].description);
+    m_profileDesc->setWordWrap(true);
+    m_profileDesc->setStyleSheet("color: palette(mid);");
+    profLay->addWidget(m_profileDesc);
+    root->addWidget(profBox);
+
+    connect(profCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int i) {
+        const auto ps = profiles();
+        if (i >= 0 && i < ps.size()) m_profileDesc->setText(ps[i].description);
+    });
+    connect(applyProf, &QPushButton::clicked, this, [this, profCombo]() {
+        applyProfile(profCombo->currentIndex());
+    });
 
     m_scroll = new QScrollArea(this);
     m_scroll->setWidgetResizable(true);
@@ -133,6 +205,47 @@ void RealSenseControlsDialog::rebuild()
     // setWidget() takes ownership and deletes the previously-set widget (with
     // all its child controls), so this cleanly replaces the old options.
     m_scroll->setWidget(fresh);
+}
+
+void RealSenseControlsDialog::applyProfile(int index)
+{
+    const auto ps = profiles();
+    if (!m_camera || index < 0 || index >= ps.size()) return;
+    const UiProfile& p = ps[index];
+    using RS = camera::RealSenseCapture;
+
+    // Resolve the Visual Preset value from the live device (before restart) by
+    // matching the SDK's value label, then queue it for the next start.
+    if (!p.presetLabel.isEmpty()) {
+        for (const auto& c : m_camera->listControls()) {
+            if (!QString::fromStdString(c.name).contains("Visual Preset", Qt::CaseInsensitive))
+                continue;
+            for (const auto& [val, label] : c.enumValues) {
+                if (QString::fromStdString(label).contains(p.presetLabel, Qt::CaseInsensitive)) {
+                    m_camera->setPendingVisualPreset(val);
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    // Filter on/off (FilterChain order: Spatial, Temporal, Threshold, HoleFill).
+    m_camera->setControl(RS::kFilterBase + 0, RS::kEnableOption, p.spatial   ? 1.f : 0.f);
+    m_camera->setControl(RS::kFilterBase + 1, RS::kEnableOption, p.temporal  ? 1.f : 0.f);
+    m_camera->setControl(RS::kFilterBase + 2, RS::kEnableOption, p.threshold ? 1.f : 0.f);
+    m_camera->setControl(RS::kFilterBase + 3, RS::kEnableOption, p.holeFill  ? 1.f : 0.f);
+
+    // Resolution/fps need a pipeline restart.
+    const bool wasCapturing = m_camera->isCapturing();
+    if (wasCapturing) m_camera->stop();
+    m_camera->setResolution(p.w, p.h);
+    m_camera->setFps(p.fps);
+    if (wasCapturing) m_camera->start();
+
+    // The device republishes asynchronously on the capture thread; refresh the
+    // controls once it is back up.
+    QTimer::singleShot(1200, this, &RealSenseControlsDialog::rebuild);
 }
 
 } // namespace ibom::gui

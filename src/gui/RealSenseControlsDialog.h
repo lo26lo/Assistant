@@ -3,6 +3,7 @@
 #include <QDialog>
 
 class QScrollArea;
+class QLabel;
 
 namespace ibom::camera { class RealSenseCapture; }
 
@@ -23,10 +24,12 @@ public:
                                      QWidget* parent = nullptr);
 
 private:
-    void rebuild();   // (re)query options and (re)build the widgets
+    void rebuild();          // (re)query options and (re)build the widgets
+    void applyProfile(int index);   // apply a resolution/parameter profile
 
     camera::RealSenseCapture* m_camera;
-    QScrollArea* m_scroll = nullptr;  // hosts the dynamically-built content
+    QScrollArea* m_scroll = nullptr;     // hosts the dynamically-built content
+    QLabel* m_profileDesc = nullptr;     // explains the selected profile
 };
 
 } // namespace ibom::gui
