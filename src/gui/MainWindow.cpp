@@ -372,10 +372,20 @@ void MainWindow::onToggleFullscreen()
 void MainWindow::onShowSettings()
 {
     SettingsDialog dlg(m_app->config(), this);
+    // The RealSense controls button closes Settings, then we open the panel
+    // (Application owns the live camera). Opening it on top of the modal
+    // Settings dialog would be event-blocked, hence the close-then-open.
+    bool wantRealSense = false;
+    connect(&dlg, &SettingsDialog::realSenseControlsRequested, &dlg, [&]() {
+        wantRealSense = true;
+        dlg.accept();
+    });
     if (dlg.exec() == QDialog::Accepted) {
         spdlog::info("Settings saved");
         emit settingsChanged();
     }
+    if (wantRealSense)
+        emit realSenseControlsRequested();
 }
 
 void MainWindow::onShowAbout()

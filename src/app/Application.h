@@ -116,6 +116,10 @@ private:
     void switchCameraBackend(CameraBackend backend);
     /// Enumerate devices for the active backend and refresh the ControlPanel.
     void refreshCameraDeviceList();
+    /// Open the dynamic RealSense sensor-controls panel (from ControlPanel or
+    /// the Settings dialog). Shows a hint if the backend isn't RealSense / the
+    /// camera isn't running.
+    void openRealSenseControls();
 
     void loadIBomFile(const QString& path);
     void refreshRecentFilesMenu();

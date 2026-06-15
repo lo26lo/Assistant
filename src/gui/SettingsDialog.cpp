@@ -100,6 +100,16 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
                                     "V4L2 automatically if unavailable. Restart camera to apply."));
     form->addRow(QString(), m_cameraHwDecode);
 
+    // Shortcut to the dynamic RealSense controls panel (exposure, gain, presets,
+    // filters, resolution profiles…). Only meaningful with the RealSense backend
+    // running; MainWindow closes this dialog and Application opens the panel.
+    auto* rsControlsBtn = new QPushButton(tr("Camera Controls (RealSense)…"));
+    rsControlsBtn->setToolTip(tr("Open the RealSense sensor-options panel. "
+                                 "Needs the RealSense backend with the camera running."));
+    connect(rsControlsBtn, &QPushButton::clicked,
+            this, &SettingsDialog::realSenseControlsRequested);
+    form->addRow(QString(), rsControlsBtn);
+
     // --- Calibration group ---
     auto* calibGroup = new QGroupBox(tr("Calibration Checkerboard"));
     auto* calibForm  = new QFormLayout(calibGroup);
