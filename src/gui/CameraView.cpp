@@ -18,10 +18,16 @@ CameraView::CameraView(QWidget* parent)
 
 void CameraView::updateFrame(const QImage& frame)
 {
+    bool sizeChanged = false;
     {
         std::lock_guard lock(m_frameMutex);
+        // A resolution change (e.g. RealSense profile switch) invalidates any
+        // accumulated pan — recenter so the image doesn't appear shifted.
+        sizeChanged = (frame.size() != m_frame.size());
         m_frame = frame;
     }
+    if (sizeChanged)
+        m_panOffset = {0, 0};
     updateTransform();
     update();
 }
