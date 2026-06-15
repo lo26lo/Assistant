@@ -4,12 +4,47 @@
 #include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
 
+#include <array>
 #include <chrono>
 
 namespace ibom::camera {
 
+/// Resolution-preserving depth filters (decimation excluded on purpose so the
+/// color↔depth alignment stays 1:1). Each has a runtime on/off flag. The mutex
+/// guards process() on the capture thread vs option get/set from the GUI.
+struct FilterChain {
+    rs2::spatial_filter      spatial;
+    rs2::temporal_filter     temporal;
+    rs2::threshold_filter    threshold;
+    rs2::hole_filling_filter holeFill;
+
+    std::mutex mutex;
+    // Defaults tuned for a static PCB rig: spatial+temporal on (cf. #10682).
+    std::array<bool, 4> enabled{ true, true, false, false };  // spat, temp, thr, hole
+
+    enum Idx { Spatial = 0, Temporal = 1, Threshold = 2, HoleFill = 3, Count = 4 };
+
+    rs2::filter& at(int i) {
+        switch (i) {
+            case Temporal:  return temporal;
+            case Threshold: return threshold;
+            case HoleFill:  return holeFill;
+            default:        return spatial;
+        }
+    }
+    static const char* name(int i) {
+        switch (i) {
+            case Temporal:  return "Temporal Filter";
+            case Threshold: return "Threshold Filter";
+            case HoleFill:  return "Hole Filling Filter";
+            default:        return "Spatial Filter";
+        }
+    }
+};
+
 RealSenseCapture::RealSenseCapture(QObject* parent)
     : ICameraSource(parent)
+    , m_filters(std::make_unique<FilterChain>())
 {
 }
 
@@ -140,15 +175,6 @@ void RealSenseCapture::captureLoop()
     } catch (const rs2::error&) { /* keep default */ }
     rs2::align alignToColor(RS2_STREAM_COLOR);
 
-    // Depth post-processing chain — drastically reduces stereo noise, which is
-    // significant on the D405 (no IR projector → noisier on low-texture areas;
-    // cf. librealsense #10682). Spatial = edge-preserving smoothing; Temporal =
-    // multi-frame stabilization (defaults: alpha 0.4, delta 20, persistency 3,
-    // matching the values used in that issue). Both preserve resolution, so the
-    // color↔depth alignment stays valid. State is per-thread → declared here.
-    rs2::spatial_filter  spatialFilter;
-    rs2::temporal_filter temporalFilter;
-
     // Publish the device handle so the GUI can query/set sensor options live.
     try {
         std::lock_guard<std::mutex> lk(m_deviceMutex);
@@ -214,10 +240,15 @@ void RealSenseCapture::captureLoop()
         emit frameReady(shared);
 
         // Publish depth as CV_16UC1 in millimetres (aligned to color), after
-        // spatial + temporal post-processing to cut stereo noise.
+        // the post-processing chain to cut stereo noise (D405 has no projector).
         if (rs2::depth_frame depth = aligned.get_depth_frame()) {
-            rs2::frame filtered = spatialFilter.process(depth);
-            filtered = temporalFilter.process(filtered);
+            rs2::frame filtered = depth;
+            {
+                std::lock_guard<std::mutex> lk(m_filters->mutex);
+                for (int i = 0; i < FilterChain::Count; ++i)
+                    if (m_filters->enabled[i])
+                        filtered = m_filters->at(i).process(filtered);
+            }
             const rs2::depth_frame fdepth = filtered.as<rs2::depth_frame>();
             const cv::Mat raw(cv::Size(fdepth.get_width(), fdepth.get_height()),
                               CV_16UC1, const_cast<void*>(fdepth.get_data()),
@@ -239,75 +270,134 @@ void RealSenseCapture::captureLoop()
     } catch (const rs2::error&) { /* already stopped */ }
 }
 
+namespace {
+
+/// Append every supported rs2 option of `opts` as RsControl rows. Shared by
+/// sensors and filters (both derive from rs2::options).
+void enumerateOptions(const rs2::options& opts, int ownerId,
+                      const std::string& group, std::vector<RsControl>& out)
+{
+    for (int o = 0; o < static_cast<int>(RS2_OPTION_COUNT); ++o) {
+        const auto opt = static_cast<rs2_option>(o);
+        if (!opts.supports(opt)) continue;
+        rs2::option_range r;
+        try { r = opts.get_option_range(opt); }
+        catch (const rs2::error&) { continue; }
+
+        RsControl c;
+        c.sensorIndex = ownerId;
+        c.sensorName  = group;
+        c.optionId    = o;
+        c.name        = rs2_option_to_string(opt);
+        try { c.description = opts.get_option_description(opt); }
+        catch (const rs2::error&) {}
+        c.min = r.min; c.max = r.max; c.step = r.step; c.def = r.def;
+        try { c.current = opts.get_option(opt); } catch (const rs2::error&) {}
+        c.isBool   = (r.min == 0.f && r.max == 1.f && r.step == 1.f);
+        c.readOnly = opts.is_option_read_only(opt);
+
+        // Discrete enum (e.g. Visual Preset) → labelled values for a combo box.
+        const bool integralStep = (r.step == 1.f);
+        const int  count = static_cast<int>((r.max - r.min) / 1.f) + 1;
+        if (!c.isBool && integralStep && count >= 2 && count <= 32) {
+            bool allNamed = true;
+            std::vector<std::pair<float, std::string>> values;
+            for (int v = static_cast<int>(r.min); v <= static_cast<int>(r.max); ++v) {
+                const char* d = nullptr;
+                try { d = opts.get_option_value_description(opt, static_cast<float>(v)); }
+                catch (const rs2::error&) { d = nullptr; }
+                if (!d || !*d) { allNamed = false; break; }
+                values.emplace_back(static_cast<float>(v), d);
+            }
+            if (allNamed) c.enumValues = std::move(values);
+        }
+        out.push_back(std::move(c));
+    }
+}
+
+} // namespace
+
 std::vector<RsControl> RealSenseCapture::listControls() const
 {
     std::vector<RsControl> out;
-    std::lock_guard<std::mutex> lk(m_deviceMutex);
-    if (!m_device) return out;
-    try {
-        const auto sensors = m_device->query_sensors();
-        for (int si = 0; si < static_cast<int>(sensors.size()); ++si) {
-            const rs2::sensor& s = sensors[si];
-            const std::string sname = s.supports(RS2_CAMERA_INFO_NAME)
-                ? s.get_info(RS2_CAMERA_INFO_NAME) : ("Sensor " + std::to_string(si));
-            for (int o = 0; o < static_cast<int>(RS2_OPTION_COUNT); ++o) {
-                const auto opt = static_cast<rs2_option>(o);
-                if (!s.supports(opt)) continue;
-                rs2::option_range r;
-                try { r = s.get_option_range(opt); }
-                catch (const rs2::error&) { continue; }
 
-                RsControl c;
-                c.sensorIndex = si;
-                c.sensorName  = sname;
-                c.optionId    = o;
-                c.name        = rs2_option_to_string(opt);
-                try { c.description = s.get_option_description(opt); }
-                catch (const rs2::error&) {}
-                c.min = r.min; c.max = r.max; c.step = r.step; c.def = r.def;
-                try { c.current = s.get_option(opt); } catch (const rs2::error&) {}
-                c.isBool   = (r.min == 0.f && r.max == 1.f && r.step == 1.f);
-                c.readOnly = s.is_option_read_only(opt);
-
-                // Discrete enum (e.g. Visual Preset): integer steps over a small
-                // range where the SDK provides a label per value. Skip booleans.
-                const bool integralStep = (r.step == 1.f);
-                const int  count = static_cast<int>((r.max - r.min) / 1.f) + 1;
-                if (!c.isBool && integralStep && count >= 2 && count <= 32) {
-                    bool allNamed = true;
-                    std::vector<std::pair<float, std::string>> values;
-                    for (int v = static_cast<int>(r.min); v <= static_cast<int>(r.max); ++v) {
-                        const char* desc = nullptr;
-                        try { desc = s.get_option_value_description(opt, static_cast<float>(v)); }
-                        catch (const rs2::error&) { desc = nullptr; }
-                        if (!desc || !*desc) { allNamed = false; break; }
-                        values.emplace_back(static_cast<float>(v), desc);
-                    }
-                    if (allNamed) c.enumValues = std::move(values);
+    // Sensor options.
+    {
+        std::lock_guard<std::mutex> lk(m_deviceMutex);
+        if (m_device) {
+            try {
+                const auto sensors = m_device->query_sensors();
+                for (int si = 0; si < static_cast<int>(sensors.size()); ++si) {
+                    const rs2::sensor& s = sensors[si];
+                    const std::string sname = s.supports(RS2_CAMERA_INFO_NAME)
+                        ? s.get_info(RS2_CAMERA_INFO_NAME) : ("Sensor " + std::to_string(si));
+                    enumerateOptions(s, si, sname, out);
                 }
-
-                out.push_back(std::move(c));
+            } catch (const rs2::error& e) {
+                spdlog::warn("RealSense listControls (sensors) failed: {}", e.what());
             }
         }
-    } catch (const rs2::error& e) {
-        spdlog::warn("RealSense listControls failed: {}", e.what());
     }
+
+    // Depth post-processing filters: a synthetic "Enabled" toggle + the
+    // filter's own options. Grouped under each filter's name.
+    if (m_filters) {
+        std::lock_guard<std::mutex> lk(m_filters->mutex);
+        for (int fi = 0; fi < FilterChain::Count; ++fi) {
+            const int ownerId = kFilterBase + fi;
+            const std::string group = FilterChain::name(fi);
+
+            RsControl en;
+            en.sensorIndex = ownerId;
+            en.sensorName  = group;
+            en.optionId    = kEnableOption;
+            en.name        = "Enabled";
+            en.description = "Enable this depth post-processing filter.";
+            en.min = 0; en.max = 1; en.step = 1; en.def = 1;
+            en.current = m_filters->enabled[fi] ? 1.f : 0.f;
+            en.isBool = true;
+            out.push_back(std::move(en));
+
+            try { enumerateOptions(m_filters->at(fi), ownerId, group, out); }
+            catch (const rs2::error&) {}
+        }
+    }
+
     return out;
 }
 
-bool RealSenseCapture::setControl(int sensorIndex, int optionId, float value)
+bool RealSenseCapture::setControl(int ownerId, int optionId, float value)
 {
+    // Filter target.
+    if (ownerId >= kFilterBase) {
+        const int fi = ownerId - kFilterBase;
+        if (!m_filters || fi < 0 || fi >= FilterChain::Count) return false;
+        std::lock_guard<std::mutex> lk(m_filters->mutex);
+        if (optionId == kEnableOption) {
+            m_filters->enabled[fi] = (value >= 0.5f);
+            return true;
+        }
+        try {
+            m_filters->at(fi).set_option(static_cast<rs2_option>(optionId), value);
+            return true;
+        } catch (const rs2::error& e) {
+            spdlog::warn("RealSense setControl(filter {}, opt {}) failed: {}",
+                         fi, optionId, e.what());
+            return false;
+        }
+    }
+
+    // Sensor target.
     std::lock_guard<std::mutex> lk(m_deviceMutex);
     if (!m_device) return false;
     try {
         const auto sensors = m_device->query_sensors();
-        if (sensorIndex < 0 || sensorIndex >= static_cast<int>(sensors.size()))
-            return false;
-        sensors[sensorIndex].set_option(static_cast<rs2_option>(optionId), value);
+        if (ownerId < 0 || ownerId >= static_cast<int>(sensors.size())) return false;
+        sensors[ownerId].set_option(static_cast<rs2_option>(optionId), value);
         return true;
     } catch (const rs2::error& e) {
         spdlog::warn("RealSense setControl(sensor {}, opt {}, {}) failed: {}",
-                     sensorIndex, optionId, value, e.what());
+                     ownerId, optionId, value, e.what());
         return false;
     }
 }

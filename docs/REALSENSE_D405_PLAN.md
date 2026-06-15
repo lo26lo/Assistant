@@ -197,6 +197,22 @@ Principe : on n'écrit pas la liste en dur — librealsense la fournit. Pour cha
 2. ✅ `gui/RealSenseControlsDialog` génère **dynamiquement** un contrôle par option : checkbox (bool) ou spinbox (numérique), groupés par sensor, tooltip = description SDK, application immédiate, bouton Refresh.
 3. ✅ `ControlPanel` : bouton « Camera Controls (RealSense)… » → `Application` ouvre le dialog (message si backend ≠ RealSense ou caméra arrêtée).
 4. ✅ Compilé conditionnellement (`IBOM_HAVE_REALSENSE`).
+5. ✅ **Filtres depth configurables** : le panneau expose aussi les groupes Spatial / Temporal / Threshold / Hole Filling (case « Enabled » + tous leurs paramètres rs2 avec tooltip), même mécanique d'énumération dynamique. Spatial + Temporal actifs par défaut.
+
+#### Réglages recommandés D405 pour l'inspection PCB/SMD (~20 cm)
+
+> Synthèse des recommandations Intel/RealSense (issue #10682 + docs), par ordre d'impact :
+
+| Réglage | Valeur conseillée | Où |
+|---|---|---|
+| **Résolution / FPS** | **848×480 @ 30** (optimal précision depth) — par défaut sur RealSense désormais. 1280×720 possible si plus de détail RGB voulu (compromis : −précision depth). Même rés. depth/IR/RGB obligatoire sur D405. | défaut code / Settings |
+| **Visual Preset** | **High Accuracy** (depth propre, moins de faux points) ou Medium Density si plus de remplissage. (Pas de « Short Range » sur D405 — c'était la L515.) | panneau RealSense |
+| **Exposition / gain** | **exposition manuelle** (setup fixe) + **gain minimal (~16)** | panneau RealSense |
+| **Filtres** | scène statique → **Temporal** (moyenne multi-frames) + **Spatial** ; décimation seulement si perf | actifs par défaut + panneau |
+| **Disparity shift** (Advanced > Depth Table) | **0** à 20 cm (plage idéale 7–50 cm). N'ajuster (~20–100) que si on descend sous 7 cm — dépend de la résolution. | panneau (Advanced) |
+| **Polariseur** | film **polariseur linéaire** devant les capteurs si soudures/composants brillants → annule les reflets, depth bien plus lisible (astuce équipe RealSense) | matériel |
+
+Ordre de réglage : preset High Accuracy → exposition manuelle + gain 16 → 848×480 → temporal+spatial → polariseur si reflets → disparity shift seulement si < 7 cm.
 
 ### Phase 3 — Inspection 3D (différenciateur, à planifier séparément)
 

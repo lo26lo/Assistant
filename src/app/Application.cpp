@@ -510,7 +510,12 @@ void Application::createCamera()
         m_camera = std::make_unique<camera::CameraCapture>(m_config->cameraIndex());
     }
     m_camera->setDeviceIndex(m_config->cameraIndex());
-    m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
+    // RealSense keeps its own 848x480 default (optimal depth precision) unless
+    // the user set a non-generic resolution — don't push the V4L2-oriented
+    // 1920x1080 default onto the D405 (it would just fall back).
+    const bool genericRes = (m_config->cameraWidth() == 1920 && m_config->cameraHeight() == 1080);
+    if (!(m_config->cameraBackend() == CameraBackend::RealSense && genericRes))
+        m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
     m_camera->setFps(m_config->cameraFps());
     m_camera->setHardwareDecode(m_config->cameraHwDecode());
     m_activeBackend = m_config->cameraBackend();

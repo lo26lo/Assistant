@@ -12,6 +12,10 @@ namespace rs2 { class device; }
 
 namespace ibom::camera {
 
+/// Depth post-processing filter chain (spatial, temporal, threshold, hole
+/// filling). Defined in the .cpp to keep librealsense out of this header.
+struct FilterChain;
+
 /// Plain descriptor of one librealsense sensor option, queried live from the
 /// device. Mirrors what the RealSense Viewer shows — `description` comes from
 /// the SDK (rs2::sensor::get_option_description) and is meant for a tooltip.
@@ -72,13 +76,18 @@ public:
     static std::vector<std::string> listDevices();
 
     /// Enumerate every supported option of every sensor on the live device,
-    /// with its range/current value and SDK help text. Empty until the
-    /// pipeline has started. Thread-safe (GUI thread may call while streaming).
+    /// PLUS the depth post-processing filters, with range/current value and SDK
+    /// help text. Empty until the pipeline has started. Thread-safe.
+    /// Filter groups use ownerId >= kFilterBase; each filter exposes a synthetic
+    /// "Enabled" toggle at optionId == kEnableOption.
     std::vector<RsControl> listControls() const;
 
-    /// Set one sensor option. Returns false if the device isn't live, the
-    /// sensor index is out of range, or librealsense rejects the value.
-    bool setControl(int sensorIndex, int optionId, float value);
+    /// Set one option. `ownerId` is a sensor index, or >= kFilterBase for a
+    /// filter. Returns false on invalid target or if librealsense rejects it.
+    bool setControl(int ownerId, int optionId, float value);
+
+    static constexpr int kFilterBase   = 1000;  // ownerId offset for filters
+    static constexpr int kEnableOption = -1;     // synthetic per-filter on/off
 
 signals:
     /// Emitted alongside frameReady when depth is available: a CV_16UC1 depth
@@ -89,8 +98,8 @@ private:
     void captureLoop();
 
     int m_deviceIndex = 0;
-    int m_width  = 1280;   // D405 native color/depth width
-    int m_height = 720;
+    int m_width  = 848;    // 848x480 = optimal depth precision on D4xx (per Intel)
+    int m_height = 480;
     int m_fps    = 30;
     std::atomic<double> m_colorFx{0.0};
 
@@ -104,6 +113,10 @@ private:
     // starts. rs2::device is forward-declared; the dtor lives in the .cpp.
     mutable std::mutex            m_deviceMutex;
     std::unique_ptr<rs2::device>  m_device;
+
+    // Depth post-processing filters (pimpl). Created in the ctor, applied on
+    // the capture thread, options get/set from the GUI thread (own mutex).
+    std::unique_ptr<FilterChain>  m_filters;
 };
 
 } // namespace ibom::camera
