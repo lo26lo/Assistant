@@ -251,8 +251,10 @@ void RealSenseCapture::captureLoop()
 
     // Color (BGR8 to match the app) + depth (Z16). Depth is later aligned to
     // the color frame so depth[y,x] maps to color pixel [y,x].
+    const bool depthOn = m_depthStreamEnabled.load();
     cfg.enable_stream(RS2_STREAM_COLOR, m_width, m_height, RS2_FORMAT_BGR8, m_fps);
-    cfg.enable_stream(RS2_STREAM_DEPTH, m_width, m_height, RS2_FORMAT_Z16, m_fps);
+    if (depthOn)
+        cfg.enable_stream(RS2_STREAM_DEPTH, m_width, m_height, RS2_FORMAT_Z16, m_fps);
 
     // Optional rosbag recording (Viewer-style): record all streams to a .bag.
     {
@@ -281,7 +283,8 @@ void RealSenseCapture::captureLoop()
         try {
             rs2::config fallback;
             fallback.enable_stream(RS2_STREAM_COLOR, RS2_FORMAT_BGR8);
-            fallback.enable_stream(RS2_STREAM_DEPTH, RS2_FORMAT_Z16);
+            if (depthOn)
+                fallback.enable_stream(RS2_STREAM_DEPTH, RS2_FORMAT_Z16);
             profile = pipe.start(fallback);
             started = true;
         } catch (const rs2::error& e2) {
@@ -352,6 +355,10 @@ void RealSenseCapture::captureLoop()
     // Histogram equalization is on by default — that's what makes near/far
     // detail readable regardless of the absolute depth range.
 
+    // Per-stream FPS measurement (refreshed ~1 Hz).
+    auto fpsWindow = std::chrono::steady_clock::now();
+    int colorFrames = 0, depthFrames = 0;
+
     int consecutiveFailures = 0;
     while (m_capturing.load()) {
         rs2::frameset fs;
@@ -396,6 +403,7 @@ void RealSenseCapture::captureLoop()
             m_latestFrame = shared;
         }
         emit frameReady(shared);
+        ++colorFrames;
 
         // Publish depth as CV_16UC1 in millimetres (aligned to color), after
         // the post-processing chain to cut stereo noise (D405 has no projector).
@@ -413,6 +421,7 @@ void RealSenseCapture::captureLoop()
             cv::Mat depthMm;
             raw.convertTo(depthMm, CV_16UC1, depthUnits * 1000.0);
             emit depthFrameReady(std::make_shared<const cv::Mat>(std::move(depthMm)));
+            ++depthFrames;
 
             // ── Colorized depth (rs2::colorizer) for the 2D depth view ──
             // Histogram-equalized RGB, like the Viewer's Depth panel. Only when
@@ -530,7 +539,20 @@ void RealSenseCapture::captureLoop()
                 emit onChipCalibrationFinished(false, 0.f, QString::fromUtf8(e.what()));
             }
         }
+
+        // Refresh per-stream FPS roughly once a second.
+        const auto fnow = std::chrono::steady_clock::now();
+        const double secs = std::chrono::duration<double>(fnow - fpsWindow).count();
+        if (secs >= 1.0) {
+            m_colorFps.store(colorFrames / secs);
+            m_depthFps.store(depthFrames / secs);
+            colorFrames = depthFrames = 0;
+            fpsWindow = fnow;
+        }
     }
+
+    m_colorFps.store(0.0);
+    m_depthFps.store(0.0);
 
     {
         std::lock_guard<std::mutex> lk(m_deviceMutex);

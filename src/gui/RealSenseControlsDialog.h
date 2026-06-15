@@ -42,6 +42,10 @@ private:
     QPointer<camera::RealSenseCapture> m_camera;
     QScrollArea* m_scroll = nullptr;     // hosts the dynamically-built content
     QLabel* m_profileDesc = nullptr;     // explains the selected profile
+
+    // Live stream health (Viewer-style): per-stream FPS, polled ~1 Hz.
+    QLabel* m_colorFpsLabel = nullptr;
+    QLabel* m_depthFpsLabel = nullptr;
 };
 
 } // namespace ibom::gui

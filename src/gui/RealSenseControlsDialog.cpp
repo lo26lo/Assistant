@@ -24,7 +24,9 @@
 
 #include <map>
 #include <cmath>
+#include <algorithm>
 #include <QFont>
+#include <QSettings>
 
 namespace ibom::gui {
 
@@ -112,6 +114,51 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     connect(applyProf, &QPushButton::clicked, this, [this, profCombo]() {
         applyProfile(profCombo->currentIndex());
     });
+
+    // ── Streams + live health (Viewer-style stream column) ──
+    auto* streamBox = new QGroupBox(tr("Flux"), this);
+    auto* streamForm = new QFormLayout(streamBox);
+
+    m_colorFpsLabel = new QLabel("—");
+    streamForm->addRow(tr("Color (toujours actif):"), m_colorFpsLabel);
+
+    auto* depthRow = new QWidget;
+    auto* depthHl  = new QHBoxLayout(depthRow);
+    depthHl->setContentsMargins(0, 0, 0, 0);
+    auto* depthSw = new ToggleSwitch;
+    depthSw->setChecked(m_camera ? m_camera->depthStreamEnabled() : true);
+    depthSw->setOffset(depthSw->isChecked() ? 1.0f : 0.0f);
+    depthSw->setToolTip(tr("Active/désactive le flux depth (3D, vue depth, scale). "
+                           "Prend effet en redémarrant la caméra."));
+    m_depthFpsLabel = new QLabel("—");
+    depthHl->addWidget(depthSw);
+    depthHl->addSpacing(8);
+    depthHl->addWidget(m_depthFpsLabel, 1);
+    streamForm->addRow(tr("Depth:"), depthRow);
+
+    connect(depthSw, &ToggleSwitch::toggled, this, [this](bool on) {
+        if (!m_camera) return;
+        m_camera->setDepthStreamEnabled(on);
+        // Restart so the new stream config takes effect.
+        const bool wasCapturing = m_camera->isCapturing();
+        if (wasCapturing) { m_camera->stop(); m_camera->start(); }
+        QTimer::singleShot(900, this, &RealSenseControlsDialog::rebuild);
+    });
+    root->addWidget(streamBox);
+
+    // Poll per-stream FPS ~1 Hz for the live health readout.
+    auto* fpsTimer = new QTimer(this);
+    fpsTimer->setInterval(1000);
+    connect(fpsTimer, &QTimer::timeout, this, [this]() {
+        if (!m_camera) return;
+        const double cf = m_camera->colorFps();
+        const double df = m_camera->depthFps();
+        if (m_colorFpsLabel)
+            m_colorFpsLabel->setText(cf > 0 ? QString("%1 fps").arg(cf, 0, 'f', 1) : "—");
+        if (m_depthFpsLabel)
+            m_depthFpsLabel->setText(df > 0 ? QString("%1 fps").arg(df, 0, 'f', 1) : "—");
+    });
+    fpsTimer->start();
 
     // ── Tools (Viewer-style): AE ROI, PLY export, on-chip self-cal ──
     auto* toolsBox = new QGroupBox(tr("Outils"), this);
@@ -331,17 +378,47 @@ QGroupBox* RealSenseControlsDialog::makeCollapsibleGroup(const QString& title,
                                                          QFormLayout*& formOut)
 {
     // Checkable group box that collapses its content (Viewer-style panels).
+    // The expanded/collapsed state persists per group title via QSettings.
+    QSettings settings("PCBInspector", "RealSenseControls");
+    const QString key = "group/" + title;
+    const bool expanded = settings.value(key, true).toBool();
+
     auto* box = new QGroupBox(title);
     box->setCheckable(true);
-    box->setChecked(true);
+    box->setChecked(expanded);
     auto* inner = new QWidget;
+    inner->setVisible(expanded);
     formOut = new QFormLayout(inner);
     formOut->setLabelAlignment(Qt::AlignLeft);
     auto* lay = new QVBoxLayout(box);
     lay->setContentsMargins(6, 4, 6, 4);
     lay->addWidget(inner);
-    connect(box, &QGroupBox::toggled, inner, &QWidget::setVisible);
+    connect(box, &QGroupBox::toggled, inner, [this, inner, key](bool on) {
+        inner->setVisible(on);
+        QSettings("PCBInspector", "RealSenseControls").setValue(key, on);
+    });
     return box;
+}
+
+namespace {
+// Curated display priority so the most-used options float to the top of each
+// group, roughly matching the RealSense Viewer's ordering. Lower = higher.
+int optionPriority(const std::string& name)
+{
+    static const std::vector<std::string> order = {
+        "Visual Preset",
+        "Enable Auto Exposure", "Exposure", "Gain",
+        "Enable Auto White Balance", "White Balance",
+        "Laser Power", "Emitter Enabled", "Emitter On Off",
+        "Brightness", "Contrast", "Gamma", "Hue", "Saturation", "Sharpness",
+        "Backlight Compensation", "Power Line Frequency",
+        "Enabled",  // filter on/off toggles first within a filter group
+    };
+    for (size_t i = 0; i < order.size(); ++i)
+        if (name.find(order[i]) != std::string::npos)
+            return static_cast<int>(i);
+    return 1000;  // everything else, kept in enum order after the curated ones
+}
 }
 
 void RealSenseControlsDialog::rebuild()
@@ -352,8 +429,15 @@ void RealSenseControlsDialog::rebuild()
     auto* fresh = new QWidget;
     auto* outer = new QVBoxLayout(fresh);
 
-    const auto controls = m_camera ? m_camera->listControls()
-                                   : std::vector<camera::RsControl>{};
+    auto controls = m_camera ? m_camera->listControls()
+                             : std::vector<camera::RsControl>{};
+    // Stable sort within each owner (sensor/filter) by curated priority, so the
+    // section/group order is preserved but options are Viewer-ordered.
+    std::stable_sort(controls.begin(), controls.end(),
+        [](const camera::RsControl& a, const camera::RsControl& b) {
+            if (a.sensorIndex != b.sensorIndex) return a.sensorIndex < b.sensorIndex;
+            return optionPriority(a.name) < optionPriority(b.name);
+        });
 
     if (controls.empty()) {
         outer->addWidget(new QLabel(

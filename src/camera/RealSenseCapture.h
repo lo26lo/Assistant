@@ -128,6 +128,17 @@ public:
     void setRecordFile(const std::string& path);
     std::string recordFile() const;
 
+    /// Enable/disable the depth stream (color is always on — it is the primary
+    /// feed). Takes effect on the next (re)start. When off, no depth/3D/cloud.
+    void setDepthStreamEnabled(bool on) { m_depthStreamEnabled.store(on); }
+    bool depthStreamEnabled() const { return m_depthStreamEnabled.load(); }
+
+    /// Measured per-stream frame rate (frames/s), refreshed ~1 Hz on the
+    /// capture thread. 0 until the first second elapses. For a live health
+    /// readout like the Viewer's stream stats.
+    double colorFps() const { return m_colorFps.load(); }
+    double depthFps() const { return m_depthFps.load(); }
+
     /// Enable/disable computing the 3D point cloud on the capture thread.
     /// Off by default (avoids the per-frame rs2::pointcloud cost when the 3D
     /// view is not shown). When on, pointCloudReady() fires each frame.
@@ -173,6 +184,9 @@ private:
     std::atomic<bool>   m_emitCloud{false};       // compute rs2::pointcloud when true
     std::atomic<bool>   m_emitColorDepth{false};  // colorize depth via rs2::colorizer
     std::atomic<bool>   m_calibPending{false};    // run on-chip self-calibration
+    std::atomic<bool>   m_depthStreamEnabled{true};
+    std::atomic<double> m_colorFps{0.0};
+    std::atomic<double> m_depthFps{0.0};
 
     mutable std::mutex  m_plyMutex;               // guards the pending PLY path
     std::string         m_pendingPly;             // export path; empty = none
