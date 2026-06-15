@@ -607,6 +607,35 @@ void Application::openRealSenseControls()
 #endif
 }
 
+void Application::updateCalibrationUI()
+{
+    if (!m_mainWindow) return;
+    const bool isRS = (m_activeBackend == CameraBackend::RealSense);
+
+    // Update calibration button in the control panel.
+    if (auto* cp = m_mainWindow->controlPanel())
+        cp->setCameraBackendUI(isRS);
+
+    // Update calibration info in the stats panel.
+    if (auto* sp = m_mainWindow->statsPanel()) {
+#ifdef IBOM_HAVE_REALSENSE
+        if (isRS) {
+            auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get());
+            const double fx = rs ? rs->colorFx() : 0.0;
+            sp->setCalibration(fx, 0.0, true);
+            return;
+        }
+#endif
+        // V4L2 / USB microscope
+        if (m_calibration && m_calibration->isCalibrated()) {
+            sp->setCalibration(m_calibration->rmsError(),
+                               m_calibration->pixelsPerMm(), false);
+        } else {
+            sp->setCalibration(0.0, 0.0, false);
+        }
+    }
+}
+
 void Application::connectSignals()
 {
     connect(this, &Application::shutdownRequested, &m_qapp, &QApplication::quit);
@@ -991,6 +1020,9 @@ void Application::wireCameraSignals()
         }, Qt::QueuedConnection);
     }
 #endif
+
+    // Sync calibration UI for the new (or initial) backend.
+    updateCalibrationUI();
 }
 
 void Application::connectControlSignals()
@@ -2012,6 +2044,8 @@ void Application::runCalibration()
     m_mainWindow->updateStatusMessage(
         tr("Calibration done — error: %1, pixels/mm: %2")
         .arg(error, 0, 'f', 4).arg(m_calibration->pixelsPerMm(), 0, 'f', 1));
+
+    updateCalibrationUI();
 }
 
 // ── Dynamic Scale ──────────────────────────────────────────────────

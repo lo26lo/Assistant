@@ -228,4 +228,20 @@ void ControlPanel::setConfidenceThreshold(float conf)
     m_confidenceSpin->setValue(static_cast<double>(conf));
 }
 
+void ControlPanel::setCameraBackendUI(bool isRealSense)
+{
+    if (!m_btnCalibrate) return;
+    if (isRealSense) {
+        m_btnCalibrate->setText(tr("Calibration (Factory — RealSense SDK)"));
+        m_btnCalibrate->setEnabled(false);
+        m_btnCalibrate->setToolTip(tr(
+            "The D405 has factory-calibrated intrinsics embedded in the RealSense SDK.\n"
+            "No checkerboard calibration is needed or supported for this backend."));
+    } else {
+        m_btnCalibrate->setText(tr("Calibrate Camera (Checkerboard)"));
+        m_btnCalibrate->setEnabled(true);
+        m_btnCalibrate->setToolTip({});
+    }
+}
+
 } // namespace ibom::gui

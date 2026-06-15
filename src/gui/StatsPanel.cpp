@@ -109,6 +109,12 @@ void StatsPanel::buildUI()
                                    "to the board. Drives automatic px/mm scale."));
     perfGrid->addWidget(m_distanceLabel, 5, 1);
 
+    perfGrid->addWidget(new QLabel(tr("Calibration:")),    6, 0);
+    m_calibLabel = new QLabel("—");
+    m_calibLabel->setToolTip(tr("USB microscope: OpenCV checkerboard RMS + px/mm.\n"
+                                "RealSense: factory intrinsics (focal length)."));
+    perfGrid->addWidget(m_calibLabel, 6, 1);
+
     perfLayout->addLayout(perfGrid);
     perfLayout->addStretch();
     mainLayout->addWidget(perfGroup);
@@ -256,6 +262,23 @@ void StatsPanel::setSharpness(double variance, bool good)
 {
     m_focusLabel->setText(QString::number(variance, 'f', 0));
     m_focusLabel->setStyleSheet(good ? theme::placedCSS() : theme::defectCSS());
+}
+
+void StatsPanel::setCalibration(double rmsOrFx, double ppmm, bool isFactory)
+{
+    if (isFactory) {
+        // RealSense: show factory focal length
+        m_calibLabel->setText(QString("Factory  fx=%1 px").arg(rmsOrFx, 0, 'f', 1));
+        m_calibLabel->setStyleSheet(theme::placedCSS());
+    } else if (ppmm > 0) {
+        // V4L2 calibrated
+        m_calibLabel->setText(QString("RMS %1  %2 px/mm")
+            .arg(rmsOrFx, 0, 'f', 2).arg(ppmm, 0, 'f', 2));
+        m_calibLabel->setStyleSheet(rmsOrFx < 1.0 ? theme::placedCSS() : theme::defectCSS());
+    } else {
+        m_calibLabel->setText("—");
+        m_calibLabel->setStyleSheet({});
+    }
 }
 
 void StatsPanel::addDefectEntry(const std::string& reference, const std::string& type)

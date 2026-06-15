@@ -120,6 +120,7 @@ private:
     /// the Settings dialog). Shows a hint if the backend isn't RealSense / the
     /// camera isn't running.
     void openRealSenseControls();
+    void updateCalibrationUI();
 
     void loadIBomFile(const QString& path);
     void refreshRecentFilesMenu();

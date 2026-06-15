@@ -85,6 +85,7 @@ double CameraCalibration::calibrate(const std::vector<cv::Mat>& images,
     );
 
     m_calibrated = true;
+    m_rmsError   = rmsError;
 
     // Calculate pixels-per-mm from the first image
     if (!imagePoints.empty() && imagePoints[0].size() >= 2) {
@@ -119,6 +120,7 @@ bool CameraCalibration::load(const std::string& path)
         fs["camera_matrix"] >> m_cameraMatrix;
         fs["dist_coeffs"] >> m_distCoeffs;
         fs["pixels_per_mm"] >> m_pixelsPerMm;
+        fs["rms_error"] >> m_rmsError;
 
         int w, h;
         fs["image_width"] >> w;
@@ -155,6 +157,7 @@ bool CameraCalibration::save(const std::string& path) const
         fs << "camera_matrix" << m_cameraMatrix;
         fs << "dist_coeffs" << m_distCoeffs;
         fs << "pixels_per_mm" << m_pixelsPerMm;
+        fs << "rms_error" << m_rmsError;
 
         if (!m_map1.empty()) {
             fs << "image_width" << m_map1.cols;

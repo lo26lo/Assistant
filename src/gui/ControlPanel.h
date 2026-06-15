@@ -34,6 +34,10 @@ public:
 
     void setCameraDevices(const QStringList& devices);
     void setConfidenceThreshold(float conf);
+    /// Switch UI between USB-microscope and RealSense mode.
+    /// Disables/relabels the calibration button when RealSense is active
+    /// (factory intrinsics are embedded in the SDK — no checkerboard needed).
+    void setCameraBackendUI(bool isRealSense);
 
 signals:
     void overlayOpacityChanged(float opacity);

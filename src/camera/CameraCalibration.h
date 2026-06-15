@@ -50,6 +50,9 @@ public:
     /// Get pixels-per-mm ratio (after calibration with known square size).
     double pixelsPerMm() const { return m_pixelsPerMm; }
 
+    /// Reprojection RMS error from the last calibrate() call (lower is better).
+    double rmsError() const { return m_rmsError; }
+
     /// Update pixels-per-mm dynamically (e.g. from zoom scale tracking).
     void setPixelsPerMm(double ppmm) { m_pixelsPerMm = ppmm; }
 
@@ -57,8 +60,9 @@ private:
     bool   m_calibrated = false;
     cv::Mat m_cameraMatrix;
     cv::Mat m_distCoeffs;
-    cv::Mat m_map1, m_map2; // Undistortion maps (for remap)
+    cv::Mat m_map1, m_map2;
     double  m_pixelsPerMm = 0.0;
+    double  m_rmsError    = 0.0;
 };
 
 } // namespace ibom::camera
