@@ -15,12 +15,16 @@ InspectionPanel::InspectionPanel(QWidget* parent)
     : QWidget(parent)
 {
     buildUI();
-    QWidget::setEnabled(false);  // Disabled until iBOM is loaded
+    // Disable only the inner content, NOT this widget: disabling `this` would
+    // also disable the QScrollArea, killing the scrollbar/wheel until an iBOM
+    // is loaded. The scroll area must stay live so the user can scroll the
+    // (greyed-out) controls before loading.
+    m_content->setEnabled(false);
 }
 
 void InspectionPanel::setEnabled(bool enabled)
 {
-    QWidget::setEnabled(enabled);
+    m_content->setEnabled(enabled);
 }
 
 // ── UI ────────────────────────────────────────────────────────────
@@ -35,6 +39,7 @@ void InspectionPanel::buildUI()
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
     auto* content = new QWidget;
+    m_content = content;
     auto* main = new QVBoxLayout(content);
     main->setContentsMargins(8, 8, 8, 8);
     main->setSpacing(10);
@@ -155,6 +160,7 @@ void InspectionPanel::buildUI()
     main->addStretch();
 
     scroll->setWidget(content);
+    scroll->setEnabled(true);   // scroll area always live, even when content disabled
 
     // Touchscreen kinetic scrolling — TouchGesture only, NOT LeftMouseButton:
     // grabbing the left mouse button hijacks the cursor and breaks the normal
@@ -235,7 +241,7 @@ void InspectionPanel::onSnapshotTaken(int /*id*/, const QString& /*label*/)
 
 void InspectionPanel::onIBomLoaded(int componentCount)
 {
-    QWidget::setEnabled(componentCount > 0);
+    m_content->setEnabled(componentCount > 0);
     m_currentValueLabel->setText(componentCount > 0
         ? tr("%1 components loaded — click Start").arg(componentCount)
         : tr("Load iBOM and click Start"));
