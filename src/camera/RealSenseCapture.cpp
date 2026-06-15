@@ -68,14 +68,21 @@ bool RealSenseCapture::start()
 
 void RealSenseCapture::stop()
 {
-    if (!m_capturing.load()) return;
-    spdlog::info("Stopping RealSense capture...");
-    m_capturing.store(false);
+    // Always join/reset the thread if present — even if the capture loop already
+    // cleared m_capturing on its own (error exit). Leaving a joinable thread
+    // would std::terminate on destruction or on the next start().
+    const bool wasCapturing = m_capturing.exchange(false);
+    if (wasCapturing)
+        spdlog::info("Stopping RealSense capture...");
     if (m_thread && m_thread->joinable())
         m_thread->join();
     m_thread.reset();
-    emit captureStateChanged(false);
-    spdlog::info("RealSense capture stopped.");
+    // Only signal the transition if we were the ones stopping it; if the loop
+    // exited by itself it already emitted captureStateChanged(false).
+    if (wasCapturing) {
+        emit captureStateChanged(false);
+        spdlog::info("RealSense capture stopped.");
+    }
 }
 
 FrameRef RealSenseCapture::latestFrame() const
@@ -284,6 +291,12 @@ void RealSenseCapture::captureLoop()
     try {
         pipe.stop();
     } catch (const rs2::error&) { /* already stopped */ }
+
+    // If the loop ended on its own (error/timeout break) rather than via stop(),
+    // transition to the stopped state and notify listeners — otherwise
+    // isCapturing() would stay true and start() would refuse to restart.
+    if (m_capturing.exchange(false))
+        emit captureStateChanged(false);
 }
 
 namespace {

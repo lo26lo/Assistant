@@ -1,11 +1,12 @@
 #pragma once
 
 #include <QDialog>
+#include <QPointer>
+
+#include "../camera/RealSenseCapture.h"
 
 class QScrollArea;
 class QLabel;
-
-namespace ibom::camera { class RealSenseCapture; }
 
 namespace ibom::gui {
 
@@ -27,7 +28,9 @@ private:
     void rebuild();          // (re)query options and (re)build the widgets
     void applyProfile(int index);   // apply a resolution/parameter profile
 
-    camera::RealSenseCapture* m_camera;
+    // QPointer auto-nulls if the camera is destroyed (e.g. backend hot-swap),
+    // so a delayed rebuild() or a control callback never dereferences a dangler.
+    QPointer<camera::RealSenseCapture> m_camera;
     QScrollArea* m_scroll = nullptr;     // hosts the dynamically-built content
     QLabel* m_profileDesc = nullptr;     // explains the selected profile
 };

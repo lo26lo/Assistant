@@ -1,6 +1,6 @@
 # Plan — Intégration caméra Intel RealSense D405 (dual-backend)
 
-> **Date** : 2026-06-15 · **Statut** : 📋 PLAN (pas encore implémenté)
+> **Date** : 2026-06-15 · **Statut** : ✅ Phases 1, 2 et 2.5 **implémentées** (compile/link OK sur Jetson, à valider avec la D405 branchée) · Phase 3 = 📋 plan seulement ([REALSENSE_D405_PHASE3_PLAN.md](REALSENSE_D405_PHASE3_PLAN.md))
 > **Objectif** : ajouter la **D405** comme source caméra **en parallèle** du microscope USB existant — l'utilisateur choisit le backend au runtime, les deux restent fonctionnels. Puis exploiter la **profondeur** (depth) que la webcam ne peut pas fournir.
 > **Documents liés** : [JETSON_MIGRATION.md](JETSON_MIGRATION.md), [AI_PIPELINE.md](AI_PIPELINE.md), [DATASET_CREATOR_PLAN.md](DATASET_CREATOR_PLAN.md).
 

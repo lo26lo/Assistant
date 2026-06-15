@@ -71,6 +71,11 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     setWindowTitle(tr("RealSense — Camera Controls"));
     setMinimumSize(440, 560);
 
+    // If the camera goes away (e.g. backend hot-swap destroys it), close this
+    // dialog so no later callback or delayed rebuild() touches a dead object.
+    if (camera)
+        connect(camera, &QObject::destroyed, this, &QDialog::close);
+
     auto* root = new QVBoxLayout(this);
 
     // ── Resolution / parameter profiles ──
@@ -154,7 +159,7 @@ void RealSenseControlsDialog::rebuild()
                 cb->setEnabled(!c.readOnly);
                 cb->setToolTip(tip);
                 connect(cb, &QCheckBox::toggled, this, [this, sensorIdx, optionId](bool on) {
-                    m_camera->setControl(sensorIdx, optionId, on ? 1.0f : 0.0f);
+                    if (m_camera) m_camera->setControl(sensorIdx, optionId, on ? 1.0f : 0.0f);
                 });
                 auto* lbl = new QLabel(label);
                 lbl->setToolTip(tip);
@@ -173,8 +178,9 @@ void RealSenseControlsDialog::rebuild()
                 combo->setToolTip(tip);
                 connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                         this, [this, combo, sensorIdx, optionId](int) {
-                    m_camera->setControl(sensorIdx, optionId,
-                                         combo->currentData().toFloat());
+                    if (m_camera)
+                        m_camera->setControl(sensorIdx, optionId,
+                                             combo->currentData().toFloat());
                 });
                 auto* lbl = new QLabel(label);
                 lbl->setToolTip(tip);
@@ -192,7 +198,7 @@ void RealSenseControlsDialog::rebuild()
                 spin->setToolTip(tip);
                 connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                         this, [this, sensorIdx, optionId](double v) {
-                    m_camera->setControl(sensorIdx, optionId, static_cast<float>(v));
+                    if (m_camera) m_camera->setControl(sensorIdx, optionId, static_cast<float>(v));
                 });
                 auto* lbl = new QLabel(label);
                 lbl->setToolTip(tip);

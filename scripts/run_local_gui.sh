@@ -68,7 +68,9 @@ compgen -G "/dev/video*" > /dev/null && HAVE_VIDEO=true
 # Intel RealSense (D405 = VID 8086) uses libusb (FORCE_RSUSB_BACKEND) — it needs
 # the USB bus mapped, NOT /dev/video*. Detect it so we add /dev/bus/usb.
 HAVE_REALSENSE=false
-if command -v lsusb >/dev/null 2>&1 && lsusb | grep -qi "8086:0b"; then
+# Match the D405 specifically (Intel VID 8086, PID 0b5b) — a broad "8086:0b"
+# match would catch unrelated Intel devices and needlessly map the USB bus.
+if command -v lsusb >/dev/null 2>&1 && lsusb | grep -qiE "8086:0b5b"; then
     HAVE_REALSENSE=true
 fi
 
