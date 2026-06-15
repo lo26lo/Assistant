@@ -107,25 +107,73 @@ void StatsPanel::buildUI()
     perfLayout->addStretch();
     mainLayout->addWidget(perfGroup);
 
-    // ── Right: Defect Log ──
-    auto* defectGroup = new QGroupBox(tr("Defect Log"));
+    // ── Right: Event Log (runtime logs + defects) ──
+    auto* defectGroup = new QGroupBox(tr("Event Log"));
     auto* defectLayout = new QVBoxLayout(defectGroup);
     defectLayout->setContentsMargins(8, 4, 8, 4);
     defectLayout->setSpacing(2);
 
     m_defectTable = new QTableWidget;
     m_defectTable->setColumnCount(3);
-    m_defectTable->setHorizontalHeaderLabels({"Time", "Reference", "Type"});
+    m_defectTable->setHorizontalHeaderLabels({tr("Time"), tr("Level"), tr("Message")});
     m_defectTable->horizontalHeader()->setStretchLastSection(true);
     m_defectTable->verticalHeader()->setVisible(false);
     m_defectTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_defectTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_defectTable->setAlternatingRowColors(true);
+    m_defectTable->setColumnWidth(0, 70);
+    m_defectTable->setColumnWidth(1, 60);
+    // A defect row stashes its component reference in column 0's UserRole so a
+    // click can still navigate to it; plain log rows leave it empty.
     connect(m_defectTable, &QTableWidget::cellClicked, this, [this](int row, int) {
-        auto* item = m_defectTable->item(row, 1);
-        if (item) emit defectClicked(item->text().toStdString());
+        auto* item = m_defectTable->item(row, 0);
+        if (!item) return;
+        const QString ref = item->data(Qt::UserRole).toString();
+        if (!ref.isEmpty()) emit defectClicked(ref.toStdString());
     });
     defectLayout->addWidget(m_defectTable);
     mainLayout->addWidget(defectGroup, 1);
+}
+
+void StatsPanel::appendEventRow(const QString& level, const QString& message,
+                                const QColor& color, const QString& defectRef)
+{
+    // Cap the log: drop the oldest row once we exceed the limit.
+    if (m_defectTable->rowCount() >= kMaxEventRows)
+        m_defectTable->removeRow(0);
+
+    const int row = m_defectTable->rowCount();
+    m_defectTable->insertRow(row);
+
+    const QString time = QDateTime::currentDateTime().toString("HH:mm:ss");
+    auto* timeItem = new QTableWidgetItem(time);
+    if (!defectRef.isEmpty())
+        timeItem->setData(Qt::UserRole, defectRef);
+    m_defectTable->setItem(row, 0, timeItem);
+
+    auto* levelItem = new QTableWidgetItem(level);
+    levelItem->setForeground(color);
+    m_defectTable->setItem(row, 1, levelItem);
+
+    auto* msgItem = new QTableWidgetItem(message);
+    msgItem->setForeground(color);
+    m_defectTable->setItem(row, 2, msgItem);
+
+    m_defectTable->scrollToBottom();
+}
+
+void StatsPanel::addLogEntry(int level, const QString& /*logger*/, const QString& message)
+{
+    // spdlog levels: trace=0, debug=1, info=2, warn=3, err=4, critical=5
+    QString label;
+    QColor  color;
+    switch (level) {
+        case 5: label = "CRIT"; color = theme::missingColor(); break;
+        case 4: label = "ERR";  color = theme::missingColor(); break;
+        case 3: label = "WARN"; color = theme::defectColor();  break;
+        default: label = "INFO"; color = theme::pendingColor(); break;
+    }
+    appendEventRow(label, message, color);
 }
 
 void StatsPanel::resetStats()
@@ -198,19 +246,10 @@ void StatsPanel::setSharpness(double variance, bool good)
 
 void StatsPanel::addDefectEntry(const std::string& reference, const std::string& type)
 {
-    int row = m_defectTable->rowCount();
-    m_defectTable->insertRow(row);
-
-    QString time = QDateTime::currentDateTime().toString("HH:mm:ss");
-    m_defectTable->setItem(row, 0, new QTableWidgetItem(time));
-    m_defectTable->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(reference)));
-
-    auto* typeItem = new QTableWidgetItem(QString::fromStdString(type));
-    typeItem->setForeground(theme::defectColor());
-    m_defectTable->setItem(row, 2, typeItem);
-
-    // Scroll to latest
-    m_defectTable->scrollToBottom();
+    const QString ref = QString::fromStdString(reference);
+    const QString msg = QString("%1 — %2").arg(ref, QString::fromStdString(type));
+    // Stash the reference so a click on this row navigates to the component.
+    appendEventRow(tr("DEFECT"), msg, theme::defectColor(), ref);
 }
 
 void StatsPanel::updateProgress()

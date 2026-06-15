@@ -28,6 +28,7 @@
 #include "export/ReportGenerator.h"
 #include "gui/Theme.h"
 #include "utils/Logger.h"
+#include "utils/QtLogSink.h"
 #include "utils/Paths.h"
 #include "utils/ImageUtils.h"
 
@@ -499,6 +500,14 @@ void Application::initializeAI()
 void Application::connectSignals()
 {
     connect(this, &Application::shutdownRequested, &m_qapp, &QApplication::quit);
+
+    // ── Runtime logs → in-app Event Log (StatsPanel) ────────────
+    // spdlog records (info+) routed through the Qt sink. Queued because the
+    // sink may fire from the camera/tracking worker threads.
+    if (auto* sp = m_mainWindow->statsPanel()) {
+        connect(&utils::LogBridge::instance(), &utils::LogBridge::messageLogged,
+                sp, &gui::StatsPanel::addLogEntry, Qt::QueuedConnection);
+    }
 
     // ── Tracking worker → homography update on GUI thread ───────
     if (m_trackingWorker) {

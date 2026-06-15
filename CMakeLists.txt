@@ -164,6 +164,7 @@ set(SOURCES
 
     # Utils
     src/utils/Logger.cpp
+    src/utils/QtLogSink.cpp
     src/utils/GpuUtils.cpp
     src/utils/ImageUtils.cpp
     src/utils/Paths.cpp
@@ -227,6 +228,7 @@ set(HEADERS
 
     # Utils
     src/utils/Logger.h
+    src/utils/QtLogSink.h
     src/utils/GpuUtils.h
     src/utils/ImageUtils.h
     src/utils/Paths.h

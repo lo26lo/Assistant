@@ -1,4 +1,5 @@
 #include "Logger.h"
+#include "QtLogSink.h"
 
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -39,6 +40,13 @@ void Logger::initialize(const std::string& appName,
         file_sink->set_level(spdlog::level::trace);
         file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%s:%#] %v");
         sinks.push_back(file_sink);
+
+        // Qt sink (feeds the in-app Event Log). Info+ only — keeps lifecycle
+        // events (camera, calibration, iBOM, AI) plus all warnings/errors,
+        // without the per-frame debug/trace spam.
+        auto qt_sink = std::make_shared<qt_signal_sink_mt>();
+        qt_sink->set_level(spdlog::level::info);
+        sinks.push_back(qt_sink);
 
         // Create and register default logger
         auto logger = std::make_shared<spdlog::logger>("", sinks.begin(), sinks.end());

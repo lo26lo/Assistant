@@ -138,6 +138,27 @@ dynamique `/tmp/microscope-ibom.cameras.yml` + X11 + xauth) mais dépose dans `b
 lieu de lancer le binaire. README Docker corrigé (tableau des 3 scripts ; l'ancien README
 prétendait à tort que `run-dev.sh` donnait accès aux caméras).
 
+### Fix 5 — Defect Log → Event Log (logs runtime visibles dans l'UI)
+L'utilisateur signalait que le « Defect Log » était toujours vide (il ne se remplissait
+que via la détection IA de défauts, non câblée sans modèle) et voulait y voir les logs
+qui posent problème + les logs de calibration, etc.
+
+- **`src/utils/QtLogSink.{h,cpp}`** (nouveau) : `LogBridge` (QObject singleton, signal
+  `messageLogged(int level, QString logger, QString message)`) + `qt_signal_sink<Mutex>`
+  (sink spdlog qui pousse chaque record vers LogBridge ; thread-safe, marshalé sur le
+  thread GUI via QueuedConnection).
+- **`src/utils/Logger.cpp`** : ajout du `qt_signal_sink_mt` (niveau **info+**) aux sinks —
+  garde les événements de cycle de vie (caméra, calibration, iBOM, AI) + tous les
+  warnings/erreurs, sans le spam debug/trace par frame.
+- **`src/gui/StatsPanel.{h,cpp}`** : « Defect Log » renommé **« Event Log »**, colonnes
+  Time | Level | Message. Nouveau slot `addLogEntry(level, logger, message)` (couleur par
+  niveau : rouge=ERR/CRIT, orange=WARN, gris=INFO). `addDefectEntry()` réécrit dessus
+  (level DEFECT, ref stockée en UserRole → clic = navigation conservée). Log borné à 500
+  lignes (drop des plus anciennes).
+- **`src/app/Application.cpp`** : connexion `LogBridge::messageLogged` → `StatsPanel::addLogEntry`
+  (QueuedConnection) dans `connectSignals()`.
+- **`CMakeLists.txt`** : ajout de `QtLogSink.{h,cpp}`.
+
 ### Reste à faire
 - [ ] Valider calibration `findChessboardCornersSB` (fix erreur #18 — déjà pushé, test demain)
 - [ ] Segfault à la fermeture (RemoteView teardown, non bloquant)
