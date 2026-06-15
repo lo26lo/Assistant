@@ -1,6 +1,7 @@
 #include "RealSenseCapture.h"
 
 #include <librealsense2/rs.hpp>
+#include <librealsense2/rs_advanced_mode.hpp>
 #include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
 
@@ -215,6 +216,45 @@ bool RealSenseCapture::loadJsonPreset(const std::string& path)
     } catch (const rs2::error& e) {
         spdlog::warn("RealSense load preset failed: {}", e.what());
         return false;
+    }
+}
+
+bool RealSenseCapture::setDisparityShift(int shift)
+{
+    std::lock_guard<std::mutex> lk(m_deviceMutex);
+    if (!m_device) return false;
+    try {
+        auto adv = m_device->as<rs400::advanced_mode>();
+        if (!adv) return false;
+        if (!adv.is_enabled()) {
+            // Enabling advanced mode resets the device (it reconnects), which
+            // would disrupt streaming. Require it to be pre-enabled and report.
+            spdlog::warn("RealSense advanced mode disabled — cannot set "
+                         "disparity shift. Enable it once with rs-enumerate or "
+                         "the Viewer, then retry.");
+            return false;
+        }
+        STDepthTableControl table = adv.get_depth_table();
+        table.disparityShift = shift;
+        adv.set_depth_table(table);
+        spdlog::info("RealSense disparity shift set to {}", shift);
+        return true;
+    } catch (const rs2::error& e) {
+        spdlog::warn("RealSense set disparity shift failed: {}", e.what());
+        return false;
+    }
+}
+
+int RealSenseCapture::disparityShift() const
+{
+    std::lock_guard<std::mutex> lk(m_deviceMutex);
+    if (!m_device) return -1;
+    try {
+        auto adv = m_device->as<rs400::advanced_mode>();
+        if (!adv || !adv.is_enabled()) return -1;
+        return adv.get_depth_table().disparityShift;
+    } catch (const rs2::error&) {
+        return -1;
     }
 }
 

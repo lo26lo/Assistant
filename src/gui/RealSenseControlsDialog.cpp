@@ -39,6 +39,8 @@ struct UiProfile {
     int     w, h, fps;
     QString presetLabel;     // Visual Preset to match ("" = leave as-is)
     bool    spatial, temporal, threshold, holeFill;
+    int     disparityShift = -1;  // advanced-mode disparity shift (-1 = leave)
+    bool    aeRoiCenter = false;  // meter auto-exposure on the central region
 };
 
 QVector<UiProfile> profiles()
@@ -68,6 +70,17 @@ QVector<UiProfile> profiles()
                       "✓ Gain : fluidité et latence basses.\n"
                       "✗ Perte : précision et détail faibles — pas pour la mesure."),
           480, 270, 60, "", true, false, false, false },
+
+        { QObject::tr("Inspection rapprochée (réglé) — 848×480 @30"),
+          QObject::tr("Profil « tuning » Intel pour petits composants de très près.\n"
+                      "✓ Gain : zone de mesure rapprochée (disparity shift), depth fine "
+                      "et stable (High Accuracy + spatial/temporal), exposition mesurée "
+                      "sur la carte (ROI centrale).\n"
+                      "✗ Perte : portée max réduite — pensé pour la distance de travail "
+                      "courte de la D405. Augmente le disparity shift si la carte est "
+                      "très proche et apparaît « trouée »."),
+          848, 480, 30, "High Accuracy", true, true, false, false,
+          /*disparityShift=*/64, /*aeRoiCenter=*/true },
     };
 }
 
@@ -163,6 +176,29 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     // ── Tools (Viewer-style): AE ROI, PLY export, on-chip self-cal ──
     auto* toolsBox = new QGroupBox(tr("Outils"), this);
     auto* toolsLay = new QVBoxLayout(toolsBox);
+
+    // Disparity shift (advanced mode) — close-range tuning per Intel's guide.
+    auto* dispRow = new QHBoxLayout;
+    dispRow->addWidget(new QLabel(tr("Disparity shift:")));
+    auto* dispSlider = new QSlider(Qt::Horizontal);
+    dispSlider->setRange(0, 256);
+    auto* dispVal = new QLabel("—");
+    dispVal->setFixedWidth(36);
+    dispSlider->setToolTip(tr("Décale la fenêtre de mesure depth vers l'avant : "
+                              "augmente pour mesurer de très près (petits composants). "
+                              "Nécessite le mode avancé activé sur la caméra."));
+    if (m_camera) {
+        const int cur = m_camera->disparityShift();
+        if (cur >= 0) { dispSlider->setValue(cur); dispVal->setText(QString::number(cur)); }
+        else { dispSlider->setEnabled(false); dispVal->setText(tr("N/A")); }
+    }
+    connect(dispSlider, &QSlider::valueChanged, this, [this, dispVal](int v) {
+        dispVal->setText(QString::number(v));
+        if (m_camera) m_camera->setDisparityShift(v);
+    });
+    dispRow->addWidget(dispSlider, 1);
+    dispRow->addWidget(dispVal);
+    toolsLay->addLayout(dispRow);
 
     auto* aeBtn = new QPushButton(tr("Auto-exposition sur le centre"));
     aeBtn->setToolTip(tr("Règle l'auto-exposition en mesurant la zone centrale "
@@ -540,9 +576,16 @@ void RealSenseControlsDialog::applyProfile(int index)
     m_camera->setFps(p.fps);
     if (wasCapturing) m_camera->start();
 
-    // The device republishes asynchronously on the capture thread; refresh the
-    // controls once it is back up.
-    QTimer::singleShot(1200, this, &RealSenseControlsDialog::rebuild);
+    // Tuning (Intel "tuning depth cameras") applied once the device is back:
+    // disparity shift (closer Z window) + AE ROI on the central board region.
+    const int   shift = p.disparityShift;
+    const bool  aeRoi = p.aeRoiCenter;
+    QTimer::singleShot(1200, this, [this, shift, aeRoi]() {
+        if (!m_camera) return;
+        if (shift >= 0) m_camera->setDisparityShift(shift);
+        if (aeRoi)      m_camera->setAutoExposureRoi(0, 0, 0, 0);  // central 50%
+        rebuild();
+    });
 }
 
 } // namespace ibom::gui

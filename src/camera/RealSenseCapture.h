@@ -122,6 +122,14 @@ public:
     bool saveJsonPreset(const std::string& path) const;
     bool loadJsonPreset(const std::string& path);
 
+    /// Set the advanced-mode disparity shift (depth table). Higher values move
+    /// the measurable Z window closer — useful for close-range PCB inspection
+    /// (Intel "tuning depth cameras" guidance). Returns false if advanced mode
+    /// is unavailable/disabled. Typical range 0–256.
+    bool setDisparityShift(int shift);
+    /// Current disparity shift, or -1 if unavailable.
+    int  disparityShift() const;
+
     /// Record all streams to a rosbag (.bag) starting at the next (re)start,
     /// like the Viewer's record button. Empty string disables recording.
     /// Takes effect after stop()+start().
