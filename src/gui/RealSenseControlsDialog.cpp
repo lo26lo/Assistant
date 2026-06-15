@@ -11,6 +11,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QSlider>
+#include <QSignalBlocker>
 #include <QPushButton>
 #include <QDialogButtonBox>
 #include <QTimer>
@@ -20,6 +22,8 @@
 #include <QDateTime>
 
 #include <map>
+#include <cmath>
+#include <QFont>
 
 namespace ibom::gui {
 
@@ -238,8 +242,104 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     rebuild();
 }
 
+QWidget* RealSenseControlsDialog::buildControlRow(const camera::RsControl& c)
+{
+    const QString tip = QString::fromStdString(c.description);
+    const int sensorIdx = c.sensorIndex;
+    const int optionId  = c.optionId;
+
+    if (c.isBool) {
+        auto* cb = new QCheckBox;
+        cb->setChecked(c.current >= 0.5f);
+        cb->setEnabled(!c.readOnly);
+        cb->setToolTip(tip);
+        connect(cb, &QCheckBox::toggled, this, [this, sensorIdx, optionId](bool on) {
+            if (m_camera) m_camera->setControl(sensorIdx, optionId, on ? 1.0f : 0.0f);
+        });
+        return cb;
+    }
+
+    if (!c.enumValues.empty()) {
+        // Discrete enum (e.g. Visual Preset) → combo with the SDK's named values.
+        auto* combo = new QComboBox;
+        int currentIdx = 0;
+        for (int i = 0; i < static_cast<int>(c.enumValues.size()); ++i) {
+            const auto& [val, name] = c.enumValues[i];
+            combo->addItem(QString::fromStdString(name), val);
+            if (val == c.current) currentIdx = i;
+        }
+        combo->setCurrentIndex(currentIdx);
+        combo->setEnabled(!c.readOnly);
+        combo->setToolTip(tip);
+        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, combo, sensorIdx, optionId](int) {
+            if (m_camera)
+                m_camera->setControl(sensorIdx, optionId, combo->currentData().toFloat());
+        });
+        return combo;
+    }
+
+    // Numeric option → slider + value box, like the RealSense Viewer.
+    const double step  = c.step > 0 ? c.step : 1.0;
+    const int    steps = std::max(1, static_cast<int>(std::lround((c.max - c.min) / step)));
+    const bool   integral = (c.step >= 1.0f) &&
+        (c.step == static_cast<float>(static_cast<long long>(c.step)));
+
+    auto* row    = new QWidget;
+    auto* h      = new QHBoxLayout(row);
+    h->setContentsMargins(0, 0, 0, 0);
+    auto* slider = new QSlider(Qt::Horizontal);
+    auto* spin   = new QDoubleSpinBox;
+    slider->setRange(0, steps);
+    slider->setValue(static_cast<int>(std::lround((c.current - c.min) / step)));
+    slider->setEnabled(!c.readOnly);
+    slider->setToolTip(tip);
+    spin->setRange(c.min, c.max);
+    spin->setSingleStep(step);
+    spin->setDecimals(integral ? 0 : 3);
+    spin->setValue(c.current);
+    spin->setEnabled(!c.readOnly);
+    spin->setToolTip(tip);
+    spin->setFixedWidth(84);
+    h->addWidget(slider, 1);
+    h->addWidget(spin);
+
+    // Keep slider ↔ spin in sync without feedback loops, and push to the device.
+    connect(slider, &QSlider::valueChanged, this,
+            [this, spin, sensorIdx, optionId, minv = c.min, step](int pos) {
+        const double v = minv + pos * step;
+        { QSignalBlocker b(spin); spin->setValue(v); }
+        if (m_camera) m_camera->setControl(sensorIdx, optionId, static_cast<float>(v));
+    });
+    connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this, slider, sensorIdx, optionId, minv = c.min, step](double v) {
+        { QSignalBlocker b(slider); slider->setValue(static_cast<int>(std::lround((v - minv) / step))); }
+        if (m_camera) m_camera->setControl(sensorIdx, optionId, static_cast<float>(v));
+    });
+    return row;
+}
+
+QGroupBox* RealSenseControlsDialog::makeCollapsibleGroup(const QString& title,
+                                                         QFormLayout*& formOut)
+{
+    // Checkable group box that collapses its content (Viewer-style panels).
+    auto* box = new QGroupBox(title);
+    box->setCheckable(true);
+    box->setChecked(true);
+    auto* inner = new QWidget;
+    formOut = new QFormLayout(inner);
+    formOut->setLabelAlignment(Qt::AlignLeft);
+    auto* lay = new QVBoxLayout(box);
+    lay->setContentsMargins(6, 4, 6, 4);
+    lay->addWidget(inner);
+    connect(box, &QGroupBox::toggled, inner, &QWidget::setVisible);
+    return box;
+}
+
 void RealSenseControlsDialog::rebuild()
 {
+    using RS = camera::RealSenseCapture;
+
     // Replace the content widget wholesale — simplest way to clear old controls.
     auto* fresh = new QWidget;
     auto* outer = new QVBoxLayout(fresh);
@@ -252,81 +352,48 @@ void RealSenseControlsDialog::rebuild()
             tr("No RealSense options available.\n"
                "Start the RealSense backend with the camera connected, then Refresh.")));
         outer->addStretch();
-    } else {
-        // Group options by sensor (Stereo Module, RGB Camera, …).
-        std::map<int, QFormLayout*> formsBySensor;
-        std::map<int, QString>      nameBySensor;
-        for (const auto& c : controls) {
-            if (!formsBySensor.count(c.sensorIndex)) {
-                auto* box = new QGroupBox(QString::fromStdString(c.sensorName), fresh);
-                formsBySensor[c.sensorIndex] = new QFormLayout(box);
-                nameBySensor[c.sensorIndex]  = QString::fromStdString(c.sensorName);
-                outer->addWidget(box);
-            }
-            QFormLayout* form = formsBySensor[c.sensorIndex];
-
-            const QString tip = QString::fromStdString(c.description);
-            const QString label = QString::fromStdString(c.name);
-            const int   sensorIdx = c.sensorIndex;
-            const int   optionId  = c.optionId;
-
-            if (c.isBool) {
-                auto* cb = new QCheckBox;
-                cb->setChecked(c.current >= 0.5f);
-                cb->setEnabled(!c.readOnly);
-                cb->setToolTip(tip);
-                connect(cb, &QCheckBox::toggled, this, [this, sensorIdx, optionId](bool on) {
-                    if (m_camera) m_camera->setControl(sensorIdx, optionId, on ? 1.0f : 0.0f);
-                });
-                auto* lbl = new QLabel(label);
-                lbl->setToolTip(tip);
-                form->addRow(lbl, cb);
-            } else if (!c.enumValues.empty()) {
-                // Discrete enum (e.g. Visual Preset) → combo with named values.
-                auto* combo = new QComboBox;
-                int currentIdx = 0;
-                for (int i = 0; i < static_cast<int>(c.enumValues.size()); ++i) {
-                    const auto& [val, name] = c.enumValues[i];
-                    combo->addItem(QString::fromStdString(name), val);
-                    if (val == c.current) currentIdx = i;
-                }
-                combo->setCurrentIndex(currentIdx);
-                combo->setEnabled(!c.readOnly);
-                combo->setToolTip(tip);
-                connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                        this, [this, combo, sensorIdx, optionId](int) {
-                    if (m_camera)
-                        m_camera->setControl(sensorIdx, optionId,
-                                             combo->currentData().toFloat());
-                });
-                auto* lbl = new QLabel(label);
-                lbl->setToolTip(tip);
-                form->addRow(lbl, combo);
-            } else {
-                auto* spin = new QDoubleSpinBox;
-                spin->setRange(c.min, c.max);
-                spin->setSingleStep(c.step > 0 ? c.step : 1.0);
-                // Integer-valued option (step is whole) → no decimals.
-                const bool integral = (c.step >= 1.0f) &&
-                    (c.step == static_cast<float>(static_cast<long long>(c.step)));
-                spin->setDecimals(integral ? 0 : 3);
-                spin->setValue(c.current);
-                spin->setEnabled(!c.readOnly);
-                spin->setToolTip(tip);
-                connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-                        this, [this, sensorIdx, optionId](double v) {
-                    if (m_camera) m_camera->setControl(sensorIdx, optionId, static_cast<float>(v));
-                });
-                auto* lbl = new QLabel(label);
-                lbl->setToolTip(tip);
-                form->addRow(lbl, spin);
-            }
-        }
-        outer->addStretch();
+        m_scroll->setWidget(fresh);
+        return;
     }
 
-    // setWidget() takes ownership and deletes the previously-set widget (with
-    // all its child controls), so this cleanly replaces the old options.
+    // Two sections like the Viewer: sensor "Controls" and "Post-Processing"
+    // (filters live at ownerId >= kFilterBase).
+    auto addSectionHeader = [&](const QString& text) {
+        auto* h = new QLabel(text);
+        QFont f = h->font(); f.setBold(true); f.setPointSizeF(f.pointSizeF() + 1);
+        h->setFont(f);
+        h->setStyleSheet("color: palette(highlight); margin-top: 6px;");
+        outer->addWidget(h);
+    };
+
+    std::map<int, QFormLayout*> formBySensor;  // sensor groups (controls)
+    std::map<int, QFormLayout*> formByFilter;  // filter groups (post-processing)
+    bool addedControlsHeader = false, addedPpHeader = false;
+
+    for (const auto& c : controls) {
+        const bool isFilter = (c.sensorIndex >= RS::kFilterBase);
+        auto& forms = isFilter ? formByFilter : formBySensor;
+
+        if (!forms.count(c.sensorIndex)) {
+            if (isFilter && !addedPpHeader) {
+                addSectionHeader(tr("Post-Processing"));
+                addedPpHeader = true;
+            } else if (!isFilter && !addedControlsHeader) {
+                addSectionHeader(tr("Controls"));
+                addedControlsHeader = true;
+            }
+            QFormLayout* form = nullptr;
+            outer->addWidget(makeCollapsibleGroup(
+                QString::fromStdString(c.sensorName), form));
+            forms[c.sensorIndex] = form;
+        }
+
+        auto* lbl = new QLabel(QString::fromStdString(c.name));
+        lbl->setToolTip(QString::fromStdString(c.description));
+        forms[c.sensorIndex]->addRow(lbl, buildControlRow(c));
+    }
+
+    outer->addStretch();
     m_scroll->setWidget(fresh);
 }
 
