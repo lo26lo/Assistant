@@ -68,22 +68,38 @@ COMPOSE_FILES=(-f docker/compose.yml -f docker/compose.local.yml)
 #    empeche le container de demarrer, erreurs #6/#15.)
 # -----------------------------------------------------------------------------
 CAM_OVERRIDE=/tmp/microscope-ibom.cameras.yml
-if compgen -G "/dev/video*" > /dev/null; then
+HAVE_VIDEO=false
+compgen -G "/dev/video*" > /dev/null && HAVE_VIDEO=true
+
+# Intel RealSense (D405 = VID 8086) uses libusb (FORCE_RSUSB_BACKEND) — it needs
+# the USB bus mapped, NOT /dev/video*.
+HAVE_REALSENSE=false
+if command -v lsusb >/dev/null 2>&1 && lsusb | grep -qi "8086:0b"; then
+    HAVE_REALSENSE=true
+fi
+
+if [ "$HAVE_VIDEO" = true ] || [ "$HAVE_REALSENSE" = true ]; then
     {
         echo "# Genere par run_dev_shell.sh — ne pas editer (regenere a chaque lancement)"
         echo "services:"
         echo "  dev:"
         echo "    devices:"
-        for v in /dev/video*; do
-            echo "      - ${v}:${v}"
-        done
+        if [ "$HAVE_VIDEO" = true ]; then
+            for v in /dev/video*; do
+                echo "      - ${v}:${v}"
+            done
+        fi
+        if [ "$HAVE_REALSENSE" = true ]; then
+            echo "      - /dev/bus/usb:/dev/bus/usb"
+        fi
     } > "$CAM_OVERRIDE"
     COMPOSE_FILES+=(-f "$CAM_OVERRIDE")
-    echo "${GRN}[dev-shell]${NC} Cameras detectees: $(echo /dev/video* )"
+    [ "$HAVE_VIDEO" = true ] && echo "${GRN}[dev-shell]${NC} Cameras V4L2: $(echo /dev/video* )"
+    [ "$HAVE_REALSENSE" = true ] && echo "${GRN}[dev-shell]${NC} RealSense detectee (USB bus mappe)."
 else
     rm -f "$CAM_OVERRIDE"
-    echo "${YEL}[dev-shell]${NC} Aucune camera detectee (/dev/video*) — shell sans camera."
-    echo "             Brancher la camera puis relancer ce script pour l'activer."
+    echo "${YEL}[dev-shell]${NC} Aucune camera detectee — shell sans camera."
+    echo "             Brancher la camera (USB ou RealSense) puis relancer ce script."
 fi
 
 # -----------------------------------------------------------------------------

@@ -37,6 +37,7 @@ private:
     ibom::Config& m_config;
 
     // Camera
+    QComboBox*    m_cameraBackend  = nullptr;
     QComboBox*    m_cameraDevice   = nullptr;
     QPushButton*  m_refreshCameras = nullptr;
     QSpinBox*     m_cameraWidth    = nullptr;

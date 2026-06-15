@@ -1,6 +1,9 @@
 #include "SettingsDialog.h"
 #include "../app/Config.h"
 #include "../camera/CameraCapture.h"
+#ifdef IBOM_HAVE_REALSENSE
+#include "../camera/RealSenseCapture.h"
+#endif
 
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -50,6 +53,18 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
 {
     auto* page = new QWidget;
     auto* form = new QFormLayout(page);
+
+    // Backend selector — microscope USB (V4L2) vs Intel RealSense (D405).
+    m_cameraBackend = new QComboBox;
+    m_cameraBackend->addItem(tr("Microscope USB (V4L2)"), 0);
+#ifdef IBOM_HAVE_REALSENSE
+    m_cameraBackend->addItem(tr("Intel RealSense (D405)"), 1);
+#endif
+    m_cameraBackend->setToolTip(tr("Capture backend. Switching recreates the camera "
+                                   "and re-scans devices."));
+    connect(m_cameraBackend, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { enumerateCameras(); });
+    form->addRow(tr("Backend:"), m_cameraBackend);
 
     // Camera device selector with refresh button
     auto* deviceRow = new QHBoxLayout;
@@ -334,6 +349,11 @@ void SettingsDialog::createFeaturesTab(QTabWidget* tabs)
 void SettingsDialog::loadFromConfig()
 {
     // Camera
+    if (m_cameraBackend) {
+        const int backendData = (m_config.cameraBackend() == ibom::CameraBackend::RealSense) ? 1 : 0;
+        const int bi = m_cameraBackend->findData(backendData);
+        m_cameraBackend->setCurrentIndex(bi >= 0 ? bi : 0);
+    }
     int idx = m_config.cameraIndex();
     if (idx >= 0 && idx < m_cameraDevice->count())
         m_cameraDevice->setCurrentIndex(idx);
@@ -396,6 +416,10 @@ void SettingsDialog::loadFromConfig()
 void SettingsDialog::accept()
 {
     // Camera
+    if (m_cameraBackend) {
+        m_config.setCameraBackend(m_cameraBackend->currentData().toInt() == 1
+            ? ibom::CameraBackend::RealSense : ibom::CameraBackend::V4L2);
+    }
     m_config.setCameraIndex(m_cameraDevice->currentIndex());
     m_config.setCameraWidth(m_cameraWidth->value());
     m_config.setCameraHeight(m_cameraHeight->value());
@@ -464,19 +488,32 @@ void SettingsDialog::enumerateCameras()
     if (m_refreshCameras)
         m_refreshCameras->setEnabled(false);
 
-    std::thread([this, previousIndex]() {
+    const bool realsense = m_cameraBackend
+        && m_cameraBackend->currentData().toInt() == 1;
+
+    std::thread([this, previousIndex, realsense]() {
         QStringList names;
-        // Use OpenCV V4L2 enumeration (reliable on Jetson/Docker).
-        // QMediaDevices::videoInputs() is blind to /dev/video* in this environment.
-        const auto v4lDevices = ibom::camera::CameraCapture::listDevices();
-        const auto qtCameras  = QMediaDevices::videoInputs();
-        for (size_t i = 0; i < v4lDevices.size(); ++i) {
-            const int qi = static_cast<int>(i);
-            QString label = (qi < qtCameras.size())
-                ? qtCameras[qi].description()
-                : QString::fromStdString(v4lDevices[i]);
-            names << QString("%1: %2").arg(qi).arg(label);
+#ifdef IBOM_HAVE_REALSENSE
+        if (realsense) {
+            const auto rsDevices = ibom::camera::RealSenseCapture::listDevices();
+            for (size_t i = 0; i < rsDevices.size(); ++i)
+                names << QString("%1: %2").arg(i).arg(QString::fromStdString(rsDevices[i]));
+        } else
+#endif
+        {
+            // Use OpenCV V4L2 enumeration (reliable on Jetson/Docker).
+            // QMediaDevices::videoInputs() is blind to /dev/video* in this environment.
+            const auto v4lDevices = ibom::camera::CameraCapture::listDevices();
+            const auto qtCameras  = QMediaDevices::videoInputs();
+            for (size_t i = 0; i < v4lDevices.size(); ++i) {
+                const int qi = static_cast<int>(i);
+                QString label = (qi < qtCameras.size())
+                    ? qtCameras[qi].description()
+                    : QString::fromStdString(v4lDevices[i]);
+                names << QString("%1: %2").arg(qi).arg(label);
+            }
         }
+        (void)realsense;
         QMetaObject::invokeMethod(this, [this, names, previousIndex]() {
             m_cameraDevice->clear();
             if (names.isEmpty()) {

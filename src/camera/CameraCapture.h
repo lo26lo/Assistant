@@ -1,29 +1,22 @@
 #pragma once
 
-#include <QObject>
-#include <QMetaType>
-#include <QSize>
-#include <opencv2/core.hpp>
-#include <memory>
+#include "ICameraSource.h"
+
 #include <atomic>
+#include <mutex>
 #include <thread>
 
 namespace ibom::camera {
 
-/// Shared, immutable frame view. Pixel buffer is reference-counted — copying
-/// the shared_ptr does not copy pixels. Multiple consumers (GUI, tracking
-/// worker, calibration) can hold a reference concurrently without clones.
-using FrameRef = std::shared_ptr<const cv::Mat>;
-
 /**
- * @brief Captures frames from a USB camera (microscope).
+ * @brief Captures frames from a USB camera (microscope) via V4L2/UVC.
  *
  * Runs capture in a dedicated thread for minimal latency.
  * Each frame is published as a FrameRef (shared_ptr<const cv::Mat>) — the
  * pixel buffer is shared zero-copy with all downstream consumers via
  * Qt signals and latestFrame().
  */
-class CameraCapture : public QObject {
+class CameraCapture : public ICameraSource {
     Q_OBJECT
 
 public:
@@ -33,44 +26,25 @@ public:
     CameraCapture(const CameraCapture&) = delete;
     CameraCapture& operator=(const CameraCapture&) = delete;
 
-    /// Start capturing frames.
-    bool start();
-
-    /// Stop capture and release device.
-    void stop();
-
-    /// Whether the camera is currently capturing.
-    bool isCapturing() const { return m_capturing.load(); }
-
-    /// Get the latest frame (thread-safe, zero-copy shared view).
-    /// Returns an empty FrameRef (null) if no frame has been captured yet.
-    FrameRef latestFrame() const;
+    bool start() override;
+    void stop() override;
+    bool isCapturing() const override { return m_capturing.load(); }
+    FrameRef latestFrame() const override;
 
     // --- Settings ---
-    void setDeviceIndex(int index);
-    void setResolution(int width, int height);
-    void setFps(int fps);
-    QSize resolution() const;
+    void setDeviceIndex(int index) override;
+    void setResolution(int width, int height) override;
+    void setFps(int fps) override;
+    QSize resolution() const override;
 
     /// Enable NVIDIA hardware MJPG decode via GStreamer (nvv4l2decoder) on
     /// Jetson. When enabled, captureLoop() tries the GStreamer pipeline first
     /// and falls back to CPU V4L2 automatically if it cannot open.
-    void setHardwareDecode(bool enabled) { m_hwDecode = enabled; }
+    void setHardwareDecode(bool enabled) override { m_hwDecode = enabled; }
     bool hardwareDecode() const { return m_hwDecode; }
 
     /// List available camera devices.
     static std::vector<std::string> listDevices();
-
-signals:
-    /// Emitted when a new frame is ready. The FrameRef is shared — consumers
-    /// may hold it but MUST NOT mutate the underlying cv::Mat.
-    void frameReady(ibom::camera::FrameRef frame);
-
-    /// Emitted on capture error.
-    void captureError(const QString& message);
-
-    /// Emitted when capture starts/stops.
-    void captureStateChanged(bool capturing);
 
 private:
     void captureLoop();
@@ -89,5 +63,3 @@ private:
 };
 
 } // namespace ibom::camera
-
-Q_DECLARE_METATYPE(ibom::camera::FrameRef)

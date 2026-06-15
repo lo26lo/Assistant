@@ -7,7 +7,11 @@
 #include "gui/BomPanel.h"
 #include "gui/InspectionWizard.h"
 #include "gui/InspectionPanel.h"
+#include "camera/ICameraSource.h"
 #include "camera/CameraCapture.h"
+#ifdef IBOM_HAVE_REALSENSE
+#include "camera/RealSenseCapture.h"
+#endif
 #include "camera/CameraCalibration.h"
 #include "ai/InferenceEngine.h"
 #include "ai/ModelManager.h"
@@ -142,26 +146,15 @@ bool Application::initialize()
     // backend frequently fails to see /dev/video* even when V4L2 capture works
     // perfectly — relying on it alone yields "0 cameras" on a working device.
     {
-        QStringList cameraNames;
-        const auto v4lDevices = camera::CameraCapture::listDevices();
-        const auto qtCameras  = QMediaDevices::videoInputs();
-        for (size_t i = 0; i < v4lDevices.size(); ++i) {
-            const int qi = static_cast<int>(i);
-            QString label = (qi < qtCameras.size())
-                ? qtCameras[qi].description()
-                : QString::fromStdString(v4lDevices[i]);
-            cameraNames << QString("%1: %2").arg(qi).arg(label);
-        }
-        if (cameraNames.isEmpty())
-            cameraNames << tr("No camera detected");
-        m_mainWindow->controlPanel()->setCameraDevices(cameraNames);
+        refreshCameraDeviceList();
         // Select the configured camera index
         int idx = m_config->cameraIndex();
         if (auto* cp = m_mainWindow->controlPanel()) {
-            if (idx >= 0 && idx < cameraNames.size())
-                cp->findChild<QComboBox*>()->setCurrentIndex(idx);
+            if (auto* combo = cp->findChild<QComboBox*>()) {
+                if (idx >= 0 && idx < combo->count())
+                    combo->setCurrentIndex(idx);
+            }
         }
-        spdlog::info("Found {} camera(s) (V4L2 enumeration)", v4lDevices.size());
     }
 
     // Show main window
@@ -342,12 +335,10 @@ void Application::createSubsystems()
     spdlog::info("Creating InferenceEngine...");
     m_inferenceEngine = std::make_unique<ai::InferenceEngine>(*m_modelManager);
 
-    // Camera capture
-    spdlog::info("Creating CameraCapture...");
-    m_camera = std::make_unique<camera::CameraCapture>(m_config->cameraIndex());
-    m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
-    m_camera->setFps(m_config->cameraFps());
-    m_camera->setHardwareDecode(m_config->cameraHwDecode());
+    // Camera capture — backend chosen from config (microscope USB by default,
+    // RealSense D405 when selected). Both implementations satisfy ICameraSource
+    // so everything downstream is backend-agnostic.
+    createCamera();
 
     // Camera calibration
     spdlog::info("Creating CameraCalibration...");
@@ -500,6 +491,82 @@ void Application::initializeAI()
     });
 }
 
+void Application::createCamera()
+{
+    // Both backends implement ICameraSource, so everything downstream (overlay,
+    // tracking, dataset) is agnostic to which one is active.
+#ifdef IBOM_HAVE_REALSENSE
+    if (m_config->cameraBackend() == CameraBackend::RealSense) {
+        spdlog::info("Creating RealSenseCapture (D405)...");
+        m_camera = std::make_unique<camera::RealSenseCapture>();
+    } else
+#endif
+    {
+        spdlog::info("Creating CameraCapture (V4L2/UVC microscope)...");
+        m_camera = std::make_unique<camera::CameraCapture>(m_config->cameraIndex());
+    }
+    m_camera->setDeviceIndex(m_config->cameraIndex());
+    m_camera->setResolution(m_config->cameraWidth(), m_config->cameraHeight());
+    m_camera->setFps(m_config->cameraFps());
+    m_camera->setHardwareDecode(m_config->cameraHwDecode());
+    m_activeBackend = m_config->cameraBackend();
+}
+
+void Application::switchCameraBackend(CameraBackend backend)
+{
+    if (m_activeBackend == backend && m_camera)
+        return;  // no change
+
+    const bool wasCapturing = m_camera && m_camera->isCapturing();
+    if (m_camera) m_camera->stop();
+
+    m_config->setCameraBackend(backend);
+    m_config->save();
+
+    // Destroying the old source auto-removes its Qt connections; recreate and
+    // re-wire against the new backend.
+    m_camera.reset();
+    createCamera();
+    wireCameraSignals();
+
+    refreshCameraDeviceList();
+
+    spdlog::info("Camera backend switched to {}",
+                 backend == CameraBackend::RealSense ? "RealSense" : "V4L2");
+
+    if (wasCapturing) {
+        if (!m_camera->start())
+            m_mainWindow->updateStatusMessage(tr("Failed to start camera after backend switch"));
+    }
+}
+
+void Application::refreshCameraDeviceList()
+{
+    QStringList cameraNames;
+#ifdef IBOM_HAVE_REALSENSE
+    if (m_config->cameraBackend() == CameraBackend::RealSense) {
+        const auto rsDevices = camera::RealSenseCapture::listDevices();
+        for (size_t i = 0; i < rsDevices.size(); ++i)
+            cameraNames << QString("%1: %2").arg(i).arg(QString::fromStdString(rsDevices[i]));
+    } else
+#endif
+    {
+        const auto v4lDevices = camera::CameraCapture::listDevices();
+        const auto qtCameras  = QMediaDevices::videoInputs();
+        for (size_t i = 0; i < v4lDevices.size(); ++i) {
+            const int qi = static_cast<int>(i);
+            QString label = (qi < qtCameras.size())
+                ? qtCameras[qi].description()
+                : QString::fromStdString(v4lDevices[i]);
+            cameraNames << QString("%1: %2").arg(qi).arg(label);
+        }
+    }
+    if (cameraNames.isEmpty())
+        cameraNames << tr("No camera detected");
+    if (m_mainWindow && m_mainWindow->controlPanel())
+        m_mainWindow->controlPanel()->setCameraDevices(cameraNames);
+}
+
 void Application::connectSignals()
 {
     connect(this, &Application::shutdownRequested, &m_qapp, &QApplication::quit);
@@ -570,15 +637,27 @@ void Application::connectSignals()
         }
     });
 
+    // ── Camera frame/error wiring ───────────────────────────────
+    // Extracted into wireCameraSignals() so a backend hot-swap (microscope ↔
+    // RealSense) can re-run it against the freshly created m_camera.
+    wireCameraSignals();
+
+    // Remaining UI/control connections (kept in a separate function only so the
+    // very large frameReady lambda above can live in its own re-callable unit).
+    connectControlSignals();
+}
+
+void Application::wireCameraSignals()
+{
     // ── Camera errors ───────────────────────────────────────────
-    connect(m_camera.get(), &camera::CameraCapture::captureError, this, [this](const QString& msg) {
+    connect(m_camera.get(), &camera::ICameraSource::captureError, this, [this](const QString& msg) {
         spdlog::error("Camera error: {}", msg.toStdString());
         m_mainWindow->updateStatusMessage(msg);
-    });
+    }, Qt::UniqueConnection);
 
     // ── Camera frame → CameraView + Overlay ─────────────────────
     // Slot receives a shared_ptr<const cv::Mat> — no pixel clone across threads.
-    connect(m_camera.get(), &camera::CameraCapture::frameReady, this,
+    connect(m_camera.get(), &camera::ICameraSource::frameReady, this,
             [this](ibom::camera::FrameRef frameRef) {
         if (!frameRef || frameRef->empty()) return;
         const cv::Mat& frame = *frameRef;
@@ -822,7 +901,10 @@ void Application::connectSignals()
 
         m_frameCount++;
     }, Qt::QueuedConnection);
+}
 
+void Application::connectControlSignals()
+{
     // ── Camera settings from control panel ──────────────────────
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::cameraSettingsChanged,
             this, [this](int index, int w, int h, int fps) {
@@ -1025,6 +1107,14 @@ void Application::connectSignals()
     // ── Settings changed ────────────────────────────────────────
     connect(m_mainWindow.get(), &gui::MainWindow::settingsChanged,
             this, [this]() {
+        // Backend changed in the dialog? Recreate the camera (this also applies
+        // resolution/fps/device and restarts if it was running) and stop here —
+        // the index/restart logic below would operate on the new backend anyway.
+        if (m_config->cameraBackend() != m_activeBackend) {
+            switchCameraBackend(m_config->cameraBackend());
+            return;
+        }
+
         // Check if camera index changed and restart if needed
         int newIdx = m_config->cameraIndex();
         bool wasCapturing = m_camera->isCapturing();

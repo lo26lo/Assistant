@@ -280,16 +280,16 @@ rs-enumerate-devices -c         # streams/résolutions supportés
 
 ## 10. Checklist d'implémentation (Phase 1)
 
-- [ ] `CMakeLists.txt` : option + `find_package(realsense2)` + sources + link/define
-- [ ] `src/camera/ICameraSource.h`
-- [ ] `CameraCapture` hérite de `ICameraSource`
-- [ ] `src/camera/RealSenseCapture.{h,cpp}` (couleur)
-- [ ] `Config` : `CameraBackend` + JSON + migration
-- [ ] `Application` : `unique_ptr<ICameraSource>` + `createCamera()` switch
-- [ ] UI : combo backend (SettingsDialog)
-- [ ] `compose.local.yml` / scripts : passthrough `/dev/bus/usb` (dynamique)
-- [ ] Compilation conditionnelle Windows (pas de régression)
-- [ ] Test Jetson (§9) + entrée `JETSON_SESSION_LOG.md`
+- [x] `CMakeLists.txt` : option + `find_package(realsense2)` + sources + link/define
+- [x] `src/camera/ICameraSource.h`
+- [x] `CameraCapture` hérite de `ICameraSource`
+- [x] `src/camera/RealSenseCapture.{h,cpp}` (couleur)
+- [x] `Config` : `CameraBackend` + JSON + migration
+- [x] `Application` : `unique_ptr<ICameraSource>` + `createCamera()` switch + hot-swap
+- [x] UI : combo backend (SettingsDialog)
+- [x] scripts : passthrough `/dev/bus/usb` dynamique (`run_local_gui.sh`, `run_dev_shell.sh`)
+- [x] Compilation conditionnelle (source RealSense compilée seulement si `realsense2` trouvée)
+- [ ] **Build + test Jetson (§9)** — à faire par l'utilisateur sur la cible
 
 ---
 

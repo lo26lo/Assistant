@@ -6,6 +6,12 @@
 
 namespace ibom {
 
+/// Capture backend selecting which camera implementation to instantiate.
+enum class CameraBackend {
+    V4L2      = 0,  // USB/UVC microscope via OpenCV V4L2 (default)
+    RealSense = 1   // Intel RealSense (e.g. D405) via librealsense2
+};
+
 /// Method for dynamic pixels/mm scaling when zoom changes.
 enum class ScaleMethod {
     None        = 0,  // Use calibration value only (fixed)
@@ -39,6 +45,9 @@ public:
     bool save(const std::string& path = "") const;
 
     // --- Camera ---
+    CameraBackend cameraBackend() const { return m_cameraBackend; }
+    void setCameraBackend(CameraBackend b) { m_cameraBackend = b; }
+
     int  cameraIndex() const { return m_cameraIndex; }
     void setCameraIndex(int index) { m_cameraIndex = index; }
 
@@ -201,6 +210,7 @@ private:
     std::string defaultConfigPath() const;
 
     // Camera
+    CameraBackend m_cameraBackend = CameraBackend::V4L2;
     int m_cameraIndex    = 0;
     int m_cameraWidth    = 1920;
     int m_cameraHeight   = 1080;
