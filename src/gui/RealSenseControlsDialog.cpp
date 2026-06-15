@@ -1,4 +1,5 @@
 #include "RealSenseControlsDialog.h"
+#include "ToggleSwitch.h"
 #include "../camera/RealSenseCapture.h"
 
 #include <QVBoxLayout>
@@ -249,14 +250,21 @@ QWidget* RealSenseControlsDialog::buildControlRow(const camera::RsControl& c)
     const int optionId  = c.optionId;
 
     if (c.isBool) {
-        auto* cb = new QCheckBox;
-        cb->setChecked(c.current >= 0.5f);
-        cb->setEnabled(!c.readOnly);
-        cb->setToolTip(tip);
-        connect(cb, &QCheckBox::toggled, this, [this, sensorIdx, optionId](bool on) {
+        auto* sw = new ToggleSwitch;
+        sw->setChecked(c.current >= 0.5f);
+        sw->setOffset(c.current >= 0.5f ? 1.0f : 0.0f);
+        sw->setEnabled(!c.readOnly);
+        sw->setToolTip(tip);
+        connect(sw, &ToggleSwitch::toggled, this, [this, sensorIdx, optionId](bool on) {
             if (m_camera) m_camera->setControl(sensorIdx, optionId, on ? 1.0f : 0.0f);
         });
-        return cb;
+        // Left-align the switch so it doesn't stretch across the form field.
+        auto* wrap = new QWidget;
+        auto* hl = new QHBoxLayout(wrap);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->addWidget(sw);
+        hl->addStretch();
+        return wrap;
     }
 
     if (!c.enumValues.empty()) {
@@ -388,9 +396,24 @@ void RealSenseControlsDialog::rebuild()
             forms[c.sensorIndex] = form;
         }
 
-        auto* lbl = new QLabel(QString::fromStdString(c.name));
-        lbl->setToolTip(QString::fromStdString(c.description));
-        forms[c.sensorIndex]->addRow(lbl, buildControlRow(c));
+        // Label cell: option name + a small "ⓘ" info icon carrying the SDK
+        // description (hover for help), like the Viewer.
+        auto* labelCell = new QWidget;
+        auto* lh = new QHBoxLayout(labelCell);
+        lh->setContentsMargins(0, 0, 0, 0);
+        lh->setSpacing(4);
+        auto* name = new QLabel(QString::fromStdString(c.name));
+        name->setToolTip(QString::fromStdString(c.description));
+        lh->addWidget(name);
+        if (!c.description.empty()) {
+            auto* info = new QLabel(QStringLiteral("ⓘ"));
+            info->setToolTip(QString::fromStdString(c.description));
+            info->setCursor(Qt::WhatsThisCursor);
+            info->setStyleSheet("color: palette(mid);");
+            lh->addWidget(info);
+        }
+        lh->addStretch();
+        forms[c.sensorIndex]->addRow(labelCell, buildControlRow(c));
     }
 
     outer->addStretch();
