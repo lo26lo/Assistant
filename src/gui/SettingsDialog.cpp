@@ -64,7 +64,7 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
     m_cameraBackend->setToolTip(tr("Capture backend. Switching recreates the camera "
                                    "and re-scans devices."));
     connect(m_cameraBackend, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int) { enumerateCameras(); });
+            this, [this](int) { enumerateCameras(); updateCameraResolutionUI(); });
     form->addRow(tr("Backend:"), m_cameraBackend);
 
     // Camera device selector with refresh button
@@ -83,19 +83,42 @@ void SettingsDialog::createCameraTab(QTabWidget* tabs)
     // synced — calling it here would scan V4L2 (combo still at its default)
     // even when the active backend is RealSense.
 
+    // ── V4L2: free W/H/FPS spinboxes (hidden for RealSense) ─────────────
+    m_v4l2ResWidget = new QWidget;
+    auto* v4l2Form  = new QFormLayout(m_v4l2ResWidget);
+    v4l2Form->setContentsMargins(0, 0, 0, 0);
+
     m_cameraWidth = new QSpinBox;
     m_cameraWidth->setRange(320, 7680);
     m_cameraWidth->setSingleStep(160);
-    form->addRow(tr("Width:"), m_cameraWidth);
+    v4l2Form->addRow(tr("Width:"), m_cameraWidth);
 
     m_cameraHeight = new QSpinBox;
     m_cameraHeight->setRange(240, 4320);
     m_cameraHeight->setSingleStep(120);
-    form->addRow(tr("Height:"), m_cameraHeight);
+    v4l2Form->addRow(tr("Height:"), m_cameraHeight);
 
     m_cameraFps = new QSpinBox;
     m_cameraFps->setRange(1, 120);
-    form->addRow(tr("FPS:"), m_cameraFps);
+    v4l2Form->addRow(tr("FPS:"), m_cameraFps);
+
+    form->addRow(m_v4l2ResWidget);
+
+    // ── RealSense: fixed resolution profiles (hidden for V4L2) ───────────
+    m_rsResWidget = new QWidget;
+    auto* rsForm   = new QFormLayout(m_rsResWidget);
+    rsForm->setContentsMargins(0, 0, 0, 0);
+
+    m_rsResCombo = new QComboBox;
+    m_rsResCombo->setToolTip(tr("D405 supported color stream resolutions. "
+                                "Select a profile and click OK to apply."));
+    // index maps to kRsProfiles[] in accept() / loadFromConfig()
+    m_rsResCombo->addItem(tr("848 × 480 @ 30 fps  —  Depth Precision (recommended)"));
+    m_rsResCombo->addItem(tr("1280 × 720 @ 30 fps  —  Visual Detail"));
+    m_rsResCombo->addItem(tr("480 × 270 @ 90 fps  —  Fast Preview"));
+    rsForm->addRow(tr("Resolution:"), m_rsResCombo);
+
+    form->addRow(m_rsResWidget);
 
     m_cameraHwDecode = new QCheckBox(tr("NVIDIA hardware MJPG decode (Jetson)"));
     m_cameraHwDecode->setToolTip(tr("Decode MJPG on the NVDEC/VIC blocks via GStreamer "
@@ -381,6 +404,16 @@ void SettingsDialog::loadFromConfig()
     m_cameraFps->setValue(m_config.cameraFps());
     m_cameraHwDecode->setChecked(m_config.cameraHwDecode());
 
+    // Pick the closest RealSense profile based on stored width
+    if (m_rsResCombo) {
+        const int w = m_config.cameraWidth();
+        int profileIdx = 0;  // default: 848×480
+        if (w >= 1280)       profileIdx = 1;  // 1280×720
+        else if (w <= 480)   profileIdx = 2;  // 480×270
+        m_rsResCombo->setCurrentIndex(profileIdx);
+    }
+    updateCameraResolutionUI();
+
     // Calibration
     m_calibBoardCols->setValue(m_config.calibBoardCols());
     m_calibBoardRows->setValue(m_config.calibBoardRows());
@@ -440,9 +473,24 @@ void SettingsDialog::accept()
             ? ibom::CameraBackend::RealSense : ibom::CameraBackend::V4L2);
     }
     m_config.setCameraIndex(m_cameraDevice->currentIndex());
-    m_config.setCameraWidth(m_cameraWidth->value());
-    m_config.setCameraHeight(m_cameraHeight->value());
-    m_config.setCameraFps(m_cameraFps->value());
+
+    const bool isRS = m_config.cameraBackend() == ibom::CameraBackend::RealSense;
+    if (isRS && m_rsResCombo) {
+        // Map profile index → fixed D405 color stream resolution
+        static const struct { int w, h, fps; } kRsProfiles[] = {
+            {848,  480, 30},
+            {1280, 720, 30},
+            {480,  270, 90},
+        };
+        const int pi = qBound(0, m_rsResCombo->currentIndex(), 2);
+        m_config.setCameraWidth (kRsProfiles[pi].w);
+        m_config.setCameraHeight(kRsProfiles[pi].h);
+        m_config.setCameraFps   (kRsProfiles[pi].fps);
+    } else {
+        m_config.setCameraWidth(m_cameraWidth->value());
+        m_config.setCameraHeight(m_cameraHeight->value());
+        m_config.setCameraFps(m_cameraFps->value());
+    }
     m_config.setCameraHwDecode(m_cameraHwDecode->isChecked());
 
     // Calibration
@@ -491,6 +539,14 @@ void SettingsDialog::accept()
     m_config.save();
 
     QDialog::accept();
+}
+
+void SettingsDialog::updateCameraResolutionUI()
+{
+    const bool isRS = m_cameraBackend
+        && m_cameraBackend->currentData().toInt() == 1;
+    if (m_v4l2ResWidget) m_v4l2ResWidget->setVisible(!isRS);
+    if (m_rsResWidget)   m_rsResWidget->setVisible(isRS);
 }
 
 void SettingsDialog::enumerateCameras()
