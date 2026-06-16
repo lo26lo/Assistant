@@ -157,6 +157,30 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
         if (wasCapturing) { m_camera->stop(); m_camera->start(); }
         QTimer::singleShot(900, this, &RealSenseControlsDialog::rebuild);
     });
+
+    // Left IR camera — Intel tuning guide: use IR for reflective PCB surfaces
+    // (solder joints, bare metal pads). Y8 grayscale, no color saturation.
+    auto* irRow = new QWidget;
+    auto* irHl  = new QHBoxLayout(irRow);
+    irHl->setContentsMargins(0, 0, 0, 0);
+    auto* irSw = new ToggleSwitch;
+    irSw->setChecked(m_camera && m_camera->emitInfrared());
+    irSw->setOffset(irSw->isChecked() ? 1.0f : 0.0f);
+    irSw->setToolTip(tr("Affiche la caméra IR gauche (niveaux de gris) à la place de\n"
+                        "la couleur — évite la saturation sur le métal/soudure brillant.\n"
+                        "Nécessite le flux Depth actif."));
+    auto* irStateLabel = new QLabel(m_camera && m_camera->emitInfrared() ? tr("actif") : "—");
+    irHl->addWidget(irSw);
+    irHl->addSpacing(8);
+    irHl->addWidget(irStateLabel, 1);
+    streamForm->addRow(tr("IR gauche (niveaux de gris):"), irRow);
+
+    connect(irSw, &ToggleSwitch::toggled, this, [this, irStateLabel](bool on) {
+        if (!m_camera) return;
+        m_camera->setEmitInfrared(on);
+        irStateLabel->setText(on ? tr("actif") : "—");
+    });
+
     root->addWidget(streamBox);
 
     // Poll per-stream FPS ~1 Hz for the live health readout.

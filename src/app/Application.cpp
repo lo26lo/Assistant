@@ -817,10 +817,15 @@ void Application::wireCameraSignals()
         // scope. The copy is shared (COW) between the camera view and the
         // remote stream.
         const QImage display = qimg.copy();
-        // In depth-view mode the colorized depth map drives the view instead
-        // (pushed by the depthFrameReady handler). Keep the overlay/remote
+        // In depth-view mode the colorized depth map drives the view instead.
+        // In IR mode the infraredReady handler drives it. Keep overlay/remote
         // paths fed with the color image regardless.
-        if (!m_depthViewMode)
+        bool irActive = false;
+#ifdef IBOM_HAVE_REALSENSE
+        if (auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get()))
+            irActive = rs->emitInfrared();
+#endif
+        if (!m_depthViewMode && !irActive)
             m_mainWindow->cameraView()->updateFrame(display);
 
         // Mirror to remote browser clients (RemoteView throttles internally).
@@ -1073,12 +1078,26 @@ void Application::wireCameraSignals()
         }, Qt::QueuedConnection);
 
         // Histogram-equalized colorized depth (rs2::colorizer) → camera view
-        // when the 2D depth view mode is active. Emitted as a BGR Mat.
+        // when the 2D depth view mode is active and IR view is not overriding.
         connect(rs, &camera::RealSenseCapture::colorizedDepthReady, this,
-                [this](ibom::camera::FrameRef rgb) {
-            if (!m_depthViewMode || !rgb || rgb->empty()) return;
+                [this, rs](ibom::camera::FrameRef rgb) {
+            if (!m_depthViewMode || rs->emitInfrared() || !rgb || rgb->empty()) return;
             cv::Mat disp;
             cv::cvtColor(*rgb, disp, cv::COLOR_BGR2RGB);
+            QImage qimg(disp.data, disp.cols, disp.rows,
+                        static_cast<int>(disp.step), QImage::Format_RGB888);
+            if (auto* view = m_mainWindow->cameraView())
+                view->updateFrame(qimg.copy());
+        }, Qt::QueuedConnection);
+
+        // Left IR camera (grayscale-as-BGR) → camera view when IR mode active.
+        // IR view overrides both color and colorized depth — useful for
+        // reflective surfaces (solder, bare metal) per Intel tuning guide.
+        connect(rs, &camera::RealSenseCapture::infraredReady, this,
+                [this](ibom::camera::FrameRef ir) {
+            if (!ir || ir->empty()) return;
+            cv::Mat disp;
+            cv::cvtColor(*ir, disp, cv::COLOR_BGR2RGB);
             QImage qimg(disp.data, disp.cols, disp.rows,
                         static_cast<int>(disp.step), QImage::Format_RGB888);
             if (auto* view = m_mainWindow->cameraView())
@@ -1088,6 +1107,7 @@ void Application::wireCameraSignals()
         // Only pay these costs while the respective views are shown.
         rs->setEmitPointCloud(m_pointCloudMode);
         rs->setEmitColorizedDepth(m_depthViewMode);
+        rs->setEmitInfrared(false);  // off by default; toggled in RealSenseControlsDialog
     }
 #endif
 

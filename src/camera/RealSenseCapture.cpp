@@ -293,8 +293,12 @@ void RealSenseCapture::captureLoop()
     // the color frame so depth[y,x] maps to color pixel [y,x].
     const bool depthOn = m_depthStreamEnabled.load();
     cfg.enable_stream(RS2_STREAM_COLOR, m_width, m_height, RS2_FORMAT_BGR8, m_fps);
-    if (depthOn)
+    if (depthOn) {
         cfg.enable_stream(RS2_STREAM_DEPTH, m_width, m_height, RS2_FORMAT_Z16, m_fps);
+        // Also enable left IR (Y8) — same stereo sensor as depth, negligible overhead.
+        // Always configured so the emitInfrared() toggle works without a pipeline restart.
+        cfg.enable_stream(RS2_STREAM_INFRARED, 1, m_width, m_height, RS2_FORMAT_Y8, m_fps);
+    }
 
     // Optional rosbag recording (Viewer-style): record all streams to a .bag.
     {
@@ -323,8 +327,10 @@ void RealSenseCapture::captureLoop()
         try {
             rs2::config fallback;
             fallback.enable_stream(RS2_STREAM_COLOR, RS2_FORMAT_BGR8);
-            if (depthOn)
+            if (depthOn) {
                 fallback.enable_stream(RS2_STREAM_DEPTH, RS2_FORMAT_Z16);
+                fallback.enable_stream(RS2_STREAM_INFRARED, 1, RS2_FORMAT_Y8);
+            }
             profile = pipe.start(fallback);
             started = true;
         } catch (const rs2::error& e2) {
@@ -549,6 +555,20 @@ void RealSenseCapture::captureLoop()
                 } catch (const rs2::error& e) {
                     spdlog::debug("RealSense pointcloud calc failed: {}", e.what());
                 }
+            }
+        }
+
+        // ── Left IR camera (Intel tuning guide: use IR for reflective surfaces) ──
+        // The stereo left camera (Y8 grayscale) avoids color-channel saturation
+        // on shiny solder joints and bare PCB metal. Emitted only when requested.
+        if (m_emitIR.load()) {
+            if (rs2::video_frame ir = fs.get_infrared_frame(1)) {
+                const cv::Mat y8(cv::Size(ir.get_width(), ir.get_height()),
+                                 CV_8UC1, const_cast<void*>(ir.get_data()),
+                                 cv::Mat::AUTO_STEP);
+                cv::Mat bgr;
+                cv::cvtColor(y8, bgr, cv::COLOR_GRAY2BGR);
+                emit infraredReady(std::make_shared<const cv::Mat>(std::move(bgr)));
             }
         }
 

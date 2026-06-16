@@ -157,6 +157,14 @@ public:
     /// default. When on, colorizedDepthReady() fires each frame.
     void setEmitColorizedDepth(bool on) { m_emitColorDepth.store(on); }
 
+    /// Enable/disable emitting the left infrared camera (Y8 grayscale, same
+    /// resolution as depth). Off by default. When on, infraredReady() fires
+    /// each frame. Useful for reflective surfaces (solder, bare metal) where
+    /// the color camera clips — per Intel's "Tuning depth cameras" guide.
+    /// Requires depth stream active; takes effect without restart.
+    void setEmitInfrared(bool on) { m_emitIR.store(on); }
+    bool emitInfrared() const { return m_emitIR.load(); }
+
 signals:
     /// Emitted alongside frameReady when depth is available: a CV_16UC1 depth
     /// map in millimetres, aligned to the color frame. Shared (no pixel copy).
@@ -169,6 +177,10 @@ signals:
     /// Emitted when colorized-depth emission is enabled: an RGB image of the
     /// depth, histogram-equalized by rs2::colorizer (aligned to color). Shared.
     void colorizedDepthReady(ibom::camera::FrameRef rgb);
+
+    /// Emitted when IR emission is enabled: left IR camera (Y8→BGR, grayscale).
+    /// Not aligned to color (same sensor as depth — near-perfect overlap).
+    void infraredReady(ibom::camera::FrameRef ir);
 
     /// Result of a requestPlyExport(): ok + the path written (or error text).
     void plyExportFinished(bool ok, const QString& pathOrError);
@@ -191,6 +203,7 @@ private:
     std::atomic<float>  m_pendingPreset{-1.0f};  // Visual Preset to apply on start
     std::atomic<bool>   m_emitCloud{false};       // compute rs2::pointcloud when true
     std::atomic<bool>   m_emitColorDepth{false};  // colorize depth via rs2::colorizer
+    std::atomic<bool>   m_emitIR{false};          // emit left IR camera (Y8) when true
     std::atomic<bool>   m_calibPending{false};    // run on-chip self-calibration
     std::atomic<bool>   m_depthStreamEnabled{true};
     std::atomic<double> m_colorFps{0.0};
