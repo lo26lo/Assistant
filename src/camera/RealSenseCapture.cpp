@@ -101,6 +101,13 @@ bool RealSenseCapture::start()
         spdlog::warn("RealSense already capturing.");
         return true;
     }
+    // Join any finished-but-joinable thread from a prior self-exit before
+    // reassigning m_thread (destroying a joinable std::thread → terminate).
+    if (m_thread) {
+        if (m_thread->joinable())
+            m_thread->join();
+        m_thread.reset();
+    }
     spdlog::info("Starting RealSense capture (device {})...", m_deviceIndex);
     m_capturing.store(true);
     m_thread = std::make_unique<std::thread>(&RealSenseCapture::captureLoop, this);

@@ -61,6 +61,15 @@ bool CameraCapture::start()
         return true;
     }
 
+    // A previous captureLoop may have self-exited (e.g. failed open) leaving a
+    // finished-but-joinable thread. Reassigning m_thread below would destroy a
+    // joinable std::thread → std::terminate(). Join it first.
+    if (m_thread) {
+        if (m_thread->joinable())
+            m_thread->join();
+        m_thread.reset();
+    }
+
     spdlog::info("Starting camera capture on device {}...", m_deviceIndex);
 
     m_capturing.store(true);
@@ -72,18 +81,24 @@ bool CameraCapture::start()
 
 void CameraCapture::stop()
 {
-    if (!m_capturing.load()) return;
+    // Always join/reset the thread if present — even if the capture loop already
+    // cleared m_capturing on its own (error exit). An early return here would
+    // leave a joinable thread that std::terminate()s on destruction or on the
+    // next start(). (Mirrors RealSenseCapture::stop().)
+    const bool wasCapturing = m_capturing.exchange(false);
+    if (wasCapturing)
+        spdlog::info("Stopping camera capture...");
 
-    spdlog::info("Stopping camera capture...");
-    m_capturing.store(false);
-
-    if (m_thread && m_thread->joinable()) {
+    if (m_thread && m_thread->joinable())
         m_thread->join();
-    }
     m_thread.reset();
 
-    emit captureStateChanged(false);
-    spdlog::info("Camera capture stopped.");
+    // Only signal the transition if we were the ones stopping it; if the loop
+    // exited by itself it already emitted captureStateChanged(false).
+    if (wasCapturing) {
+        emit captureStateChanged(false);
+        spdlog::info("Camera capture stopped.");
+    }
 }
 
 FrameRef CameraCapture::latestFrame() const

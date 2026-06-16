@@ -122,7 +122,18 @@ def grab_frames_realsense(n_frames, width=848, height=480, fps=30, show=False):
     try:
         import pyrealsense2 as rs
     except ImportError:
-        sys.exit("[ERROR] pyrealsense2 not installed. pip install pyrealsense2")
+        sys.exit(
+            "[ERROR] pyrealsense2 not available.\n"
+            "  Options:\n"
+            "   1. Build librealsense with -DBUILD_PYTHON_BINDINGS=true, or\n"
+            "      pip install pyrealsense2  (x86 wheels only; on Jetson use the\n"
+            "      bindings produced by the librealsense build).\n"
+            "   2. The D405 also exposes a UVC colour node — measure it as a plain\n"
+            "      camera with a checkerboard:\n"
+            "        python3 scripts/measure_fov.py --camera v4l2 --device <N> \\\n"
+            "            --checkerboard 7 5 --square-size 5.0\n"
+            "   3. Or just use the in-app Dev → Measure FOV & Scale dialog, which\n"
+            "      reads the D405 depth-derived scale live.")
     pipeline = rs.pipeline()
     cfg = rs.config()
     cfg.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)

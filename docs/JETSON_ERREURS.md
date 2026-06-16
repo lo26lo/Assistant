@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 21 | 2026-06-16 | CameraCapture.cpp / V4L2 | ✅ RÉSOLU | [`terminate called without an active exception` (SIGABRT) au switch caméra/profil — `std::thread` joignable détruit après auto-exit du captureLoop](#erreur-21--terminate-called-without-an-active-exception-au-switch-camera) |
 | 20 | 2026-06-16 | PointCloudView.cpp / GUI | ✅ RÉSOLU | [`initializeFunctions was not declared` — faute de frappe pour `initializeOpenGLFunctions`](#erreur-20--initializefunctions-was-not-declared) |
 | 19 | 2026-06-15 | SettingsDialog.h / GUI | ✅ RÉSOLU | [`SettingsDialog::accept() is private` — override sous `private slots:` appelé par MainWindow](#erreur-19--settingsdialogaccept-is-private) |
 | 18 | 2026-06-14 | CameraCalibration.cpp | 🟡 EN COURS | [Calibration échoue `No checkerboard patterns detected` sur damier 7×5 valide — détecteur legacy capricieux](#erreur-18--calibration-echoue-sur-damier-valide--detecteur-legacy) |
@@ -41,6 +42,43 @@
 - 🟡 CONTOURNÉ — solution temporaire en place
 - ✅ RÉSOLU — fix appliqué et validé
 - 📝 INFO — note pour mémoire (pas un bug, juste un piège)
+
+---
+
+## ERREUR 21 — `terminate called without an active exception` (SIGABRT) au switch caméra
+
+**Date :** 2026-06-16
+**Composant :** CameraCapture.cpp / V4L2
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) suite 41
+
+### Symptôme
+Crash (abort) après avoir cyclé sur plusieurs devices caméra puis changé de profil/backend (ou à la fermeture). Le device 0 ne s'ouvrait pas (« available but can't be used to capture by index »).
+
+```
+[18:05:46.077] Camera settings applied: device=0 1920x1080 @30fps
+terminate called without an active exception
+[18:05:48.816] UNHANDLED SIGNAL 6 (Aborted)
+  ...
+  libstdc++ __verbose_terminate_handler
+  QComboBox::currentIndexChanged(int)
+  ...itemSelected (mouse event)
+Aborted (core dumped)
+```
+
+### Contexte
+- Combo profil (toolbar) ou combo device (ControlPanel) → `switchProfile`/`cameraSettingsChanged`.
+- Un device V4L2 ne pouvait pas s'ouvrir → `captureLoop()` mettait `m_capturing=false` et sortait **tout seul**.
+- Reproductible : oui, dès qu'un device échoue à l'ouverture puis qu'on détruit/relance la caméra.
+
+### Cause
+`m_capturing` servait à la fois de « doit continuer la boucle » **et** de proxy « le thread est vivant ». Quand `captureLoop()` s'auto-terminait (échec d'open), `m_capturing` passait à `false` mais l'objet `std::thread` restait **joignable** (fini mais jamais joint). Or `CameraCapture::stop()` faisait `if (!m_capturing.load()) return;` **avant** le join → au `m_camera.reset()` (switch profil) ou au destructeur, le `unique_ptr<std::thread>` détruisait un thread joignable → `std::terminate()` → SIGABRT. `RealSenseCapture::stop()` avait déjà été corrigé (entrée non loggée à l'époque), mais **pas** `CameraCapture::stop()`.
+
+### Solution appliquée ✅
+`CameraCapture::stop()` : ne plus early-return sur `!m_capturing` — toujours `join()` + `reset()` le thread s'il existe (via `m_capturing.exchange(false)` pour ne logger/émettre que si on était bien en train de capturer). Même logique que `RealSenseCapture::stop()`. En complément, `start()` (CameraCapture **et** RealSenseCapture) joint/reset un éventuel thread résiduel **avant** de réassigner `m_thread` (sinon la réassignation détruirait un thread joignable). Diff dans `src/camera/CameraCapture.cpp` + `src/camera/RealSenseCapture.cpp`.
+
+### Leçon
+Ne jamais utiliser un flag « en cours » comme proxy de « thread joignable ». Un `std::thread` doit être joint/détaché avant toute destruction ou réassignation, **indépendamment** de l'état logique de la boucle.
 
 ---
 

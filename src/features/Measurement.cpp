@@ -21,8 +21,13 @@ void Measurement::setMode(Mode mode)
 
 void Measurement::setCalibration(double pixelsPerMM)
 {
+    // Called every frame by the live scale update (depth / homography). Only act
+    // and log on a meaningful change — otherwise this floods the event log with
+    // identical "calibration set to X px/mm" lines at the frame rate.
+    if (std::abs(pixelsPerMM - m_pixelsPerMM) < 0.05)
+        return;
     m_pixelsPerMM = pixelsPerMM;
-    spdlog::info("Measurement: calibration set to {:.2f} px/mm", pixelsPerMM);
+    spdlog::debug("Measurement: calibration set to {:.2f} px/mm", pixelsPerMM);
 }
 
 void Measurement::addPoint(QPointF point)
