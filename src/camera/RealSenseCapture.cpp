@@ -292,7 +292,7 @@ bool RealSenseCapture::setSecondPeakThreshold(int value)
             return false;
         }
         STDepthControlGroup dc = adv.get_depth_control();
-        dc.secondPeakThreshold = static_cast<float>(value);
+        dc.deepSeaSecondPeakThreshold = static_cast<float>(value);
         adv.set_depth_control(dc);
         spdlog::info("RealSense second peak threshold set to {}", value);
         return true;
@@ -309,7 +309,7 @@ int RealSenseCapture::secondPeakThreshold() const
     try {
         auto adv = m_device->as<rs400::advanced_mode>();
         if (!adv || !adv.is_enabled()) return -1;
-        return static_cast<int>(adv.get_depth_control().secondPeakThreshold);
+        return static_cast<int>(adv.get_depth_control().deepSeaSecondPeakThreshold);
     } catch (const rs2::error&) {
         return -1;
     }
