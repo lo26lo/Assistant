@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 26 | 2026-06-16 | Application.cpp / Config | ✅ RÉSOLU | [Scale microscope faux (3.47 px/mm) — `opticalMultiplier` 0.3 multiplié par-dessus la calibration checkerboard (double comptage optique)](#erreur-26--scale-microscope-faux--double-comptage-optique) |
 | 25 | 2026-06-16 | Application.cpp / StatsPanel | ✅ RÉSOLU | [Distance / Depth fill périmés affichés pour le microscope (stats depth D405 jamais réinitialisées)](#erreur-25--distance--depth-fill-perimes-affiches-pour-le-microscope) |
 | 24 | 2026-06-16 | Application.cpp / RealSense | ✅ RÉSOLU | [D405 « Factory fx=0.0 px » — `updateCalibrationUI()` lit `colorFx()` avant la mise en cache des intrinsics](#erreur-24--d405-factory-fx00-px--intrinsics-lues-trop-tot) |
 | 23 | 2026-06-16 | CameraCapture.cpp / V4L2 enum | ✅ RÉSOLU | [Liste caméras du profil Microscope inclut les nœuds UVC du D405 (RealSense vu deux fois)](#erreur-23--liste-cameras-du-profil-microscope-inclut-les-noeuds-uvc-du-d405) |
@@ -46,6 +47,33 @@
 - 🟡 CONTOURNÉ — solution temporaire en place
 - ✅ RÉSOLU — fix appliqué et validé
 - 📝 INFO — note pour mémoire (pas un bug, juste un piège)
+
+---
+
+## ERREUR 26 — Scale microscope faux — double comptage optique
+
+**Date :** 2026-06-16
+**Composant :** Application (calibration-complete + settings-apply) / Config (profil Microscope)
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) suite 45
+
+### Symptôme
+Après une calibration checkerboard réussie du microscope (« Pixels per mm: 11.58 »), le panneau Statistics affiche « Scale: 3.5 px/mm ». 3.5 = 11.58 × 0.3 — l'overlay et les mesures utilisent donc une échelle physiquement fausse.
+
+### Contexte optique (réel)
+Microscope = caméra + **0.35× (adaptateur sous la caméra)** + **0.7× (lentille du microscope)** + bague d'éclairage polarisée (sans effet sur l'échelle). Le profil Microscope portait `opticalMultiplier = 0.3` (approximation de la réduction optique).
+
+### Cause
+Le `opticalMultiplier` était multiplié **par-dessus** le résultat de la calibration. Or la calibration checkerboard mesure le px/mm à travers **toute** la chaîne optique (capteur + 0.35× + 0.7×) — c'est déjà l'échelle effective réelle. La remultiplier par 0.3 double-compte l'optique → 3.47, qui ne correspond à rien. Les chemins homography/depth, eux, fixaient déjà `m_currentPixelsPerMm` **sans** multiplier → incohérence : seule la voie calibration était biaisée.
+
+### Solution appliquée ✅ (calibration autoritaire)
+1. Calibration terminée (`onCalibrationComplete`) : `m_currentPixelsPerMm = m_basePixelsPerMm` (suppression de `* opticalMultiplier()`).
+2. Handler settings-apply : multiplier appliqué **uniquement si la caméra n'est pas calibrée** (`!m_calibration->isCalibrated()`). Une vraie calibration prime toujours.
+3. Défaut du profil Microscope : `opticalMultiplier` 0.3 → **1.0** (neutre).
+Résultat : calibration / homography / depth donnent tous l'échelle vraie ; le multiplier n'est plus qu'un réglage manuel pour le cas **non calibré**.
+
+### Leçon
+Une calibration (checkerboard, ou depth `fx/distance`, ou homographie sur pads iBOM) capture **déjà** l'effet de toute l'optique physique. Ne jamais ré-appliquer un facteur optique « nominal » par-dessus une mesure réelle — c'est un double comptage. Les facteurs de lentille (0.35×, 0.7×…) n'ont pas à être saisis : ils sont mesurés par la calibration.
 
 ---
 

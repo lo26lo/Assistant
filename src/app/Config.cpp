@@ -32,7 +32,11 @@ Config::Config()
     m_profiles[1].fps              = 30;
     m_profiles[1].hwDecode         = false;
     m_profiles[1].scaleMethod      = ScaleMethod::Homography;
-    m_profiles[1].opticalMultiplier = 0.3f;
+    // 1.0 = neutral. The microscope's optical chain (e.g. 0.35× camera adapter
+    // + 0.7× lens) is captured by the checkerboard calibration, which measures
+    // px/mm through all of it — so no separate multiplier is needed. Leaving a
+    // reducer factor here would double-count against a real calibration.
+    m_profiles[1].opticalMultiplier = 1.0f;
 }
 
 void Config::setActiveProfileIndex(int idx)

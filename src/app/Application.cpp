@@ -1565,9 +1565,14 @@ void Application::connectControlSignals()
         // Remote view may have been toggled or moved to another port.
         applyRemoteViewConfig();
 
-        // Apply optical multiplier change to pixels-per-mm
+        // Apply optical multiplier change to pixels-per-mm — but ONLY when the
+        // camera isn't checkerboard-calibrated. A real calibration already
+        // captures the full optical chain (the microscope's 0.35× adapter +
+        // 0.7× lens, etc.), so the multiplier must not skew it; it's purely a
+        // manual nudge for the un-calibrated nominal case.
+        const bool calibrated = m_calibration && m_calibration->isCalibrated();
         float mult = m_config->opticalMultiplier();
-        if (mult > 0 && m_basePixelsPerMm > 0) {
+        if (!calibrated && mult > 0 && m_basePixelsPerMm > 0) {
             m_currentPixelsPerMm = m_basePixelsPerMm * mult;
             if (m_calibration)
                 m_calibration->setPixelsPerMm(m_currentPixelsPerMm);
@@ -2504,7 +2509,13 @@ void Application::runCalibration()
     spdlog::info("Calibration succeeded: error={:.4f}, pixels/mm={:.2f}, saved to {}",
                  error, m_calibration->pixelsPerMm(), calibPath.toStdString());
     m_basePixelsPerMm = m_calibration->pixelsPerMm();
-    m_currentPixelsPerMm = m_basePixelsPerMm * m_config->opticalMultiplier();
+    // A checkerboard calibration measures px/mm through the ENTIRE optical
+    // chain (sensor + every reducer/lens already in place), so its result is
+    // the true effective scale. Do NOT re-apply opticalMultiplier here — that
+    // would double-count the optics (e.g. 11.58 × 0.3 = 3.47 px/mm, which is
+    // physically meaningless). The multiplier is only a fallback for an
+    // un-calibrated nominal scale (see the settings-apply handler).
+    m_currentPixelsPerMm = m_basePixelsPerMm;
     if (auto* sp = m_mainWindow->statsPanel())
         sp->setScale(m_currentPixelsPerMm);
     m_mainWindow->updateStatusMessage(
