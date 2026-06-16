@@ -19,6 +19,20 @@ L'idée initiale (D405 grand-champ qui ancre la position + microscope en gros pl
 
 **Conséquence positive** : zéro plumbing dual-camera, zéro nouvelle classe caméra. Le gros du travail est dans la **robustesse de la localisation à fort grossissement** et la **gestion du zoom**.
 
+### Rôle résiduel de la D405 (et bras orientable)
+
+La D405 ne participe plus au placement (ne résout pas le 0201). Son **seul** rôle restant est l'**inspection 3D / profil de hauteur** : volume de soudure, coplanarité, composants soulevés/tombstones, gauchissement de carte.
+
+Un **bras articulé** pour la D405 a une utilité **pour la flexibilité, pas pour figer un angle** :
+
+| Apport | Limite |
+|--------|--------|
+| L'**escamoter** pendant le travail micro, la remettre pour une passe 3D (gain d'espace) | Chaque déplacement change la pose D405↔carte → re-enregistrement nécessaire |
+| Vue **légèrement oblique** : révèle ménisques de soudure, ponts, manque, profil vertical | Angle rasant → depth dégradée + ombres/occlusions IR |
+| Captures **multi-angles** pour relief plus complet | Carte de hauteur fiable = vue **quasi verticale** (nadir), pas inclinée |
+
+**Reco** : bras oui pour escamoter/repositionner ; position principale **quasi verticale (~10–20° max)**. **Mais** ne pas investir d'effort matériel sur la D405 tant que le pipeline microscope (Étape 1) n'est pas validé — c'est un accessoire d'inspection optionnel, pas un maillon du placement.
+
 ---
 
 ## 1. Le vrai problème
