@@ -9,6 +9,15 @@
 #include <chrono>
 #include <algorithm>
 
+#ifdef __linux__
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstring>
+#include <cstdint>
+#endif
+
 namespace ibom::camera {
 
 namespace {
@@ -128,18 +137,48 @@ QSize CameraCapture::resolution() const
     return QSize(m_width, m_height);
 }
 
-std::vector<std::string> CameraCapture::listDevices()
+std::vector<std::pair<int, std::string>> CameraCapture::listDevices()
 {
-    std::vector<std::string> devices;
+    std::vector<std::pair<int, std::string>> devices;
 
+#ifdef __linux__
+    // Probe each /dev/video<N> node directly with VIDIOC_QUERYCAP. This:
+    //  - returns the REAL index N (not a list position), so gaps are preserved;
+    //  - reads the card name so the UI can tell the microscope from the D405;
+    //  - skips non-capture nodes (metadata / output) that would fail to open;
+    //  - avoids the cv::VideoCapture::open() probe, which floods the log with
+    //    GStreamer/obsensor warnings on every missing index.
+    for (int i = 0; i < 16; ++i) {
+        const std::string path = "/dev/video" + std::to_string(i);
+        // O_RDONLY: VIDIOC_QUERYCAP is a read-only query, and this is less likely
+        // to clash with a device already held open by the capture thread.
+        const int fd = ::open(path.c_str(), O_RDONLY | O_NONBLOCK);
+        if (fd < 0)
+            continue;
+
+        v4l2_capability cap{};
+        if (::ioctl(fd, VIDIOC_QUERYCAP, &cap) == 0) {
+            const uint32_t caps = (cap.capabilities & V4L2_CAP_DEVICE_CAPS)
+                ? cap.device_caps : cap.capabilities;
+            if (caps & V4L2_CAP_VIDEO_CAPTURE) {
+                std::string name = (cap.card[0] != 0)
+                    ? std::string(reinterpret_cast<const char*>(cap.card))
+                    : ("Camera " + std::to_string(i));
+                devices.emplace_back(i, std::move(name));
+            }
+        }
+        ::close(fd);
+    }
+#else
     for (int i = 0; i < 10; ++i) {
         cv::VideoCapture cap;
         cap.open(i, cv::CAP_V4L2);
         if (cap.isOpened()) {
-            devices.push_back("Camera " + std::to_string(i));
+            devices.emplace_back(i, "Camera " + std::to_string(i));
             cap.release();
         }
     }
+#endif
 
     return devices;
 }

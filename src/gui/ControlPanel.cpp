@@ -127,7 +127,7 @@ QGroupBox* ControlPanel::createCameraGroup()
     auto* devForm = new QFormLayout;
     devForm->setLabelAlignment(Qt::AlignRight);
     m_cameraDevice = new QComboBox;
-    m_cameraDevice->addItem(tr("Default (0)"));
+    m_cameraDevice->addItem(tr("Default (0)"), 0);
     // Long device names (e.g. "Intel RealSense D405 <serial>") must not force
     // the dock wider — let the combo shrink and elide instead.
     m_cameraDevice->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
@@ -160,7 +160,7 @@ QGroupBox* ControlPanel::createCameraGroup()
 
     auto* applyBtn = new QPushButton(tr("Apply Camera"));
     connect(applyBtn, &QPushButton::clicked, this, [this]() {
-        emit cameraSettingsChanged(m_cameraDevice->currentIndex(),
+        emit cameraSettingsChanged(cameraIndex(),
                                     m_camWidth->value(), m_camHeight->value(),
                                     m_camFps->value());
     });
@@ -251,16 +251,30 @@ bool ControlPanel::showFabrication() const { return m_showFabrication->isChecked
 bool ControlPanel::showHeatmap() const { return m_showHeatmap->isChecked(); }
 bool ControlPanel::autoInspect() const { return m_autoInspect->isChecked(); }
 
-int ControlPanel::cameraIndex()  const { return m_cameraDevice->currentIndex(); }
+int ControlPanel::cameraIndex()  const
+{
+    // The real /dev/video index is stored as item data (see setCameraDevices);
+    // fall back to the list position only for legacy/empty entries.
+    const QVariant d = m_cameraDevice->currentData();
+    return d.isValid() ? d.toInt() : m_cameraDevice->currentIndex();
+}
 int ControlPanel::cameraWidth()  const { return m_camWidth->value(); }
 int ControlPanel::cameraHeight() const { return m_camHeight->value(); }
 int ControlPanel::cameraFps()    const { return m_camFps->value(); }
 
-void ControlPanel::setCameraDevices(const QStringList& devices)
+void ControlPanel::setCameraDevices(const QStringList& labels,
+                                    const QList<int>& indices, int currentIndex)
 {
+    QSignalBlocker block(m_cameraDevice);
     m_cameraDevice->clear();
-    for (const auto& dev : devices) {
-        m_cameraDevice->addItem(dev);
+    for (int i = 0; i < labels.size(); ++i) {
+        const int realIdx = (i < indices.size()) ? indices[i] : i;
+        m_cameraDevice->addItem(labels[i], realIdx);
+    }
+    if (currentIndex >= 0) {
+        const int pos = m_cameraDevice->findData(currentIndex);
+        if (pos >= 0)
+            m_cameraDevice->setCurrentIndex(pos);
     }
 }
 

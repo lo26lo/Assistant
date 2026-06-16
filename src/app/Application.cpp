@@ -148,23 +148,11 @@ bool Application::initialize()
     // the engine (minutes); the app is fully usable without it meanwhile.
     initializeAI();
 
-    // Enumerate cameras and populate ControlPanel.
-    // The capture pipeline opens devices by index via OpenCV/V4L2, so we
-    // enumerate the same way (CameraCapture::listDevices). QMediaDevices is
-    // only queried for friendlier labels: on Jetson-in-Docker its multimedia
-    // backend frequently fails to see /dev/video* even when V4L2 capture works
-    // perfectly — relying on it alone yields "0 cameras" on a working device.
-    {
-        refreshCameraDeviceList();
-        // Select the configured camera index
-        int idx = m_config->cameraIndex();
-        if (auto* cp = m_mainWindow->controlPanel()) {
-            if (auto* combo = cp->findChild<QComboBox*>()) {
-                if (idx >= 0 && idx < combo->count())
-                    combo->setCurrentIndex(idx);
-            }
-        }
-    }
+    // Enumerate cameras and populate ControlPanel. The capture pipeline opens
+    // devices by their real /dev/video index via V4L2 (VIDIOC_QUERYCAP), so the
+    // combo stores that index as item data and refreshCameraDeviceList() already
+    // re-selects the configured device by data — no positional fix-up here.
+    refreshCameraDeviceList();
 
     // Show main window
     m_mainWindow->show();
@@ -662,28 +650,34 @@ void Application::startComponentAnchor()
 void Application::refreshCameraDeviceList()
 {
     QStringList cameraNames;
+    QList<int>  cameraIndices;
 #ifdef IBOM_HAVE_REALSENSE
     if (m_config->cameraBackend() == CameraBackend::RealSense) {
         const auto rsDevices = camera::RealSenseCapture::listDevices();
-        for (size_t i = 0; i < rsDevices.size(); ++i)
-            cameraNames << QString("%1: %2").arg(i).arg(QString::fromStdString(rsDevices[i]));
+        for (size_t i = 0; i < rsDevices.size(); ++i) {
+            cameraNames   << QString("%1: %2").arg(i).arg(QString::fromStdString(rsDevices[i]));
+            cameraIndices << static_cast<int>(i);  // RealSense indices are positional
+        }
     } else
 #endif
     {
+        // V4L2: listDevices() returns (real /dev/video index, card name) pairs.
+        // Use the real index for both the label and the combo item data so the
+        // selected device maps to the correct node (gaps are common: the D405
+        // occupies low indices, the USB microscope a higher one).
         const auto v4lDevices = camera::CameraCapture::listDevices();
-        const auto qtCameras  = QMediaDevices::videoInputs();
-        for (size_t i = 0; i < v4lDevices.size(); ++i) {
-            const int qi = static_cast<int>(i);
-            QString label = (qi < qtCameras.size())
-                ? qtCameras[qi].description()
-                : QString::fromStdString(v4lDevices[i]);
-            cameraNames << QString("%1: %2").arg(qi).arg(label);
+        for (const auto& [idx, name] : v4lDevices) {
+            cameraNames   << QString("%1: %2").arg(idx).arg(QString::fromStdString(name));
+            cameraIndices << idx;
         }
     }
-    if (cameraNames.isEmpty())
-        cameraNames << tr("No camera detected");
+    if (cameraNames.isEmpty()) {
+        cameraNames   << tr("No camera detected");
+        cameraIndices << 0;
+    }
     if (m_mainWindow && m_mainWindow->controlPanel())
-        m_mainWindow->controlPanel()->setCameraDevices(cameraNames);
+        m_mainWindow->controlPanel()->setCameraDevices(
+            cameraNames, cameraIndices, m_config->cameraIndex());
 }
 
 void Application::openRealSenseControls()

@@ -5,6 +5,9 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <utility>
+#include <vector>
+#include <string>
 
 namespace ibom::camera {
 
@@ -43,8 +46,12 @@ public:
     void setHardwareDecode(bool enabled) override { m_hwDecode = enabled; }
     bool hardwareDecode() const { return m_hwDecode; }
 
-    /// List available camera devices.
-    static std::vector<std::string> listDevices();
+    /// List available V4L2 capture devices as (index, friendly name) pairs.
+    /// The index is the real /dev/video<N> number (NOT a list position) — it
+    /// can have gaps, so callers must use it directly for setDeviceIndex().
+    /// Only true video-capture nodes are returned (metadata / output-only
+    /// nodes are filtered out via VIDIOC_QUERYCAP on Linux).
+    static std::vector<std::pair<int, std::string>> listDevices();
 
 private:
     void captureLoop();

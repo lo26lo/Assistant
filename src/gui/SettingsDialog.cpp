@@ -415,9 +415,10 @@ void SettingsDialog::loadFromConfig()
         m_cameraBackend->setCurrentIndex(bi >= 0 ? bi : 0);
     }
     enumerateCameras();
-    int idx = m_config.cameraIndex();
-    if (idx >= 0 && idx < m_cameraDevice->count())
-        m_cameraDevice->setCurrentIndex(idx);
+    // enumerateCameras() repopulates asynchronously and re-selects the stored
+    // device by item data (the real /dev/video index), so no positional
+    // setCurrentIndex() here — that would pick the wrong node when indices have
+    // gaps (e.g. microscope at video6).
     m_cameraWidth->setValue(m_config.cameraWidth());
     m_cameraHeight->setValue(m_config.cameraHeight());
     m_cameraFps->setValue(m_config.cameraFps());
@@ -493,7 +494,11 @@ void SettingsDialog::accept()
         m_config.setCameraBackend(m_cameraBackend->currentData().toInt() == 1
             ? ibom::CameraBackend::RealSense : ibom::CameraBackend::V4L2);
     }
-    m_config.setCameraIndex(m_cameraDevice->currentIndex());
+    // Real /dev/video index is the item data, not the combo position.
+    {
+        const QVariant d = m_cameraDevice->currentData();
+        m_config.setCameraIndex(d.isValid() ? d.toInt() : m_cameraDevice->currentIndex());
+    }
 
     const bool isRS = m_config.cameraBackend() == ibom::CameraBackend::RealSense;
     if (isRS && m_rsResCombo) {
@@ -574,11 +579,12 @@ void SettingsDialog::updateCameraResolutionUI()
 
 void SettingsDialog::enumerateCameras()
 {
-    // QMediaDevices::videoInputs() can stall the GUI thread for seconds when a
-    // camera is in a bad state. Run it on a detached worker and post back.
-    int previousIndex = m_cameraDevice->currentIndex();
-    if (previousIndex < 0)
-        previousIndex = m_config.cameraIndex();
+    // Enumeration may stall briefly; run it on a detached worker and post back.
+    // The device to re-select is tracked by its real /dev/video index (item
+    // data), falling back to the stored config index — never by list position.
+    int previousIndex = m_cameraDevice->currentData().isValid()
+        ? m_cameraDevice->currentData().toInt()
+        : m_config.cameraIndex();
 
     m_cameraDevice->clear();
     m_cameraDevice->addItem(tr("Detecting cameras…"));
@@ -591,40 +597,40 @@ void SettingsDialog::enumerateCameras()
 
     std::thread([this, previousIndex, realsense]() {
         QStringList names;
+        QList<int>  indices;  // real device indices, parallel to names
 #ifdef IBOM_HAVE_REALSENSE
         if (realsense) {
             const auto rsDevices = ibom::camera::RealSenseCapture::listDevices();
-            for (size_t i = 0; i < rsDevices.size(); ++i)
-                names << QString("%1: %2").arg(i).arg(QString::fromStdString(rsDevices[i]));
+            for (size_t i = 0; i < rsDevices.size(); ++i) {
+                names   << QString("%1: %2").arg(i).arg(QString::fromStdString(rsDevices[i]));
+                indices << static_cast<int>(i);  // RealSense indices are positional
+            }
         } else
 #endif
         {
-            // Use OpenCV V4L2 enumeration (reliable on Jetson/Docker).
-            // QMediaDevices::videoInputs() is blind to /dev/video* in this environment.
+            // V4L2 (index, card name) pairs — the real /dev/video number drives
+            // both the label and the stored item data.
             const auto v4lDevices = ibom::camera::CameraCapture::listDevices();
-            const auto qtCameras  = QMediaDevices::videoInputs();
-            for (size_t i = 0; i < v4lDevices.size(); ++i) {
-                const int qi = static_cast<int>(i);
-                QString label = (qi < qtCameras.size())
-                    ? qtCameras[qi].description()
-                    : QString::fromStdString(v4lDevices[i]);
-                names << QString("%1: %2").arg(qi).arg(label);
+            for (const auto& [idx, name] : v4lDevices) {
+                names   << QString("%1: %2").arg(idx).arg(QString::fromStdString(name));
+                indices << idx;
             }
         }
         (void)realsense;
-        QMetaObject::invokeMethod(this, [this, names, previousIndex]() {
+        QMetaObject::invokeMethod(this, [this, names, indices, previousIndex]() {
             m_cameraDevice->clear();
             if (names.isEmpty()) {
                 m_cameraDevice->addItem(tr("No camera detected"));
             } else {
                 for (int i = 0; i < names.size(); ++i)
-                    m_cameraDevice->addItem(names[i], i);
+                    m_cameraDevice->addItem(names[i], indices.value(i, i));
             }
             m_cameraDevice->setEnabled(true);
             if (m_refreshCameras)
                 m_refreshCameras->setEnabled(true);
-            if (previousIndex >= 0 && previousIndex < m_cameraDevice->count())
-                m_cameraDevice->setCurrentIndex(previousIndex);
+            const int pos = m_cameraDevice->findData(previousIndex);
+            if (pos >= 0)
+                m_cameraDevice->setCurrentIndex(pos);
         }, Qt::QueuedConnection);
     }).detach();
 }

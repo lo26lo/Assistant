@@ -5,6 +5,8 @@
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QComboBox>
+#include <QList>
+#include <QStringList>
 #include <QCheckBox>
 #include <QGroupBox>
 #include <QPushButton>
@@ -32,7 +34,11 @@ public:
     int    cameraHeight()      const;
     int    cameraFps()         const;
 
-    void setCameraDevices(const QStringList& devices);
+    /// Populate the device combo. @p labels are shown to the user; @p indices
+    /// are the real V4L2 /dev/video numbers stored as item data and returned by
+    /// cameraIndex(). @p currentIndex selects the matching device if present.
+    void setCameraDevices(const QStringList& labels, const QList<int>& indices,
+                          int currentIndex = -1);
     void setConfidenceThreshold(float conf);
     /// Switch UI between USB-microscope and RealSense mode.
     /// Disables/relabels the calibration button when RealSense is active

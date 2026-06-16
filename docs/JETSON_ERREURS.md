@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 22 | 2026-06-16 | CameraCapture / GUI device combo | ✅ RÉSOLU | [Microscope inaccessible via l'UI — index combo (position) confondu avec l'index `/dev/video` réel (caméra à video6)](#erreur-22--index-combo-confondu-avec-lindex-devvideo-reel) |
 | 21 | 2026-06-16 | CameraCapture.cpp / V4L2 | ✅ RÉSOLU | [`terminate called without an active exception` (SIGABRT) au switch caméra/profil — `std::thread` joignable détruit après auto-exit du captureLoop](#erreur-21--terminate-called-without-an-active-exception-au-switch-camera) |
 | 20 | 2026-06-16 | PointCloudView.cpp / GUI | ✅ RÉSOLU | [`initializeFunctions was not declared` — faute de frappe pour `initializeOpenGLFunctions`](#erreur-20--initializefunctions-was-not-declared) |
 | 19 | 2026-06-15 | SettingsDialog.h / GUI | ✅ RÉSOLU | [`SettingsDialog::accept() is private` — override sous `private slots:` appelé par MainWindow](#erreur-19--settingsdialogaccept-is-private) |
@@ -42,6 +43,45 @@
 - 🟡 CONTOURNÉ — solution temporaire en place
 - ✅ RÉSOLU — fix appliqué et validé
 - 📝 INFO — note pour mémoire (pas un bug, juste un piège)
+
+---
+
+## ERREUR 22 — Index combo confondu avec l'index `/dev/video` réel
+
+**Date :** 2026-06-16
+**Composant :** CameraCapture::listDevices + Application/ControlPanel/SettingsDialog (combo device)
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) suite 43
+
+### Symptôme
+Aucun device caméra ne s'ouvre (« can't open camera by index » sur `/dev/video0`…`/dev/video9`), même en sélectionnant la caméra dans le menu déroulant. Dans l'énumération, **`video6` est absent** des warnings d'échec → c'est le seul node ouvrable (la vraie caméra USB).
+
+```
+Trying camera 0 with V4L2 backend ... can't open camera by index
+... video0..video5, video7..video9 échouent (video6 absent → ouvrable)
+Failed to open camera device 0 with any backend
+```
+
+### Contexte
+- Jetson + D405 (occupe des nodes `/dev/video` bas) + microscope USB sur un node plus haut (video6).
+- Le profil Microscope (index 0 par défaut) tape sur `/dev/video0` (un node D405 / non-capture) → échec.
+
+### Cause
+Triple confusion **position dans la liste** ↔ **index `/dev/video` réel** :
+1. `CameraCapture::listDevices()` renvoyait `["Camera 6"]` (index réel noyé dans la string, perdu comme info positionnelle).
+2. `refreshCameraDeviceList()` / `SettingsDialog::enumerateCameras()` étiquetaient avec la **position** (`arg(qi)`) au lieu de l'index réel, et stockaient la position comme `itemData`.
+3. `ControlPanel::cameraIndex()` / `SettingsDialog::accept()` renvoyaient `combo->currentIndex()` (= **position** du combo) comme index de device.
+
+→ Avec le microscope à video6 et un seul device listé, le combo affichait « 0: … » et sélectionner cette unique entrée appelait `setDeviceIndex(0)` → `/dev/video0` → échec. **Le microscope était littéralement inatteignable depuis l'UI.**
+
+En prime : l'énumération via `cv::VideoCapture::open(i, CAP_ANY)` sur chaque index inondait le log de warnings GStreamer/obsensor.
+
+### Solution appliquée ✅
+1. `CameraCapture::listDevices()` → renvoie `std::vector<std::pair<int,std::string>>` (index `/dev/video` **réel** + nom). Énumération Linux via `::open` + `VIDIOC_QUERYCAP` directement : (a) donne l'index réel, (b) lit le **nom de la carte** (distingue microscope ↔ D405), (c) filtre les nodes non-capture (`V4L2_CAP_VIDEO_CAPTURE`), (d) supprime le spam de warnings OpenCV.
+2. Combo : stocke l'index réel en `itemData` ; `setCameraDevices(labels, indices, currentIndex)` sélectionne via `findData`. `ControlPanel::cameraIndex()` et `SettingsDialog::accept()` lisent `currentData().toInt()`. Sélection au chargement par `findData` (jamais par position).
+
+### Leçon
+Sur Linux, les nodes `/dev/video` ont des **trous** (multi-node par device, nodes metadata, plusieurs caméras). Ne jamais assimiler « N-ième caméra ouvrable » à `/dev/video<N>` ni à la position dans un combo : transporter l'index réel de bout en bout (item data), et énumérer via `VIDIOC_QUERYCAP` pour ne garder que les nodes capture.
 
 ---
 
