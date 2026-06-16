@@ -61,6 +61,12 @@ MainWindow::MainWindow(Application* app, QWidget* parent)
     m_viewModeBar->show();
     m_viewModeBar->raise();
 
+    // QStackedWidget raises the current page on each switch, which would bury
+    // the overlay — re-raise it (and reposition) whenever the page changes.
+    connect(m_centralStack, &QStackedWidget::currentChanged, this, [this](int) {
+        repositionViewModeBar();
+    });
+
     createActions();
     createMenuBar();
     createToolBar();
