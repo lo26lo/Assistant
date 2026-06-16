@@ -157,6 +157,7 @@ set(SOURCES
     src/gui/InspectionPanel.cpp
     src/gui/StatsPanel.cpp
     src/gui/DatasetPanel.cpp
+    src/gui/BoardMinimap.cpp
     src/gui/SettingsDialog.cpp
     src/gui/HelpDialog.cpp
 
@@ -225,6 +226,7 @@ set(HEADERS
     src/gui/InspectionPanel.h
     src/gui/StatsPanel.h
     src/gui/DatasetPanel.h
+    src/gui/BoardMinimap.h
     src/gui/SettingsDialog.h
     src/gui/HelpDialog.h
     src/gui/Theme.h

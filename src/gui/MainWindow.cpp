@@ -8,6 +8,7 @@
 #include "InspectionPanel.h"
 #include "StatsPanel.h"
 #include "DatasetPanel.h"
+#include "BoardMinimap.h"
 #include "SettingsDialog.h"
 #include "HelpDialog.h"
 #include "Theme.h"
@@ -446,6 +447,16 @@ void MainWindow::createDockWidgets()
     addDockWidget(Qt::LeftDockWidgetArea, datasetDock);
     tabifyDockWidget(inspDock, datasetDock);
     inspDock->raise();  // inspection remains the default left tab
+
+    // PCB minimap (left, tabified with Inspection/Dataset)
+    m_boardMinimap = new BoardMinimap(this);
+    auto* minimapDock = new QDockWidget(tr("PCB Map"), this);
+    minimapDock->setObjectName("MinimapDock");
+    minimapDock->setWidget(m_boardMinimap);
+    minimapDock->setMinimumWidth(160);
+    minimapDock->setMaximumWidth(360);
+    addDockWidget(Qt::LeftDockWidgetArea, minimapDock);
+    tabifyDockWidget(datasetDock, minimapDock);
 
     // Inspection wizard (floating, hidden by default)
     m_inspectionWizard = new InspectionWizard(this);

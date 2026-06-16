@@ -28,6 +28,7 @@ class InspectionWizard;
 class InspectionPanel;
 class StatsPanel;
 class DatasetPanel;
+class BoardMinimap;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -44,6 +45,7 @@ public:
     InspectionPanel*  inspectionPanel()  { return m_inspectionPanel; }
     StatsPanel*       statsPanel()       { return m_statsPanel; }
     DatasetPanel*     datasetPanel()     { return m_datasetPanel; }
+    BoardMinimap*     boardMinimap()     { return m_boardMinimap; }
 
     void setDarkMode(bool dark);
     void updateFpsDisplay(double fps);
@@ -130,6 +132,7 @@ private:
     InspectionPanel*  m_inspectionPanel  = nullptr;
     StatsPanel*       m_statsPanel       = nullptr;
     DatasetPanel*     m_datasetPanel     = nullptr;
+    BoardMinimap*     m_boardMinimap     = nullptr;
 
     // Menus
     QMenu* m_recentMenu = nullptr;

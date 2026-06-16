@@ -30,6 +30,7 @@
 #include "features/DatasetCreator.h"
 #include "features/RemoteView.h"
 #include "gui/DatasetPanel.h"
+#include "gui/BoardMinimap.h"
 #include "export/DataExporter.h"
 #include "export/ReportGenerator.h"
 #include "gui/Theme.h"
@@ -169,6 +170,11 @@ bool Application::initialize()
 
     // Sync profile combo to the persisted active profile.
     m_mainWindow->setActiveProfile(m_config->activeProfileIndex());
+
+    // Pass stable homography pointer to the minimap (it lives for the app's lifetime).
+    m_mainWindow->boardMinimap()->setHomography(
+        m_homography.get(),
+        QSize(m_config->cameraWidth(), m_config->cameraHeight()));
 
     // Remote browser view, if enabled in config.
     applyRemoteViewConfig();
@@ -774,6 +780,7 @@ void Application::connectSignals()
             if (m_overlayRenderer)
                 m_overlayRenderer->setHomography(*m_homography);
             updateDynamicScale();
+            m_mainWindow->boardMinimap()->update();
         }, Qt::QueuedConnection);
 
         connect(m_trackingWorker, &overlay::TrackingWorker::trackingError,
@@ -1352,6 +1359,7 @@ void Application::connectControlSignals()
         m_selectedRef = ref;
         if (m_overlayRenderer)
             m_overlayRenderer->setHighlightedRefs({ref});
+        m_mainWindow->boardMinimap()->setSelectedRef(ref);
 
         // Handle 2-component alignment selection
         if (m_alignOnComponents) {
@@ -1635,6 +1643,7 @@ void Application::connectControlSignals()
 
             if (m_homography->compute(pcbCorners, imgCorners)) {
                 m_overlayRenderer->setHomography(*m_homography);
+                m_mainWindow->boardMinimap()->update();
                 m_basePixelsPerMm = scale;
                 m_currentPixelsPerMm = scale;
                 if (auto* sp = m_mainWindow->statsPanel())
@@ -1887,6 +1896,7 @@ void Application::connectControlSignals()
             this, [this, bomPanel](const std::string& ref) {
         m_placedRefs.insert(ref);
         if (bomPanel) bomPanel->setComponentState(ref, tr("Placed"));
+        m_mainWindow->boardMinimap()->setPlacedRefs(m_placedRefs);
         // Persist on every placement: a restart (app or device) resumes
         // exactly where the inspection stopped.
         saveInspectionState();
@@ -1999,6 +2009,53 @@ void Application::connectControlSignals()
     connect(m_mainWindow.get(), &gui::MainWindow::componentAnchorRequested,
             this, [this]() { startComponentAnchor(); });
 
+    // ── BoardMinimap ────────────────────────────────────────────────
+    // anchorRequested(pcbPoint): treat as a 1-point anchor at that PCB position,
+    // centering the FOV on the clicked point.  Reuses the same similarity-transform
+    // logic that startComponentAnchor() / the CameraView click handler use.
+    connect(m_mainWindow->boardMinimap(), &gui::BoardMinimap::anchorRequested,
+            this, [this](cv::Point2f pcbPt) {
+        if (!m_ibomProject) return;
+        double scale = (m_currentPixelsPerMm > 0.0) ? m_currentPixelsPerMm
+                       : m_config->microscopeAnchorPixelsPerMm();
+        double rot  = m_config->microscopeAnchorRotationDeg() * CV_PI / 180.0;
+        double cosR = std::cos(rot) * scale;
+        double sinR = std::sin(rot) * scale;
+
+        // Center of the camera image
+        float iw = static_cast<float>(m_camera->resolution().width());
+        float ih = static_cast<float>(m_camera->resolution().height());
+        if (iw <= 0 || ih <= 0) { iw = 1920; ih = 1080; }
+        cv::Point2f imgCenter(iw / 2.f, ih / 2.f);
+
+        // Image origin: imgCenter = H * pcbPt  ⟹ tx = cx - (cosR*px - sinR*py)
+        double tx = imgCenter.x - (cosR * pcbPt.x - sinR * pcbPt.y);
+        double ty = imgCenter.y - (sinR * pcbPt.x + cosR * pcbPt.y);
+
+        auto& bb = m_ibomProject->boardInfo.boardBBox;
+        std::vector<cv::Point2f> pcbCorners = {
+            {static_cast<float>(bb.minX), static_cast<float>(bb.minY)},
+            {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)},
+            {static_cast<float>(bb.maxX), static_cast<float>(bb.maxY)},
+            {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
+        };
+        std::vector<cv::Point2f> imgCorners;
+        imgCorners.reserve(pcbCorners.size());
+        for (auto& pc : pcbCorners) {
+            imgCorners.push_back({
+                static_cast<float>(cosR * pc.x - sinR * pc.y + tx),
+                static_cast<float>(sinR * pc.x + cosR * pc.y + ty)
+            });
+        }
+        if (m_homography->compute(pcbCorners, imgCorners)) {
+            m_overlayRenderer->setHomography(*m_homography);
+            if (m_liveMode) m_baseHomography = m_homography->matrix().clone();
+            updateDynamicScale();
+            m_mainWindow->updateStatusMessage(tr("Minimap anchor applied"));
+            spdlog::info("Minimap anchor: PCB ({:.2f}, {:.2f}) → image center", pcbPt.x, pcbPt.y);
+        }
+    });
+
     spdlog::info("Signal/slot connections established, FPS timer started.");
 }
 
@@ -2029,6 +2086,9 @@ void Application::loadIBomFile(const QString& path)
     // Feed to BOM panel
     m_mainWindow->bomPanel()->loadBomData(m_ibomProject->bomGroups, m_ibomProject->components);
 
+    // Feed to minimap
+    m_mainWindow->boardMinimap()->setIBomData(*m_ibomProject);
+
     // Remember for the File → Open Recent menu and startup auto-reload.
     m_config->setIBomFilePath(path.toStdString());
     m_config->addRecentIbomFile(path.toStdString());
@@ -2041,6 +2101,7 @@ void Application::loadIBomFile(const QString& path)
     if (!m_placedRefs.empty()) {
         for (const auto& ref : m_placedRefs)
             m_mainWindow->bomPanel()->setComponentState(ref, tr("Placed"));
+        m_mainWindow->boardMinimap()->setPlacedRefs(m_placedRefs);
         spdlog::info("Restored {} placed components from a previous session",
                      m_placedRefs.size());
     }
