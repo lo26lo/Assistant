@@ -759,8 +759,14 @@ void Application::wireCameraSignals()
 
     // ── Camera frame → CameraView + Overlay ─────────────────────
     // Slot receives a shared_ptr<const cv::Mat> — no pixel clone across threads.
+    // Pin the backend per-connection: m_activeBackend is already set for the new
+    // camera here, and capturing it by value prevents a hot-swap race where
+    // queued frames from the old camera would be (un)distorted using the new
+    // backend's rule (e.g. double-correcting the last RealSense frames after a
+    // switch to V4L2). The connection itself dies with the old camera object.
+    const CameraBackend backend = m_activeBackend;
     connect(m_camera.get(), &camera::ICameraSource::frameReady, this,
-            [this](ibom::camera::FrameRef frameRef) {
+            [this, backend](ibom::camera::FrameRef frameRef) {
         if (!frameRef || frameRef->empty()) return;
         const cv::Mat& frame = *frameRef;
 
@@ -796,7 +802,7 @@ void Application::wireCameraSignals()
         // Skip for RealSense: librealsense already applies factory calibration.
         cv::Mat processed;
         if (m_calibration && m_calibration->isCalibrated()
-            && m_activeBackend != CameraBackend::RealSense) {
+            && backend != CameraBackend::RealSense) {
             processed = m_calibration->undistort(frame);
         } else {
             processed = frame;  // header share, no pixel copy
