@@ -395,6 +395,10 @@ void Application::createSubsystems()
         Q_ARG(double, m_config->ransacThreshold()),
         Q_ARG(int,    m_config->trackingIntervalMs()),
         Q_ARG(float,  m_config->trackingDownscale()));
+    QMetaObject::invokeMethod(m_trackingWorker, "setIncrementalMode", Qt::QueuedConnection,
+        Q_ARG(bool,   (m_config->cameraBackend() == CameraBackend::V4L2)
+                      && m_config->microscopeIncremental()),
+        Q_ARG(double, m_config->microscopeReanchorDriftPx()));
 
     // Dataset capture worker on its own thread — JPEG writes + label
     // projection must never block the GUI (same pattern as tracking).
@@ -601,6 +605,18 @@ void Application::switchProfile(int profileIndex)
         m_baseHomography = st.baseHomography.clone();
     }
 
+    // Tracking mode follows the profile: the microscope (V4L2, narrow FOV) uses
+    // incremental frame→frame tracking when enabled; the D405 (RealSense, wide
+    // field) keeps global reference matching. See §0bis of the placement plan.
+    if (m_trackingWorker) {
+        const bool incremental = (m_config->cameraBackend() == CameraBackend::V4L2)
+                                 && m_config->microscopeIncremental();
+        QMetaObject::invokeMethod(m_trackingWorker, "setIncrementalMode",
+            Qt::QueuedConnection,
+            Q_ARG(bool,   incremental),
+            Q_ARG(double, m_config->microscopeReanchorDriftPx()));
+    }
+
     emit cameraProfileChanged(profileIndex);
     spdlog::info("Switched to camera profile {}: {}", profileIndex,
                  m_config->profiles()[profileIndex].name);
@@ -786,6 +802,26 @@ void Application::connectSignals()
         connect(m_trackingWorker, &overlay::TrackingWorker::trackingError,
                 this, [](const QString& msg) {
             spdlog::warn("Tracking worker error: {}", msg.toStdString());
+        }, Qt::QueuedConnection);
+
+        // ── Incremental tracking state → re-anchor badge (§4) ───────
+        connect(m_trackingWorker, &overlay::TrackingWorker::trackingStateChanged,
+                this, [this](int state) {
+            if (!m_liveMode) return;
+            using S = overlay::TrackingWorker::State;
+            switch (static_cast<S>(state)) {
+                case S::Locked:
+                    m_mainWindow->updateStatusMessage(tr("Tracking: locked"));
+                    break;
+                case S::Drifting:
+                    m_mainWindow->updateStatusMessage(
+                        tr("Tracking: drifting — re-anchor (A) to reset"));
+                    break;
+                case S::Lost:
+                    m_mainWindow->updateStatusMessage(
+                        tr("Tracking: LOST — re-anchor (A) or click the PCB map"));
+                    break;
+            }
         }, Qt::QueuedConnection);
 
         // Tracking quality feed for dataset capture (worker → worker, queued).
@@ -1491,6 +1527,10 @@ void Application::connectControlSignals()
                 Q_ARG(double, m_config->ransacThreshold()),
                 Q_ARG(int,    m_config->trackingIntervalMs()),
                 Q_ARG(float,  m_config->trackingDownscale()));
+            QMetaObject::invokeMethod(m_trackingWorker, "setIncrementalMode", Qt::QueuedConnection,
+                Q_ARG(bool,   (m_config->cameraBackend() == CameraBackend::V4L2)
+                              && m_config->microscopeIncremental()),
+                Q_ARG(double, m_config->microscopeReanchorDriftPx()));
         }
         spdlog::info("Settings applied (camera={}, ORB={}, interval={}ms, RANSAC={:.1f}, downscale={:.2f})",
                      newIdx, m_config->orbKeypoints(), m_config->trackingIntervalMs(),

@@ -252,6 +252,25 @@ void SettingsDialog::createTrackingTab(QTabWidget* tabs)
                                         "Smaller = faster but less robust."));
     form->addRow(tr("Downscale:"), m_trackingDownscale);
 
+    m_microscopeIncremental = new QCheckBox(
+        tr("Incremental frame→frame tracking (microscope)"));
+    m_microscopeIncremental->setToolTip(
+        tr("At high magnification the field of view is narrow, so matching every "
+           "frame against one fixed reference fails as the microscope pans away. "
+           "Incremental mode matches each frame against the previous one and "
+           "composes the motion — overlap stays high. Drift accumulates; re-anchor "
+           "(A) to reset. Only applied on the V4L2 microscope backend."));
+    form->addRow(QString(), m_microscopeIncremental);
+
+    m_reanchorDrift = new QDoubleSpinBox;
+    m_reanchorDrift->setRange(5.0, 500.0);
+    m_reanchorDrift->setSingleStep(5.0);
+    m_reanchorDrift->setSuffix(" px");
+    m_reanchorDrift->setToolTip(
+        tr("Accumulated drift past which incremental tracking flags 'drifting' "
+           "and invites a re-anchor."));
+    form->addRow(tr("Re-anchor drift:"), m_reanchorDrift);
+
     tabs->addTab(page, tr("Tracking"));
 }
 
@@ -436,6 +455,8 @@ void SettingsDialog::loadFromConfig()
     m_matchRatio->setValue(m_config.matchDistanceRatio());
     m_ransacThreshold->setValue(m_config.ransacThreshold());
     m_trackingDownscale->setValue(static_cast<double>(m_config.trackingDownscale()));
+    m_microscopeIncremental->setChecked(m_config.microscopeIncremental());
+    m_reanchorDrift->setValue(m_config.microscopeReanchorDriftPx());
 
     // AI
     m_modelsPath->setText(QString::fromStdString(m_config.modelsPath()));
@@ -515,6 +536,8 @@ void SettingsDialog::accept()
     m_config.setMatchDistanceRatio(m_matchRatio->value());
     m_config.setRansacThreshold(m_ransacThreshold->value());
     m_config.setTrackingDownscale(static_cast<float>(m_trackingDownscale->value()));
+    m_config.setMicroscopeIncremental(m_microscopeIncremental->isChecked());
+    m_config.setMicroscopeReanchorDriftPx(m_reanchorDrift->value());
 
     // AI
     m_config.setModelsPath(m_modelsPath->text().toStdString());

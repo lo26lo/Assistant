@@ -81,6 +81,8 @@ private:
     QDoubleSpinBox* m_matchRatio        = nullptr;
     QDoubleSpinBox* m_ransacThreshold   = nullptr;
     QDoubleSpinBox* m_trackingDownscale = nullptr;
+    QCheckBox*      m_microscopeIncremental = nullptr;
+    QDoubleSpinBox* m_reanchorDrift     = nullptr;
 
     // AI
     QLineEdit*      m_modelsPath     = nullptr;

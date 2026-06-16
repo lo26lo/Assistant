@@ -195,6 +195,8 @@ bool Config::load(const std::string& path)
             auto& mic = j["microscope"];
             m_microscopeAnchorPixelsPerMm = mic.value("anchor_pixels_per_mm", m_microscopeAnchorPixelsPerMm);
             m_microscopeAnchorRotationDeg = mic.value("anchor_rotation_deg", m_microscopeAnchorRotationDeg);
+            m_microscopeIncremental       = mic.value("incremental", m_microscopeIncremental);
+            m_microscopeReanchorDriftPx   = mic.value("reanchor_drift_px", m_microscopeReanchorDriftPx);
         }
 
         // BOM
@@ -332,7 +334,9 @@ bool Config::save(const std::string& path) const
         // Microscope (1-point anchoring)
         j["microscope"] = {
             {"anchor_pixels_per_mm", m_microscopeAnchorPixelsPerMm},
-            {"anchor_rotation_deg",  m_microscopeAnchorRotationDeg}
+            {"anchor_rotation_deg",  m_microscopeAnchorRotationDeg},
+            {"incremental",          m_microscopeIncremental},
+            {"reanchor_drift_px",    m_microscopeReanchorDriftPx}
         };
 
         // BOM

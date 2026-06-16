@@ -188,6 +188,20 @@ public:
     double microscopeAnchorRotationDeg() const { return m_microscopeAnchorRotationDeg; }
     void setMicroscopeAnchorRotationDeg(double v) { m_microscopeAnchorRotationDeg = v; }
 
+    /// Incremental (frame→frame) tracking mode. At high magnification the field
+    /// of view is narrow, so matching every frame against one fixed reference
+    /// fails as soon as the microscope pans away. Incremental mode matches each
+    /// frame against the previous one and composes the deltas — overlap stays
+    /// high so tracking holds, at the cost of accumulated drift (see §2 of
+    /// docs/MICROSCOPE_PLACEMENT_PLAN.md). Re-anchor to reset the drift.
+    bool microscopeIncremental() const { return m_microscopeIncremental; }
+    void setMicroscopeIncremental(bool v) { m_microscopeIncremental = v; }
+
+    /// Accumulated drift (px, in current-image space) past which incremental
+    /// tracking flags the estimate as "drifting" and invites a re-anchor.
+    double microscopeReanchorDriftPx() const { return m_microscopeReanchorDriftPx; }
+    void setMicroscopeReanchorDriftPx(double v) { m_microscopeReanchorDriftPx = v; }
+
     // --- Checkboxes (BOM tracking) ---
     const std::vector<std::string>& checkboxColumns() const { return m_checkboxColumns; }
     void setCheckboxColumns(const std::vector<std::string>& cols) { m_checkboxColumns = cols; }
@@ -300,6 +314,8 @@ private:
     // Microscope (1-point anchoring)
     double m_microscopeAnchorPixelsPerMm = 20.0;  // bootstrap scale (user tunes)
     double m_microscopeAnchorRotationDeg = 0.0;   // assumed board rotation
+    bool   m_microscopeIncremental       = false; // frame→frame tracking (narrow FOV)
+    double m_microscopeReanchorDriftPx   = 40.0;  // drift threshold → re-anchor hint
 
     // BOM
     std::vector<std::string> m_checkboxColumns = {"Sourced", "Placed"};
