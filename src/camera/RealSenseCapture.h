@@ -130,6 +130,15 @@ public:
     /// Current disparity shift, or -1 if unavailable.
     int  disparityShift() const;
 
+    /// Set the advanced-mode "Second Peak Threshold" (depth control group).
+    /// Lowering it toward 0 (default 325) significantly reduces depth
+    /// fluctuation on a static scene — Intel/MartyG's recommendation for fixed
+    /// precise measurement (issue #10682). Returns false if advanced mode is
+    /// unavailable/disabled. Typical range 0–1023.
+    bool setSecondPeakThreshold(int value);
+    /// Current Second Peak Threshold, or -1 if unavailable.
+    int  secondPeakThreshold() const;
+
     /// Record all streams to a rosbag (.bag) starting at the next (re)start,
     /// like the Viewer's record button. Empty string disables recording.
     /// Takes effect after stop()+start().
@@ -151,6 +160,14 @@ public:
     /// Off by default (avoids the per-frame rs2::pointcloud cost when the 3D
     /// view is not shown). When on, pointCloudReady() fires each frame.
     void setEmitPointCloud(bool on) { m_emitCloud.store(on); }
+
+    /// Decimation magnitude applied to the depth that feeds the 3D point cloud
+    /// and PLY export ONLY (never the overlay/depth-view depth, whose 1:1 color
+    /// alignment must stay intact). 0/1 = off (full resolution); 2–8 downsample
+    /// the cloud by that factor — cleaner, less noisy scan, fewer points, per
+    /// Intel's canonical 3D-scan filter order. Takes effect immediately.
+    void setCloudDecimation(int magnitude) { m_cloudDecimation.store(magnitude); }
+    int  cloudDecimation() const { return m_cloudDecimation.load(); }
 
     /// Enable/disable a histogram-equalized colorized depth image
     /// (rs2::colorizer, like the RealSense Viewer's Depth panel). Off by
@@ -202,6 +219,7 @@ private:
     std::atomic<double> m_colorPpy{0.0};
     std::atomic<float>  m_pendingPreset{-1.0f};  // Visual Preset to apply on start
     std::atomic<bool>   m_emitCloud{false};       // compute rs2::pointcloud when true
+    std::atomic<int>    m_cloudDecimation{0};     // decimation magnitude for cloud/PLY (0/1=off)
     std::atomic<bool>   m_emitColorDepth{false};  // colorize depth via rs2::colorizer
     std::atomic<bool>   m_emitIR{false};          // emit left IR camera (Y8) when true
     std::atomic<bool>   m_calibPending{false};    // run on-chip self-calibration

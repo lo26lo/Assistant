@@ -41,6 +41,7 @@ struct UiProfile {
     bool    spatial, temporal, threshold, holeFill;
     int     disparityShift = -1;  // advanced-mode disparity shift (-1 = leave)
     bool    aeRoiCenter = false;  // meter auto-exposure on the central region
+    int     secondPeak = -1;      // advanced-mode Second Peak Threshold (-1 = leave)
 };
 
 QVector<UiProfile> profiles()
@@ -74,13 +75,15 @@ QVector<UiProfile> profiles()
         { QObject::tr("Inspection rapprochée (réglé) — 848×480 @30"),
           QObject::tr("Profil « tuning » Intel pour petits composants de très près.\n"
                       "✓ Gain : zone de mesure rapprochée (disparity shift), depth fine "
-                      "et stable (High Accuracy + spatial/temporal), exposition mesurée "
-                      "sur la carte (ROI centrale).\n"
+                      "et stable (High Accuracy + spatial/temporal alpha 0.1 + Second "
+                      "Peak Threshold 0 → fluctuation minimale sur carte fixe), "
+                      "exposition mesurée sur la carte (ROI centrale).\n"
                       "✗ Perte : portée max réduite — pensé pour la distance de travail "
-                      "courte de la D405. Augmente le disparity shift si la carte est "
-                      "très proche et apparaît « trouée »."),
+                      "courte de la D405. La depth devient quasi statique (idéal pour "
+                      "mesurer une carte immobile). Augmente le disparity shift si la "
+                      "carte est très proche et apparaît « trouée »."),
           848, 480, 30, "High Accuracy", true, true, false, false,
-          /*disparityShift=*/64, /*aeRoiCenter=*/true },
+          /*disparityShift=*/64, /*aeRoiCenter=*/true, /*secondPeak=*/0 },
     };
 }
 
@@ -224,6 +227,31 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     dispRow->addWidget(dispVal);
     toolsLay->addLayout(dispRow);
 
+    // Second Peak Threshold (advanced mode) — lower = less depth fluctuation on
+    // a static scene (Intel/MartyG, issue #10682). Default 325; 0 = most stable.
+    auto* peakRow = new QHBoxLayout;
+    peakRow->addWidget(new QLabel(tr("Second Peak Threshold:")));
+    auto* peakSlider = new QSlider(Qt::Horizontal);
+    peakSlider->setRange(0, 1023);
+    auto* peakVal = new QLabel("—");
+    peakVal->setFixedWidth(36);
+    peakSlider->setToolTip(tr("Réduit la fluctuation de la depth sur une scène fixe : "
+                              "baisse vers 0 (défaut 325) pour une carte immobile, "
+                              "mesure plus stable. La depth réagit alors plus lentement "
+                              "au mouvement. Nécessite le mode avancé activé."));
+    if (m_camera) {
+        const int cur = m_camera->secondPeakThreshold();
+        if (cur >= 0) { peakSlider->setValue(cur); peakVal->setText(QString::number(cur)); }
+        else { peakSlider->setEnabled(false); peakVal->setText(tr("N/A")); }
+    }
+    connect(peakSlider, &QSlider::valueChanged, this, [this, peakVal](int v) {
+        peakVal->setText(QString::number(v));
+        if (m_camera) m_camera->setSecondPeakThreshold(v);
+    });
+    peakRow->addWidget(peakSlider, 1);
+    peakRow->addWidget(peakVal);
+    toolsLay->addLayout(peakRow);
+
     auto* aeBtn = new QPushButton(tr("Auto-exposition sur le centre"));
     aeBtn->setToolTip(tr("Règle l'auto-exposition en mesurant la zone centrale "
                          "(la carte) plutôt que tout le champ — image plus stable."));
@@ -235,6 +263,30 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
                : tr("Ce capteur ne supporte pas la ROI d'auto-exposition."));
     });
     toolsLay->addWidget(aeBtn);
+
+    // Cloud/PLY decimation — Intel's canonical 3D-scan order (issue #10682).
+    // Affects ONLY the 3D view + PLY export, never the overlay/depth-view depth.
+    auto* decRow = new QHBoxLayout;
+    decRow->addWidget(new QLabel(tr("Décimation nuage 3D:")));
+    auto* decCombo = new QComboBox;
+    decCombo->setToolTip(tr("Sous-échantillonne la profondeur du nuage 3D / export PLY :\n"
+                            "scan plus propre et moins bruité, moins de points.\n"
+                            "N'affecte PAS la vue depth ni l'alignement de l'overlay iBOM."));
+    decCombo->addItem(tr("Désactivée (pleine résolution)"), 0);
+    decCombo->addItem(QStringLiteral("×2"), 2);
+    decCombo->addItem(QStringLiteral("×3"), 3);
+    decCombo->addItem(QStringLiteral("×4"), 4);
+    if (m_camera) {
+        const int cur = m_camera->cloudDecimation();
+        const int idx = decCombo->findData(cur >= 2 ? cur : 0);
+        decCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    connect(decCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this, decCombo](int) {
+        if (m_camera) m_camera->setCloudDecimation(decCombo->currentData().toInt());
+    });
+    decRow->addWidget(decCombo, 1);
+    toolsLay->addLayout(decRow);
 
     auto* plyBtn = new QPushButton(tr("Exporter le nuage 3D (PLY)…"));
     plyBtn->setToolTip(tr("Enregistre le prochain nuage de points (sommets + "
@@ -600,14 +652,18 @@ void RealSenseControlsDialog::applyProfile(int index)
     m_camera->setFps(p.fps);
     if (wasCapturing) m_camera->start();
 
-    // Tuning (Intel "tuning depth cameras") applied once the device is back:
-    // disparity shift (closer Z window) + AE ROI on the central board region.
+    // Tuning (Intel "tuning depth cameras" / issue #10682) applied once the
+    // device is back: disparity shift (closer Z window) + AE ROI on the central
+    // board region + Second Peak Threshold (lower = less depth fluctuation on a
+    // static scene). All advanced-mode writes are guarded internally.
     const int   shift = p.disparityShift;
     const bool  aeRoi = p.aeRoiCenter;
-    QTimer::singleShot(1200, this, [this, shift, aeRoi]() {
+    const int   peak  = p.secondPeak;
+    QTimer::singleShot(1200, this, [this, shift, aeRoi, peak]() {
         if (!m_camera) return;
         if (shift >= 0) m_camera->setDisparityShift(shift);
         if (aeRoi)      m_camera->setAutoExposureRoi(0, 0, 0, 0);  // central 50%
+        if (peak  >= 0) m_camera->setSecondPeakThreshold(peak);
         rebuild();
     });
 }

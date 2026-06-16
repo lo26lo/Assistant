@@ -13,14 +13,23 @@
 
 namespace ibom::camera {
 
-/// Resolution-preserving depth filters (decimation excluded on purpose so the
-/// color↔depth alignment stays 1:1). Each has a runtime on/off flag. The mutex
-/// guards process() on the capture thread vs option get/set from the GUI.
+/// Resolution-preserving depth filters for the overlay/depth-view path: the
+/// four toggleable filters never change the depth size, so the color↔depth
+/// alignment stays 1:1. (Decimation is also held here but is applied ONLY in
+/// the point-cloud/PLY path — see `decimation` below.) Each toggleable filter
+/// has a runtime on/off flag. The mutex guards process() on the capture thread
+/// vs option get/set from the GUI.
 struct FilterChain {
     rs2::spatial_filter      spatial;
     rs2::temporal_filter     temporal;
     rs2::threshold_filter    threshold;
     rs2::hole_filling_filter holeFill;
+    // Decimation: downsamples depth (reduces noise + point count). NOT part of
+    // the user-toggleable chain above and NOT applied to the depth that feeds
+    // the iBOM overlay (would break the 1:1 color↔depth alignment). Used only
+    // in the point-cloud path, where the SDK re-maps texture via UV regardless
+    // of depth resolution — Intel's canonical 3D-scan order puts it first.
+    rs2::decimation_filter   decimation;
     // Disparity-domain transforms: spatial+temporal are most effective applied
     // in the disparity domain (Intel post-processing whitepaper / rs-post-
     // processing example). depth→disparity (true) before, disparity→depth
@@ -70,6 +79,15 @@ RealSenseCapture::RealSenseCapture(QObject* parent)
     : ICameraSource(parent)
     , m_filters(std::make_unique<FilterChain>())
 {
+    // Static PCB rig: lower the temporal filter's smooth alpha to 0.1 (vs the
+    // SDK default 0.4). Intel/MartyG's explicit recommendation for precise
+    // measurement on a *static* object — it significantly stabilizes depth
+    // fluctuation (issue #10682). The trade-off (depth updates more slowly
+    // after motion) is irrelevant for a fixed board, and the user can still
+    // override the value live in the Post-Processing options panel.
+    try {
+        m_filters->temporal.set_option(RS2_OPTION_FILTER_SMOOTH_ALPHA, 0.1f);
+    } catch (const rs2::error&) { /* keep SDK default */ }
 }
 
 RealSenseCapture::~RealSenseCapture()
@@ -253,6 +271,45 @@ int RealSenseCapture::disparityShift() const
         auto adv = m_device->as<rs400::advanced_mode>();
         if (!adv || !adv.is_enabled()) return -1;
         return adv.get_depth_table().disparityShift;
+    } catch (const rs2::error&) {
+        return -1;
+    }
+}
+
+bool RealSenseCapture::setSecondPeakThreshold(int value)
+{
+    std::lock_guard<std::mutex> lk(m_deviceMutex);
+    if (!m_device) return false;
+    try {
+        auto adv = m_device->as<rs400::advanced_mode>();
+        if (!adv) return false;
+        if (!adv.is_enabled()) {
+            // Enabling advanced mode resets the device — require it pre-enabled
+            // (same guard as setDisparityShift).
+            spdlog::warn("RealSense advanced mode disabled — cannot set "
+                         "second peak threshold. Enable it once with rs-enumerate "
+                         "or the Viewer, then retry.");
+            return false;
+        }
+        STDepthControlGroup dc = adv.get_depth_control();
+        dc.secondPeakThreshold = static_cast<float>(value);
+        adv.set_depth_control(dc);
+        spdlog::info("RealSense second peak threshold set to {}", value);
+        return true;
+    } catch (const rs2::error& e) {
+        spdlog::warn("RealSense set second peak threshold failed: {}", e.what());
+        return false;
+    }
+}
+
+int RealSenseCapture::secondPeakThreshold() const
+{
+    std::lock_guard<std::mutex> lk(m_deviceMutex);
+    if (!m_device) return -1;
+    try {
+        auto adv = m_device->as<rs400::advanced_mode>();
+        if (!adv || !adv.is_enabled()) return -1;
+        return static_cast<int>(adv.get_depth_control().secondPeakThreshold);
     } catch (const rs2::error&) {
         return -1;
     }
@@ -505,8 +562,23 @@ void RealSenseCapture::captureLoop()
             if (wantCloud || !plyPath.empty()) {
                 if (wantCloud) lastCloud = now;
                 try {
+                    // Optional decimation for the cloud/PLY only (Intel's
+                    // canonical 3D-scan order, issue #10682). Cleaner, less
+                    // noisy scan with fewer points. The overlay/depth-view
+                    // depth (fdepth) is left untouched so its 1:1 color
+                    // alignment stays exact. The SDK re-maps texture via UV,
+                    // so a coarser depth still colors correctly from `color`.
+                    rs2::depth_frame cloudDepth = fdepth;
+                    const int dec = m_cloudDecimation.load();
+                    if (dec >= 2) {
+                        std::lock_guard<std::mutex> lk(m_filters->mutex);
+                        m_filters->decimation.set_option(
+                            RS2_OPTION_FILTER_MAGNITUDE, static_cast<float>(dec));
+                        cloudDepth = m_filters->decimation.process(fdepth)
+                                         .as<rs2::depth_frame>();
+                    }
                     pc.map_to(color);
-                    rs2::points pts = pc.calculate(fdepth);
+                    rs2::points pts = pc.calculate(cloudDepth);
 
                     // PLY export (Viewer "Export"): SDK writes vertices+color.
                     if (!plyPath.empty()) {
