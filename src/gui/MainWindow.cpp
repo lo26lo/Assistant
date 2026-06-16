@@ -225,6 +225,12 @@ void MainWindow::createActions()
     m_actInspect->setShortcut(Qt::Key_I);
     connect(m_actInspect, &QAction::triggered, this, &MainWindow::onStartInspection);
 
+    m_actAnchor = new QAction(tr("Anchor on Component"), this);
+    m_actAnchor->setShortcut(Qt::Key_A);
+    m_actAnchor->setToolTip(tr("Anchor the overlay on the selected component, then click it in the image (microscope)"));
+    connect(m_actAnchor, &QAction::triggered, this, [this]() { emit componentAnchorRequested(); });
+    addAction(m_actAnchor);  // keep the A shortcut active even if not in a menu
+
     m_actExport = new QAction(tr("Export Report"), this);
     m_actExport->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_E));
     connect(m_actExport, &QAction::triggered, this, &MainWindow::onExportReport);
@@ -348,6 +354,7 @@ void MainWindow::createToolBar()
     m_mainToolBar->addWidget(m_profileCombo);
     m_mainToolBar->addSeparator();
     m_mainToolBar->addAction(m_actInspect);
+    m_mainToolBar->addAction(m_actAnchor);
     m_mainToolBar->addAction(m_actScreenshot);
     m_mainToolBar->addAction(m_actExport);
     m_mainToolBar->addSeparator();

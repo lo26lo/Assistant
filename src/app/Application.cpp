@@ -600,6 +600,42 @@ void Application::switchProfile(int profileIndex)
                  m_config->profiles()[profileIndex].name);
 }
 
+void Application::startComponentAnchor()
+{
+    if (!m_ibomProject || m_ibomProject->components.empty()) {
+        m_mainWindow->updateStatusMessage(tr("Load an iBOM first"));
+        return;
+    }
+    if (m_selectedRef.empty()) {
+        m_mainWindow->updateStatusMessage(
+            tr("Select a component in the BOM panel, then anchor on it"));
+        return;
+    }
+
+    const Component* comp = nullptr;
+    for (const auto& c : m_ibomProject->components)
+        if (c.reference == m_selectedRef) { comp = &c; break; }
+    if (!comp) {
+        m_mainWindow->updateStatusMessage(tr("Selected component not found"));
+        return;
+    }
+
+    // Cancel any other interactive picking mode.
+    m_alignOnComponents = false;
+    m_alignCompStep = 0;
+    m_pickingHomographyPoints = false;
+
+    m_anchorRef = m_selectedRef;
+    m_anchorPcb = cv::Point2f(static_cast<float>(comp->bbox.center().x),
+                              static_cast<float>(comp->bbox.center().y));
+    m_anchorMode = true;
+    m_mainWindow->updateStatusMessage(
+        tr("Anchor: CLICK on %1 in the camera image")
+            .arg(QString::fromStdString(m_anchorRef)));
+    spdlog::info("Anchor armed on {} at PCB ({:.2f}, {:.2f})",
+                 m_anchorRef, m_anchorPcb.x, m_anchorPcb.y);
+}
+
 void Application::refreshCameraDeviceList()
 {
     QStringList cameraNames;
@@ -1561,6 +1597,64 @@ void Application::connectControlSignals()
 
     connect(m_mainWindow->cameraView(), &gui::CameraView::clicked,
             this, [this](QPointF imagePos) {
+        // ── Microscope 1-point anchor click handling ──
+        if (m_anchorMode) {
+            m_anchorMode = false;
+            if (!m_homography) return;
+
+            cv::Point2f imgPt(static_cast<float>(imagePos.x()),
+                              static_cast<float>(imagePos.y()));
+
+            // Use the live scale if we have one, else the configured fallback.
+            double scale = (m_currentPixelsPerMm > 0.0)
+                ? m_currentPixelsPerMm
+                : m_config->microscopeAnchorPixelsPerMm();
+            if (scale <= 0.0) scale = 20.0;
+            double rot = m_config->microscopeAnchorRotationDeg() * CV_PI / 180.0;
+
+            double cosR = std::cos(rot) * scale;
+            double sinR = std::sin(rot) * scale;
+
+            // Translation so the target component maps to the clicked point.
+            double tx = imgPt.x - (cosR * m_anchorPcb.x - sinR * m_anchorPcb.y);
+            double ty = imgPt.y - (sinR * m_anchorPcb.x + cosR * m_anchorPcb.y);
+
+            auto& bb = m_ibomProject->boardInfo.boardBBox;
+            std::vector<cv::Point2f> pcbCorners = {
+                {static_cast<float>(bb.minX), static_cast<float>(bb.minY)},
+                {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)},
+                {static_cast<float>(bb.maxX), static_cast<float>(bb.maxY)},
+                {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
+            };
+            std::vector<cv::Point2f> imgCorners;
+            for (const auto& p : pcbCorners) {
+                imgCorners.push_back({
+                    static_cast<float>(cosR * p.x - sinR * p.y + tx),
+                    static_cast<float>(sinR * p.x + cosR * p.y + ty)});
+            }
+
+            if (m_homography->compute(pcbCorners, imgCorners)) {
+                m_overlayRenderer->setHomography(*m_homography);
+                m_basePixelsPerMm = scale;
+                m_currentPixelsPerMm = scale;
+                if (auto* sp = m_mainWindow->statsPanel())
+                    sp->setScale(m_currentPixelsPerMm);
+                if (m_trackingWorker)
+                    QMetaObject::invokeMethod(m_trackingWorker, "resetReference",
+                                              Qt::QueuedConnection);
+                m_mainWindow->updateStatusMessage(
+                    tr("Anchored on %1 — scale: %2 px/mm (refine with 2-component align if needed)")
+                        .arg(QString::fromStdString(m_anchorRef))
+                        .arg(scale, 0, 'f', 1));
+                spdlog::info("Anchored on {}: scale={:.2f} px/mm rot={:.1f}°",
+                             m_anchorRef, scale, m_config->microscopeAnchorRotationDeg());
+            } else {
+                m_mainWindow->updateStatusMessage(tr("Anchor failed"));
+                spdlog::error("Anchor: homography compute failed");
+            }
+            return;
+        }
+
         // ── 2-component alignment click handling ──
         if (m_alignOnComponents && (m_alignCompStep == 1 || m_alignCompStep == 3)) {
             cv::Point2f imgPt(static_cast<float>(imagePos.x()),
@@ -1901,6 +1995,9 @@ void Application::connectControlSignals()
             this, [this](int idx) { switchProfile(idx); });
     connect(this, &Application::cameraProfileChanged,
             m_mainWindow.get(), &gui::MainWindow::setActiveProfile);
+
+    connect(m_mainWindow.get(), &gui::MainWindow::componentAnchorRequested,
+            this, [this]() { startComponentAnchor(); });
 
     spdlog::info("Signal/slot connections established, FPS timer started.");
 }

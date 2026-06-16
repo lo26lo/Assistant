@@ -119,6 +119,10 @@ private:
     void switchCameraBackend(CameraBackend backend);
     /// Switch to a named camera profile, saving/restoring per-profile tracking state.
     void switchProfile(int profileIndex);
+    /// Arm microscope 1-point anchoring on the currently selected component.
+    /// The next image click sets the homography from that single correspondence,
+    /// using the live scale (or the configured microscope fallback) and rotation.
+    void startComponentAnchor();
     /// Enumerate devices for the active backend and refresh the ControlPanel.
     void refreshCameraDeviceList();
     /// Open the dynamic RealSense sensor-controls panel (from ControlPanel or
@@ -207,6 +211,14 @@ private:
     // Manual homography point picking
     bool m_pickingHomographyPoints = false;
     std::vector<cv::Point2f> m_homographyImagePoints;
+
+    // Microscope 1-point anchor mode (see docs/MICROSCOPE_PLACEMENT_PLAN.md §2).
+    // Armed by startComponentAnchor() using the currently selected ref; the next
+    // image click builds a similarity homography (known scale + rotation) so the
+    // target component lands at the clicked point.
+    bool        m_anchorMode = false;
+    std::string m_anchorRef;
+    cv::Point2f m_anchorPcb;
 
     // 2-component alignment mode
     bool m_alignOnComponents = false;

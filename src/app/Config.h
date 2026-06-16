@@ -176,6 +176,18 @@ public:
     float opticalMultiplier() const { return m_opticalMultiplier; }
     void setOpticalMultiplier(float m) { m_opticalMultiplier = m; }
 
+    // --- Microscope (1-point anchoring, see docs/MICROSCOPE_PLACEMENT_PLAN.md) ---
+    /// Fallback scale (pixels/mm) used to build a 1-point anchor homography when
+    /// no live scale is available yet. Microscope optical zoom is continuous, so
+    /// this is only a bootstrap value; the live homography refines it afterwards.
+    double microscopeAnchorPixelsPerMm() const { return m_microscopeAnchorPixelsPerMm; }
+    void setMicroscopeAnchorPixelsPerMm(double v) { m_microscopeAnchorPixelsPerMm = v; }
+
+    /// Assumed board rotation (degrees) when building a 1-point anchor — the
+    /// microscope view is usually roughly axis-aligned with the board.
+    double microscopeAnchorRotationDeg() const { return m_microscopeAnchorRotationDeg; }
+    void setMicroscopeAnchorRotationDeg(double v) { m_microscopeAnchorRotationDeg = v; }
+
     // --- Checkboxes (BOM tracking) ---
     const std::vector<std::string>& checkboxColumns() const { return m_checkboxColumns; }
     void setCheckboxColumns(const std::vector<std::string>& cols) { m_checkboxColumns = cols; }
@@ -284,6 +296,10 @@ private:
     float m_calibSquareSize = 5.0f; // mm per square
     ScaleMethod m_scaleMethod = ScaleMethod::Homography;
     float m_opticalMultiplier = 1.0f; // Lens adapter: 0.5x, 1x, 2x etc.
+
+    // Microscope (1-point anchoring)
+    double m_microscopeAnchorPixelsPerMm = 20.0;  // bootstrap scale (user tunes)
+    double m_microscopeAnchorRotationDeg = 0.0;   // assumed board rotation
 
     // BOM
     std::vector<std::string> m_checkboxColumns = {"Sourced", "Placed"};

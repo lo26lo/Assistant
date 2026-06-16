@@ -190,6 +190,13 @@ bool Config::load(const std::string& path)
             m_opticalMultiplier = cal.value("optical_multiplier", m_opticalMultiplier);
         }
 
+        // Microscope (1-point anchoring)
+        if (j.contains("microscope")) {
+            auto& mic = j["microscope"];
+            m_microscopeAnchorPixelsPerMm = mic.value("anchor_pixels_per_mm", m_microscopeAnchorPixelsPerMm);
+            m_microscopeAnchorRotationDeg = mic.value("anchor_rotation_deg", m_microscopeAnchorRotationDeg);
+        }
+
         // BOM
         if (j.contains("bom") && j["bom"].contains("checkbox_columns")) {
             m_checkboxColumns = j["bom"]["checkbox_columns"]
@@ -320,6 +327,12 @@ bool Config::save(const std::string& path) const
             {"square_size_mm", m_calibSquareSize},
             {"scale_method",   static_cast<int>(m_scaleMethod)},
             {"optical_multiplier", m_opticalMultiplier}
+        };
+
+        // Microscope (1-point anchoring)
+        j["microscope"] = {
+            {"anchor_pixels_per_mm", m_microscopeAnchorPixelsPerMm},
+            {"anchor_rotation_deg",  m_microscopeAnchorRotationDeg}
         };
 
         // BOM

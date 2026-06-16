@@ -79,6 +79,8 @@ signals:
     void realSenseControlsRequested();
     /// User selected a different camera profile in the toolbar combo.
     void cameraProfileChangeRequested(int idx);
+    /// Arm microscope 1-point anchoring on the currently selected component.
+    void componentAnchorRequested();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -140,6 +142,7 @@ private:
     QAction*  m_actFullscreen = nullptr;
     QAction*  m_actCalibrate  = nullptr;
     QAction*  m_actInspect    = nullptr;
+    QAction*  m_actAnchor     = nullptr;
     QAction*  m_actExport     = nullptr;
     QAction*  m_actSettings   = nullptr;
     QAction*  m_actDarkMode   = nullptr;
