@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 27 | 2026-06-16 | Application.cpp / calibration | ✅ RÉSOLU | [Calibration de mauvaise qualité (RMS 11 px) acceptée et sauvegardée — écrase une bonne calibration + corrompt l'overlay](#erreur-27--calibration-de-mauvaise-qualite-rms-11-px-acceptee) |
 | 26 | 2026-06-16 | Application.cpp / Config | ✅ RÉSOLU | [Scale microscope faux (3.47 px/mm) — `opticalMultiplier` 0.3 multiplié par-dessus la calibration checkerboard (double comptage optique)](#erreur-26--scale-microscope-faux--double-comptage-optique) |
 | 25 | 2026-06-16 | Application.cpp / StatsPanel | ✅ RÉSOLU | [Distance / Depth fill périmés affichés pour le microscope (stats depth D405 jamais réinitialisées)](#erreur-25--distance--depth-fill-perimes-affiches-pour-le-microscope) |
 | 24 | 2026-06-16 | Application.cpp / RealSense | ✅ RÉSOLU | [D405 « Factory fx=0.0 px » — `updateCalibrationUI()` lit `colorFx()` avant la mise en cache des intrinsics](#erreur-24--d405-factory-fx00-px--intrinsics-lues-trop-tot) |
@@ -47,6 +48,27 @@
 - 🟡 CONTOURNÉ — solution temporaire en place
 - ✅ RÉSOLU — fix appliqué et validé
 - 📝 INFO — note pour mémoire (pas un bug, juste un piège)
+
+---
+
+## ERREUR 27 — Calibration de mauvaise qualité (RMS 11 px) acceptée
+
+**Date :** 2026-06-16
+**Composant :** Application::runCalibration
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) suite 46
+
+### Symptôme
+Une calibration microscope renvoie `pixels/mm=11.56` mais **RMS error=11.09** (une bonne calibration = < 1 px ; la précédente était à 0.876). L'app affiche « Calibration succeeded », sauvegarde, et applique — l'overlay/undistort devient faux (« calibration ne fonctionne plus »). La bonne calibration précédente sur disque est écrasée.
+
+### Cause
+`runCalibration()` ne testait que `error < 0` (= damier non détecté). Tout solve « réussi » était accepté, **quelle que soit la qualité**. Un RMS de 11 px signifie un modèle d'intrinsics incohérent — typiquement : damier flou, angle trop prononcé, ou **trop peu de variation de pose** entre les 5 prises (fréquent avec le champ étroit du microscope : peu de place pour incliner). Le `pixels/mm` quasi identique (11.56 vs 11.58) confirme que la détection de coins était bonne (échelle correcte) mais que le bundle adjustment multi-images divergeait.
+
+### Solution appliquée ✅
+Gate qualité dans `runCalibration()` après le solve : si `error > 1.5 px`, avertir (QMessageBox, défaut **No**) et — si l'utilisateur ne force pas — **ne pas** sauvegarder/appliquer ; recharger la calibration précédente depuis le disque (`load()` + `initUndistortMaps`) pour ne pas corrompre l'existant. Le chemin `calibPath` est calculé en amont pour permettre ce rollback. Message d'aide explicite (incliner le damier à un angle différent à chaque prise, rester net).
+
+### Leçon
+Un code de retour « réussi » d'un solveur ne garantit pas la **qualité** du résultat. Pour la calibration, le RMS de reprojection est le critère de qualité : toujours le borner avant de remplacer une calibration existante. Et au microscope (champ étroit), varier l'angle entre les prises est crucial — sinon le solve dégénère.
 
 ---
 

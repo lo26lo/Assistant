@@ -2496,13 +2496,54 @@ void Application::runCalibration()
         return;
     }
 
+    // Save path (utils::dataDir() creates the dir). Needed up-front so a poor
+    // calibration can be discarded and the previous good one reloaded.
+    const QString dataDir  = QString::fromStdString(utils::dataDir().string());
+    const QString calibPath = dataDir + "/calibration.yml";
+
+    // ── Quality gate ────────────────────────────────────────────────
+    // calibrate() only returns < 0 when corners aren't found; a successful
+    // solve can still be garbage. A usable checkerboard calibration has an RMS
+    // reprojection error well under 1 px — anything above ~1.5 px means blurry
+    // corners, too steep an angle, or too little pose variation between shots
+    // (easy to hit with the microscope's narrow field). Applying/saving it
+    // would corrupt the undistort maps and px/mm and overwrite a good
+    // calibration, so default to discarding and restore the previous one.
+    constexpr double kMaxAcceptableRms = 1.5;  // px
+    if (error > kMaxAcceptableRms) {
+        spdlog::warn("Calibration RMS {:.2f} px exceeds {:.1f} px threshold — poor quality",
+                     error, kMaxAcceptableRms);
+        const auto choice = QMessageBox::warning(
+            m_mainWindow.get(), tr("Calibration Quality Poor"),
+            tr("Reprojection error is %1 px — a good calibration is under 1 px.\n\n"
+               "This usually means the checkerboard was out of focus, tilted too "
+               "far, or barely moved between the 5 shots (easy to hit with the "
+               "microscope's narrow field). Tilt the board to a different angle "
+               "for each shot and keep it sharp.\n\n"
+               "Keep this calibration anyway?").arg(error, 0, 'f', 2),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (choice != QMessageBox::Yes) {
+            // Restore the previous good calibration if one is on disk, and
+            // rebuild its undistort maps; otherwise the camera stays as it was.
+            if (QFileInfo::exists(calibPath) && m_calibration->load(calibPath.toStdString())) {
+                auto res = m_camera->resolution();
+                m_calibration->initUndistortMaps(cv::Size(res.width(), res.height()));
+                spdlog::info("Discarded poor calibration; restored previous from {}",
+                             calibPath.toStdString());
+            } else {
+                spdlog::warn("Discarded poor calibration; no previous one to restore");
+            }
+            m_mainWindow->updateStatusMessage(
+                tr("Calibration discarded — RMS %1 px too high (kept previous)")
+                .arg(error, 0, 'f', 2));
+            return;
+        }
+    }
+
     // Initialize undistortion maps for the current resolution
     auto res = m_camera->resolution();
     m_calibration->initUndistortMaps(cv::Size(res.width(), res.height()));
 
-    // Save calibration under the unified data dir (utils::dataDir() creates it).
-    QString dataDir = QString::fromStdString(utils::dataDir().string());
-    auto calibPath = dataDir + "/calibration.yml";
     QDir().mkpath(dataDir);
     m_calibration->save(calibPath.toStdString());
 
