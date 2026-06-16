@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 23 | 2026-06-16 | CameraCapture.cpp / V4L2 enum | ✅ RÉSOLU | [Liste caméras du profil Microscope inclut les nœuds UVC du D405 (RealSense vu deux fois)](#erreur-23--liste-cameras-du-profil-microscope-inclut-les-noeuds-uvc-du-d405) |
 | 22 | 2026-06-16 | CameraCapture / GUI device combo | ✅ RÉSOLU | [Microscope inaccessible via l'UI — index combo (position) confondu avec l'index `/dev/video` réel (caméra à video6)](#erreur-22--index-combo-confondu-avec-lindex-devvideo-reel) |
 | 21 | 2026-06-16 | CameraCapture.cpp / V4L2 | ✅ RÉSOLU | [`terminate called without an active exception` (SIGABRT) au switch caméra/profil — `std::thread` joignable détruit après auto-exit du captureLoop](#erreur-21--terminate-called-without-an-active-exception-au-switch-camera) |
 | 20 | 2026-06-16 | PointCloudView.cpp / GUI | ✅ RÉSOLU | [`initializeFunctions was not declared` — faute de frappe pour `initializeOpenGLFunctions`](#erreur-20--initializefunctions-was-not-declared) |
@@ -43,6 +44,27 @@
 - 🟡 CONTOURNÉ — solution temporaire en place
 - ✅ RÉSOLU — fix appliqué et validé
 - 📝 INFO — note pour mémoire (pas un bug, juste un piège)
+
+---
+
+## ERREUR 23 — Liste caméras du profil Microscope inclut les nœuds UVC du D405
+
+**Date :** 2026-06-16
+**Composant :** CameraCapture::listDevices (V4L2)
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) suite 44
+
+### Symptôme
+En profil Microscope (backend V4L2), le combo « Device » affiche en plus du microscope (`6: HAYEAR_CAMERA…`) trois entrées RealSense (`0/2/4: Intel(R) RealSense(TM) Depth…`), alors que ces caméras ne devraient apparaître que dans le combo du profil D405.
+
+### Cause
+Le D405 expose ses flux couleur/IR/depth comme de **vrais nodes UVC** `/dev/video*` en plus de l'API RealSense SDK. `VIDIOC_QUERYCAP` les rapporte donc comme caméras capture valides, et `CameraCapture::listDevices()` (corrigée en ERREUR 22 pour énumérer via `VIDIOC_QUERYCAP`) les inclut sans distinction. Sélectionner une de ces entrées en mode V4L2 ouvrirait un flux RealSense brut, non rectifié, sans aucun lien avec le pipeline RealSense SDK (factory calibration, depth align) — comportement cassé/trompeur.
+
+### Solution appliquée ✅
+Dans `CameraCapture::listDevices()`, filtrer (`continue`) tout node dont le nom de carte (`v4l2_capability.card`) contient `"RealSense"`. Le combo Microscope ne liste plus que les caméras UVC génériques (microscope).
+
+### Leçon
+Sur Jetson, une caméra RealSense occupe à la fois l'API librealsense **et** plusieurs nodes `/dev/video*` UVC bruts. Toute énumération V4L2 générique doit explicitement exclure les devices RealSense pour éviter de les exposer deux fois sous deux APIs différentes.
 
 ---
 

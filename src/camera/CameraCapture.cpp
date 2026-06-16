@@ -164,6 +164,15 @@ std::vector<std::pair<int, std::string>> CameraCapture::listDevices()
                 std::string name = (cap.card[0] != 0)
                     ? std::string(reinterpret_cast<const char*>(cap.card))
                     : ("Camera " + std::to_string(i));
+                // The D405 exposes its color/IR/depth streams as plain UVC
+                // /dev/video* nodes too, so VIDIOC_QUERYCAP reports them as
+                // valid capture devices here. They must only ever be opened
+                // through the RealSense SDK (depth-aligned, factory-rectified),
+                // never as a raw V4L2 stream, so exclude them from this list.
+                if (name.find("RealSense") != std::string::npos) {
+                    ::close(fd);
+                    continue;
+                }
                 devices.emplace_back(i, std::move(name));
             }
         }
