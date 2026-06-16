@@ -41,16 +41,26 @@ FovMeasureDialog::FovMeasureDialog(const Metrics& m, QWidget* parent)
         form->addRow(tr("Resolution:"), new QLabel(
             tr("%1 × %2 px").arg(m.camWidth).arg(m.camHeight)));
 
-        const QString calibStr = m.calibrated
-            ? tr("Loaded  (RMS: %1 px)").arg(m.calibRmsErr, 0, 'f', 3)
-            : tr("NOT loaded — undistort disabled");
-        form->addRow(tr("Calibration:"), valueLabel(calibStr, !m.calibrated));
+        QString calibStr;
+        bool    calibWarn = false;
+        if (!m.isMicroscope) {
+            // The D405 is factory-calibrated; the SDK delivers rectified streams,
+            // so a local checkerboard calibration is neither used nor needed.
+            calibStr = tr("Factory-calibrated (RealSense intrinsics)");
+        } else if (m.calibrated) {
+            calibStr = tr("Loaded  (RMS: %1 px)").arg(m.calibRmsErr, 0, 'f', 3);
+        } else {
+            calibStr = tr("NOT loaded — undistort disabled");
+            calibWarn = true;
+        }
+        form->addRow(tr("Calibration:"), valueLabel(calibStr, calibWarn));
         root->addWidget(grp);
     }
 
     // ── Scale & FOV ──────────────────────────────────────────────────
     {
-        auto* grp  = new QGroupBox(tr("Scale & Field of View"));
+        // "&&" so QGroupBox doesn't treat "&F" as a mnemonic accelerator.
+        auto* grp  = new QGroupBox(tr("Scale && Field of View"));
         auto* form = new QFormLayout(grp);
 
         const bool hasScale = m.pixelsPerMm > 0.0;
