@@ -767,6 +767,11 @@ void Application::updateCalibrationUI()
         } else {
             sp->setCalibration(0.0, 0.0, false);
         }
+        // No depth sensor on a plain UVC camera — clear the depth-derived
+        // readouts so they don't show stale values left over from a prior
+        // RealSense session (e.g. "Distance: 190 mm", "Depth fill: 77%").
+        sp->setDistance(-1.0);
+        sp->setFillRate(-1.0);
     }
 }
 
@@ -888,9 +893,24 @@ void Application::wireCameraSignals()
     // switch to V4L2). The connection itself dies with the old camera object.
     const CameraBackend backend = m_activeBackend;
     connect(m_camera.get(), &camera::ICameraSource::frameReady, this,
-            [this, backend](ibom::camera::FrameRef frameRef) {
+            [this, backend, intrinsicsShown = false](ibom::camera::FrameRef frameRef) mutable {
         if (!frameRef || frameRef->empty()) return;
         const cv::Mat& frame = *frameRef;
+
+#ifdef IBOM_HAVE_REALSENSE
+        // Factory intrinsics are cached by the capture thread when it grabs its
+        // first frame — after updateCalibrationUI() already ran synchronously at
+        // backend switch (when colorFx() was still 0). Refresh the calibration
+        // readout once, now that fx is available. The init-capture flag is
+        // per-connection, so it resets automatically on every backend hot-swap.
+        if (backend == CameraBackend::RealSense && !intrinsicsShown) {
+            if (auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get());
+                rs && rs->colorFx() > 0.0) {
+                updateCalibrationUI();
+                intrinsicsShown = true;
+            }
+        }
+#endif
 
         // ── Live tracking: hand the raw frame off to the worker thread ──
         // The worker throttles, downscales and runs ORB without blocking us.

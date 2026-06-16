@@ -15,6 +15,8 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 25 | 2026-06-16 | Application.cpp / StatsPanel | ✅ RÉSOLU | [Distance / Depth fill périmés affichés pour le microscope (stats depth D405 jamais réinitialisées)](#erreur-25--distance--depth-fill-perimes-affiches-pour-le-microscope) |
+| 24 | 2026-06-16 | Application.cpp / RealSense | ✅ RÉSOLU | [D405 « Factory fx=0.0 px » — `updateCalibrationUI()` lit `colorFx()` avant la mise en cache des intrinsics](#erreur-24--d405-factory-fx00-px--intrinsics-lues-trop-tot) |
 | 23 | 2026-06-16 | CameraCapture.cpp / V4L2 enum | ✅ RÉSOLU | [Liste caméras du profil Microscope inclut les nœuds UVC du D405 (RealSense vu deux fois)](#erreur-23--liste-cameras-du-profil-microscope-inclut-les-noeuds-uvc-du-d405) |
 | 22 | 2026-06-16 | CameraCapture / GUI device combo | ✅ RÉSOLU | [Microscope inaccessible via l'UI — index combo (position) confondu avec l'index `/dev/video` réel (caméra à video6)](#erreur-22--index-combo-confondu-avec-lindex-devvideo-reel) |
 | 21 | 2026-06-16 | CameraCapture.cpp / V4L2 | ✅ RÉSOLU | [`terminate called without an active exception` (SIGABRT) au switch caméra/profil — `std::thread` joignable détruit après auto-exit du captureLoop](#erreur-21--terminate-called-without-an-active-exception-au-switch-camera) |
@@ -44,6 +46,48 @@
 - 🟡 CONTOURNÉ — solution temporaire en place
 - ✅ RÉSOLU — fix appliqué et validé
 - 📝 INFO — note pour mémoire (pas un bug, juste un piège)
+
+---
+
+## ERREUR 25 — Distance / Depth fill périmés affichés pour le microscope
+
+**Date :** 2026-06-16
+**Composant :** Application::updateCalibrationUI + StatsPanel
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) suite 45
+
+### Symptôme
+En profil Microscope (V4L2, sans capteur de profondeur), le panneau Statistics affiche encore « Distance: 190.0 mm » et « Depth fill: 77% » — des valeurs héritées de la session D405 précédente.
+
+### Cause
+`Distance` et `Depth fill` ne sont mis à jour que par le handler `depthFrameReady` (RealSense uniquement). Au passage en V4L2, ce signal ne se déclenche plus jamais → les labels gardent leur dernière valeur D405. Aucun code ne les réinitialise au changement de backend.
+
+### Solution appliquée ✅
+Dans `Application::updateCalibrationUI()`, branche V4L2/microscope (backend sans depth), appeler `sp->setDistance(-1.0)` et `sp->setFillRate(-1.0)` → affiche « — » (sentinelles déjà gérées par `StatsPanel::setDistance(<=0)` / `setFillRate(<0)`). `updateCalibrationUI()` est déjà appelée à chaque changement de backend et en fin de calibration.
+
+### Leçon
+Toute statistique alimentée par un seul backend (depth, IR, etc.) doit être explicitement remise à « indisponible » quand on bascule vers un backend qui ne la produit pas — sinon l'UI ment avec des valeurs périmées.
+
+---
+
+## ERREUR 24 — D405 « Factory fx=0.0 px » — intrinsics lues trop tôt
+
+**Date :** 2026-06-16
+**Composant :** Application::updateCalibrationUI / RealSenseCapture::colorFx
+**Statut :** ✅ RÉSOLU
+**Référence session :** [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) suite 45
+
+### Symptôme
+Panneau Statistics en profil D405 : « Calibration: Factory fx=0.0 px », alors que les logs montrent `RealSense color opened: … fx=436.8px`. La FOV/intrinsics du tooltip restent vides.
+
+### Cause
+`RealSenseCapture` met en cache les intrinsics (`m_colorFx` …) dans `captureLoop()`, **sur le thread de capture**, juste avant la boucle de frames. Or `updateCalibrationUI()` est appelée **synchroniquement** depuis `wireCameraSignals()` juste après `start()` — à cet instant le thread de capture n'a pas encore atteint la mise en cache, donc `colorFx()` renvoie encore 0.0 (défaut). Le label se fige sur la première lecture.
+
+### Solution appliquée ✅
+Rafraîchir une fois le label dès que les intrinsics sont disponibles : dans le handler `frameReady` (qui tourne pour chaque backend), flag **one-shot par connexion** (`intrinsicsShown`, init-capture `mutable` → se réinitialise tout seul à chaque hot-swap de backend). Quand `backend == RealSense` et que `colorFx() > 0`, appeler `updateCalibrationUI()` une seule fois. Coût = un `dynamic_cast` sur les quelques premières frames jusqu'à ce que fx soit disponible, puis plus rien.
+
+### Leçon
+Les intrinsics RealSense ne sont valides qu'**après** que le pipeline a démarré et livré une frame. Toute lecture de `colorFx()`/`colorFy()`/… faite synchroniquement juste après `start()` voit 0. Lire ces valeurs dans un handler de frame (ou via un signal émis après la mise en cache), jamais en synchrone post-start.
 
 ---
 
