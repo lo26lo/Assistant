@@ -10,7 +10,64 @@ namespace ibom {
 
 namespace fs = std::filesystem;
 
-Config::Config() = default;
+Config::Config()
+{
+    m_profiles.resize(2);
+
+    m_profiles[0].name             = "D405";
+    m_profiles[0].backend          = CameraBackend::RealSense;
+    m_profiles[0].cameraIndex      = 0;
+    m_profiles[0].width            = 848;
+    m_profiles[0].height           = 480;
+    m_profiles[0].fps              = 30;
+    m_profiles[0].hwDecode         = true;
+    m_profiles[0].scaleMethod      = ScaleMethod::Depth;
+    m_profiles[0].opticalMultiplier = 1.0f;
+
+    m_profiles[1].name             = "Microscope";
+    m_profiles[1].backend          = CameraBackend::V4L2;
+    m_profiles[1].cameraIndex      = 0;
+    m_profiles[1].width            = 1920;
+    m_profiles[1].height           = 1080;
+    m_profiles[1].fps              = 30;
+    m_profiles[1].hwDecode         = false;
+    m_profiles[1].scaleMethod      = ScaleMethod::Homography;
+    m_profiles[1].opticalMultiplier = 0.3f;
+}
+
+void Config::setActiveProfileIndex(int idx)
+{
+    if (idx < 0 || idx >= static_cast<int>(m_profiles.size())) return;
+    m_activeProfileIndex = idx;
+}
+
+void Config::applyActiveProfile()
+{
+    if (m_profiles.empty()) return;
+    const auto& p = m_profiles[m_activeProfileIndex];
+    m_cameraBackend     = p.backend;
+    m_cameraIndex       = p.cameraIndex;
+    m_cameraWidth       = p.width;
+    m_cameraHeight      = p.height;
+    m_cameraFps         = p.fps;
+    m_cameraHwDecode    = p.hwDecode;
+    m_scaleMethod       = p.scaleMethod;
+    m_opticalMultiplier = p.opticalMultiplier;
+}
+
+void Config::saveCurrentCameraToProfile()
+{
+    if (m_profiles.empty()) return;
+    auto& p = m_profiles[m_activeProfileIndex];
+    p.backend           = m_cameraBackend;
+    p.cameraIndex       = m_cameraIndex;
+    p.width             = m_cameraWidth;
+    p.height            = m_cameraHeight;
+    p.fps               = m_cameraFps;
+    p.hwDecode          = m_cameraHwDecode;
+    p.scaleMethod       = m_scaleMethod;
+    p.opticalMultiplier = m_opticalMultiplier;
+}
 
 void Config::addRecentIbomFile(const std::string& path)
 {
@@ -166,6 +223,30 @@ bool Config::load(const std::string& path)
             m_datasetMinVisibleFrac     = ds.value("min_visible_frac", m_datasetMinVisibleFrac);
         }
 
+        // Camera profiles
+        if (j.contains("camera_profiles") && j["camera_profiles"].is_array()) {
+            const auto& arr = j["camera_profiles"];
+            for (size_t i = 0; i < std::min(arr.size(), m_profiles.size()); ++i) {
+                const auto& jp = arr[i];
+                auto& p = m_profiles[i];
+                p.name              = jp.value("name", p.name);
+                p.cameraIndex       = jp.value("index", p.cameraIndex);
+                p.width             = jp.value("width", p.width);
+                p.height            = jp.value("height", p.height);
+                p.fps               = jp.value("fps", p.fps);
+                p.hwDecode          = jp.value("hw_decode", p.hwDecode);
+                p.opticalMultiplier = jp.value("optical_multiplier", p.opticalMultiplier);
+                const std::string be = jp.value("backend", std::string("v4l2"));
+                p.backend = (be == "realsense") ? CameraBackend::RealSense : CameraBackend::V4L2;
+                p.scaleMethod = static_cast<ScaleMethod>(jp.value("scale_method",
+                                    static_cast<int>(p.scaleMethod)));
+            }
+        }
+        m_activeProfileIndex = j.value("active_profile", m_activeProfileIndex);
+        if (m_activeProfileIndex < 0 || m_activeProfileIndex >= static_cast<int>(m_profiles.size()))
+            m_activeProfileIndex = 0;
+        applyActiveProfile();
+
         spdlog::info("Config loaded from '{}'", filePath);
         return true;
 
@@ -269,6 +350,24 @@ bool Config::save(const std::string& path) const
             {"min_box_px",            m_datasetMinBoxPx},
             {"min_visible_frac",      m_datasetMinVisibleFrac}
         };
+
+        // Camera profiles
+        nlohmann::json profilesArr = nlohmann::json::array();
+        for (const auto& p : m_profiles) {
+            profilesArr.push_back({
+                {"name",              p.name},
+                {"backend",           p.backend == CameraBackend::RealSense ? "realsense" : "v4l2"},
+                {"index",             p.cameraIndex},
+                {"width",             p.width},
+                {"height",            p.height},
+                {"fps",               p.fps},
+                {"hw_decode",         p.hwDecode},
+                {"scale_method",      static_cast<int>(p.scaleMethod)},
+                {"optical_multiplier", p.opticalMultiplier}
+            });
+        }
+        j["camera_profiles"] = profilesArr;
+        j["active_profile"]  = m_activeProfileIndex;
 
         std::ofstream ofs(filePath);
         ofs << j.dump(4);

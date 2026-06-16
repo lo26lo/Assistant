@@ -167,6 +167,9 @@ bool Application::initialize()
     // Show main window
     m_mainWindow->show();
 
+    // Sync profile combo to the persisted active profile.
+    m_mainWindow->setActiveProfile(m_config->activeProfileIndex());
+
     // Remote browser view, if enabled in config.
     applyRemoteViewConfig();
 
@@ -550,6 +553,51 @@ void Application::switchCameraBackend(CameraBackend backend)
         if (!m_camera->start())
             m_mainWindow->updateStatusMessage(tr("Failed to start camera after backend switch"));
     }
+}
+
+void Application::switchProfile(int profileIndex)
+{
+    if (profileIndex < 0 || profileIndex >= static_cast<int>(m_config->profiles().size()))
+        return;
+    if (profileIndex == m_config->activeProfileIndex() && m_camera)
+        return;
+
+    // Save current tracking state for the outgoing profile
+    const int outIdx = m_config->activeProfileIndex();
+    if (outIdx < static_cast<int>(m_profileStates.size())) {
+        auto& st = m_profileStates[outIdx];
+        st.liveMode    = m_liveMode;
+        st.pixelsPerMm = m_currentPixelsPerMm;
+        if (m_homography && m_homography->isValid())
+            st.liveHomography  = m_homography->matrix().clone();
+        st.baseHomography = m_baseHomography.clone();
+    }
+
+    // Save current flat camera settings back to the outgoing profile
+    m_config->saveCurrentCameraToProfile();
+
+    // Switch to the new profile
+    m_config->setActiveProfileIndex(profileIndex);
+    m_config->applyActiveProfile();
+    m_config->save();
+
+    // Switch the camera backend (stops/creates/rewires/starts)
+    switchCameraBackend(m_config->cameraBackend());
+
+    // Restore tracking state for the incoming profile
+    if (profileIndex < static_cast<int>(m_profileStates.size())) {
+        const auto& st = m_profileStates[profileIndex];
+        m_liveMode           = false;  // always start with live tracking off after profile switch
+        m_currentPixelsPerMm = st.pixelsPerMm;
+        m_basePixelsPerMm    = st.pixelsPerMm;
+        if (!st.liveHomography.empty() && m_homography)
+            m_homography->setMatrix(st.liveHomography);
+        m_baseHomography = st.baseHomography.clone();
+    }
+
+    emit cameraProfileChanged(profileIndex);
+    spdlog::info("Switched to camera profile {}: {}", profileIndex,
+                 m_config->profiles()[profileIndex].name);
 }
 
 void Application::refreshCameraDeviceList()
@@ -1847,6 +1895,12 @@ void Application::connectControlSignals()
     // Export
     connect(inspPanel, &gui::InspectionPanel::exportRequested,
             this, &Application::onExport);
+
+    // ── Camera profile selector ─────────────────────────────────
+    connect(m_mainWindow.get(), &gui::MainWindow::cameraProfileChangeRequested,
+            this, [this](int idx) { switchProfile(idx); });
+    connect(this, &Application::cameraProfileChanged,
+            m_mainWindow.get(), &gui::MainWindow::setActiveProfile);
 
     spdlog::info("Signal/slot connections established, FPS timer started.");
 }

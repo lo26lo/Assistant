@@ -28,6 +28,19 @@ enum class SortMethod {
     FootprintSize    = 3   // Smallest footprint first
 };
 
+/// Per-camera configuration bundle.
+struct CameraProfile {
+    std::string   name;
+    CameraBackend backend           = CameraBackend::V4L2;
+    int           cameraIndex       = 0;
+    int           width             = 1920;
+    int           height            = 1080;
+    int           fps               = 30;
+    bool          hwDecode          = true;
+    ScaleMethod   scaleMethod       = ScaleMethod::Homography;
+    float         opticalMultiplier = 1.0f;
+};
+
 /**
  * @brief Persistent application configuration.
  *
@@ -189,6 +202,21 @@ public:
     float selectedOutlineWidth() const { return m_selectedOutlineWidth; }
     void setSelectedOutlineWidth(float w) { m_selectedOutlineWidth = w; }
 
+    // --- Camera profiles ---
+    const std::vector<CameraProfile>& profiles() const { return m_profiles; }
+    std::vector<CameraProfile>& profiles() { return m_profiles; }
+
+    int  activeProfileIndex() const { return m_activeProfileIndex; }
+    void setActiveProfileIndex(int idx);
+
+    const CameraProfile& activeProfile() const { return m_profiles[m_activeProfileIndex]; }
+    CameraProfile& activeProfile() { return m_profiles[m_activeProfileIndex]; }
+
+    /// Copy the active profile's settings into the flat camera fields.
+    void applyActiveProfile();
+    /// Copy the current flat camera settings back into the active profile.
+    void saveCurrentCameraToProfile();
+
     // --- Dataset capture (Phase A — see docs/DATASET_CREATOR_PLAN.md) ---
     int    datasetMinInliers() const { return m_datasetMinInliers; }
     double datasetMaxReprojErrPx() const { return m_datasetMaxReprojErrPx; }
@@ -267,6 +295,10 @@ private:
     std::string m_normalColorHex      = "#AAAA44";  // muted gold (current default)
     float       m_placedOpacity       = 0.45f;      // dim placed comps to background
     float       m_selectedOutlineWidth = 3.0f;      // thicker silk border for selected
+
+    // Camera profiles
+    std::vector<CameraProfile> m_profiles;
+    int m_activeProfileIndex = 0;
 
     // Dataset capture (defaults from docs/DATASET_CREATOR_PLAN.md §A2/§A3)
     int    m_datasetMinInliers         = 25;

@@ -93,6 +93,9 @@ signals:
     /// engine — can take minutes; runs off the GUI thread).
     void aiStatusChanged(bool ready, QString message);
 
+    /// Emitted after a successful profile switch with the new active index.
+    void cameraProfileChanged(int idx);
+
 private:
     void setupLogging();
     void parseCommandLine();
@@ -114,6 +117,8 @@ private:
     /// Stop, destroy and recreate the camera for a new backend, then re-wire
     /// and restart if it was capturing. Used by the Settings backend selector.
     void switchCameraBackend(CameraBackend backend);
+    /// Switch to a named camera profile, saving/restoring per-profile tracking state.
+    void switchProfile(int profileIndex);
     /// Enumerate devices for the active backend and refresh the ControlPanel.
     void refreshCameraDeviceList();
     /// Open the dynamic RealSense sensor-controls panel (from ControlPanel or
@@ -227,6 +232,15 @@ private:
     // Dynamic scale tracking
     double m_basePixelsPerMm = 0.0;  // pixelsPerMm at initial homography
     double m_currentPixelsPerMm = 0.0;
+
+    // Per-profile tracking state (saved/restored on profile switch)
+    struct ProfileTrackingState {
+        cv::Mat  baseHomography;   // m_baseHomography snapshot
+        cv::Mat  liveHomography;   // m_homography->matrix() snapshot
+        double   pixelsPerMm = 0.0;
+        bool     liveMode    = false;
+    };
+    std::vector<ProfileTrackingState> m_profileStates{2};
 };
 
 } // namespace ibom

@@ -14,6 +14,8 @@
 #include "../app/Application.h"
 #include "../app/Config.h"
 
+#include <QComboBox>
+#include <QSignalBlocker>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QMenu>
@@ -334,11 +336,29 @@ void MainWindow::createToolBar()
     m_mainToolBar->addSeparator();
     m_mainToolBar->addAction(m_actToggleCam);
     m_mainToolBar->addSeparator();
+
+    // Camera profile selector (D405 / Microscope)
+    m_profileCombo = new QComboBox(m_mainToolBar);
+    m_profileCombo->setToolTip(tr("Camera profile — switch between D405 (≥0402) and Microscope (0201)"));
+    m_profileCombo->addItem(tr("D405"));
+    m_profileCombo->addItem(tr("Microscope"));
+    m_profileCombo->setMinimumWidth(110);
+    connect(m_profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int idx) { emit cameraProfileChangeRequested(idx); });
+    m_mainToolBar->addWidget(m_profileCombo);
+    m_mainToolBar->addSeparator();
     m_mainToolBar->addAction(m_actInspect);
     m_mainToolBar->addAction(m_actScreenshot);
     m_mainToolBar->addAction(m_actExport);
     m_mainToolBar->addSeparator();
     m_mainToolBar->addAction(m_actSettings);
+}
+
+void MainWindow::setActiveProfile(int idx)
+{
+    if (!m_profileCombo) return;
+    QSignalBlocker blocker(m_profileCombo);
+    m_profileCombo->setCurrentIndex(idx);
 }
 
 void MainWindow::createStatusBar()

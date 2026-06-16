@@ -11,6 +11,7 @@
 #include <memory>
 
 class QStackedWidget;
+class QComboBox;
 
 namespace ibom {
 class Application;
@@ -59,6 +60,9 @@ public:
     /// True while the central view is showing the 3D point cloud.
     bool pointCloudActive() const { return m_pointCloudActive; }
 
+    /// Update the profile combo without triggering the change signal.
+    void setActiveProfile(int idx);
+
 signals:
     void ibomFileRequested(const QString& path);
     void cameraToggled(bool start);
@@ -73,6 +77,8 @@ signals:
     /// Open the RealSense sensor-controls panel (routed from the Settings
     /// dialog; the live camera lives in Application).
     void realSenseControlsRequested();
+    /// User selected a different camera profile in the toolbar combo.
+    void cameraProfileChangeRequested(int idx);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -139,6 +145,7 @@ private:
     QAction*  m_actDarkMode   = nullptr;
     QAction*  m_actDepthView  = nullptr;
     QAction*  m_actPointCloud = nullptr;
+    QComboBox* m_profileCombo = nullptr;
 
     // Status bar widgets
     QLabel* m_fpsLabel    = nullptr;
