@@ -95,7 +95,7 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     , m_camera(camera)
 {
     setWindowTitle(tr("RealSense — Camera Controls"));
-    setMinimumSize(440, 560);
+    setMinimumSize(500, 560);
 
     // If the camera goes away (e.g. backend hot-swap destroys it), close this
     // dialog so no later callback or delayed rebuild() touches a dead object.
@@ -316,7 +316,7 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     toolsLay->addWidget(calBtn);
 
     // Advanced-mode JSON presets (load/save full device config).
-    auto* presetRow = new QHBoxLayout;
+    auto* presetRow = new QVBoxLayout;
     auto* loadJson = new QPushButton(tr("Charger preset JSON…"));
     loadJson->setToolTip(tr("Applique une configuration complète (advanced mode) "
                             "depuis un fichier .json — presets recommandés Intel."));

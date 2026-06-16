@@ -712,6 +712,8 @@ void enumerateOptions(const rs2::options& opts, int ownerId,
     for (int o = 0; o < static_cast<int>(RS2_OPTION_COUNT); ++o) {
         const auto opt = static_cast<rs2_option>(o);
         if (!opts.supports(opt)) continue;
+        // Skip internal stream-mux options (not meaningful as user controls).
+        { const char* _n = rs2_option_to_string(opt); if (_n) { std::string_view _sv(_n); if (_sv == "Stream Filter" || _sv == "Stream Format Filter" || _sv == "Stream Index Filter") continue; } }
         rs2::option_range r;
         try { r = opts.get_option_range(opt); }
         catch (const rs2::error&) { continue; }

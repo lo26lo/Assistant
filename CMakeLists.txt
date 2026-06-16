@@ -149,6 +149,7 @@ set(SOURCES
     src/gui/MainWindow.cpp
     src/gui/CameraView.cpp
     src/gui/PointCloudView.cpp
+    src/gui/ViewModeBar.cpp
     src/gui/ToggleSwitch.cpp
     src/gui/BomPanel.cpp
     src/gui/ControlPanel.cpp
@@ -216,6 +217,7 @@ set(HEADERS
     src/gui/MainWindow.h
     src/gui/CameraView.h
     src/gui/PointCloudView.h
+    src/gui/ViewModeBar.h
     src/gui/ToggleSwitch.h
     src/gui/BomPanel.h
     src/gui/ControlPanel.h

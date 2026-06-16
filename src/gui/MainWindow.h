@@ -20,6 +20,7 @@ namespace ibom::gui {
 
 class CameraView;
 class PointCloudView;
+class ViewModeBar;
 class BomPanel;
 class ControlPanel;
 class InspectionWizard;
@@ -76,6 +77,7 @@ signals:
 protected:
     void closeEvent(QCloseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
 
@@ -104,6 +106,7 @@ private:
     void applyDarkStylesheet();
     void applyLightStylesheet();
     void toggleCameraFullscreen(bool enter);
+    void repositionViewModeBar();
 
     Application* m_app = nullptr;
 
@@ -111,6 +114,7 @@ private:
     QStackedWidget*   m_centralStack     = nullptr;
     CameraView*       m_cameraView       = nullptr;
     PointCloudView*   m_pointCloudView   = nullptr;
+    ViewModeBar*      m_viewModeBar      = nullptr;
     bool              m_pointCloudActive = false;
     BomPanel*         m_bomPanel         = nullptr;
     ControlPanel*     m_controlPanel     = nullptr;

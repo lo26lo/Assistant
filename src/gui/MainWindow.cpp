@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "CameraView.h"
 #include "PointCloudView.h"
+#include "ViewModeBar.h"
 #include "BomPanel.h"
 #include "ControlPanel.h"
 #include "InspectionWizard.h"
@@ -54,6 +55,12 @@ MainWindow::MainWindow(Application* app, QWidget* parent)
     m_centralStack->addWidget(m_pointCloudView);  // index 1
     setCentralWidget(m_centralStack);
 
+    // View-mode overlay — two pill buttons (Depth / 3D) floating top-right,
+    // visible on both pages of the stack.
+    m_viewModeBar = new ViewModeBar(m_centralStack);
+    m_viewModeBar->show();
+    m_viewModeBar->raise();
+
     createActions();
     createMenuBar();
     createToolBar();
@@ -67,6 +74,22 @@ MainWindow::MainWindow(Application* app, QWidget* parent)
         applyDarkStylesheet();
     else
         applyLightStylesheet();
+
+    // ViewModeBar signals → existing depth/cloud toggle logic.
+    connect(m_viewModeBar, &ViewModeBar::depthToggled, this, [this]() {
+        if (m_actDepthView) m_actDepthView->toggle();
+    });
+    connect(m_viewModeBar, &ViewModeBar::cloudToggled, this, [this]() {
+        if (m_actPointCloud) m_actPointCloud->toggle();
+    });
+    // Keep ViewModeBar in sync when actions change state.
+    connect(m_actDepthView, &QAction::toggled,
+            m_viewModeBar, &ViewModeBar::setDepthActive);
+    connect(m_actPointCloud, &QAction::toggled,
+            m_viewModeBar, &ViewModeBar::setCloudActive);
+
+    // CameraView's single built-in toggle is replaced by ViewModeBar; disable it.
+    m_cameraView->setViewToggleVisible(false);
 
     // Double-click camera view → camera-only fullscreen
     connect(m_cameraView, &CameraView::doubleClicked, this, [this]() {
@@ -124,13 +147,12 @@ void MainWindow::setDepthViewAvailable(bool available)
 {
     if (!m_actDepthView) return;
     m_actDepthView->setEnabled(available);
-    if (!available && m_actDepthView->isChecked()) {
-        // Backend lost the depth stream — fall back to color and notify.
-        m_actDepthView->setChecked(false);  // emits depthViewToggled(false)
+    if (!available && m_actDepthView->isChecked())
+        m_actDepthView->setChecked(false);
+    if (m_viewModeBar) {
+        m_viewModeBar->setDepthEnabled(available);
+        repositionViewModeBar();
     }
-    // Show the in-image toggle button only when depth is available.
-    if (m_cameraView)
-        m_cameraView->setViewToggleVisible(available);
 }
 
 void MainWindow::setPointCloudAvailable(bool available)
@@ -138,7 +160,27 @@ void MainWindow::setPointCloudAvailable(bool available)
     if (!m_actPointCloud) return;
     m_actPointCloud->setEnabled(available);
     if (!available && m_actPointCloud->isChecked())
-        m_actPointCloud->setChecked(false);  // leave 3D mode, emits pointCloudToggled(false)
+        m_actPointCloud->setChecked(false);
+    if (m_viewModeBar)
+        m_viewModeBar->setCloudEnabled(available);
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    repositionViewModeBar();
+}
+
+void MainWindow::repositionViewModeBar()
+{
+    if (!m_viewModeBar || !m_centralStack) return;
+    const QSize sz = m_viewModeBar->sizeHint();
+    const int margin = 10;
+    m_viewModeBar->setGeometry(
+        m_centralStack->width() - sz.width() - margin,
+        margin,
+        sz.width(), sz.height());
+    m_viewModeBar->raise();
 }
 
 // ── Actions ──────────────────────────────────────────────────────
@@ -195,12 +237,7 @@ void MainWindow::createActions()
     m_actDepthView->setToolTip(tr("Show the colorized depth map instead of the "
                                   "color image (RealSense only)."));
     connect(m_actDepthView, &QAction::toggled, this, &MainWindow::depthViewToggled);
-    // Keep the in-image toggle button label in sync with the action.
     connect(m_actDepthView, &QAction::toggled, m_cameraView, &CameraView::setDepthViewActive);
-    // The in-image button drives the same action (menu + button stay in sync).
-    connect(m_cameraView, &CameraView::viewToggleClicked, this, [this]() {
-        if (m_actDepthView->isEnabled()) m_actDepthView->toggle();
-    });
 
     m_actPointCloud = new QAction(tr("3D Point Cloud"), this);
     m_actPointCloud->setCheckable(true);
@@ -239,10 +276,14 @@ void MainWindow::createMenuBar()
     auto* inspectMenu = menuBar()->addMenu(tr("&Inspection"));
     inspectMenu->addAction(m_actInspect);
 
+    // Depth/3D view switching is done via the in-image ViewModeBar overlay;
+    // keep the actions alive for keyboard shortcuts (D / 3) but don't add them
+    // to the View menu — that menu is for GUI panels, not view modes.
+    addAction(m_actDepthView);
+    addAction(m_actPointCloud);
+
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(m_actFullscreen);
-    viewMenu->addAction(m_actDepthView);
-    viewMenu->addAction(m_actPointCloud);
     viewMenu->addAction(m_actDarkMode);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
