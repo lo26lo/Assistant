@@ -100,7 +100,7 @@ void PointCloudView::setCloud(const ibom::camera::PointCloudRef& cloud)
 
 void PointCloudView::initializeGL()
 {
-    initializeFunctions();
+    initializeOpenGLFunctions();
     glClearColor(0.06f, 0.06f, 0.09f, 1.0f);
     glEnable(GL_DEPTH_TEST);
 #ifdef GL_PROGRAM_POINT_SIZE
