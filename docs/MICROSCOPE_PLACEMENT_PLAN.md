@@ -1,6 +1,6 @@
 # Plan — Placement & inspection 0201 au microscope (caméra unique 0.3x)
 
-> **Date** : 2026-06-16 · **Statut** : Planification — non implémenté
+> **Date** : 2026-06-16 · **Statut** : Partiellement implémenté (profils caméra, minimap, anchoring 1-point, tracking incrémental) — voir journal de session pour le détail des étapes restantes
 > **Remplace** : l'approche dual-camera (D405 macro + micro) abandonnée — voir §0.
 > **Objectif** : guider le placement manuel et inspecter des composants 0201 (0,6 × 0,3 mm) à travers le microscope, avec overlay iBOM correct malgré un champ étroit et un zoom optique variable.
 

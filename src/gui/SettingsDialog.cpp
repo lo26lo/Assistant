@@ -16,6 +16,7 @@
 #include <QColorDialog>
 #include <QMetaObject>
 #include <QSignalBlocker>
+#include <QPointer>
 #include <thread>
 
 SettingsDialog::SettingsDialog(ibom::Config& config, QWidget* parent)
@@ -595,7 +596,11 @@ void SettingsDialog::enumerateCameras()
     const bool realsense = m_cameraBackend
         && m_cameraBackend->currentData().toInt() == 1;
 
-    std::thread([this, previousIndex, realsense]() {
+    // Guard against the dialog being closed/destroyed before the worker
+    // finishes — QPointer is safe to test from another thread (it just
+    // checks QObject's internal destruction guard), unlike `this` itself.
+    QPointer<SettingsDialog> guard(this);
+    std::thread([guard, previousIndex, realsense]() {
         QStringList names;
         QList<int>  indices;  // real device indices, parallel to names
 #ifdef IBOM_HAVE_REALSENSE
@@ -617,20 +622,23 @@ void SettingsDialog::enumerateCameras()
             }
         }
         (void)realsense;
-        QMetaObject::invokeMethod(this, [this, names, indices, previousIndex]() {
-            m_cameraDevice->clear();
+        if (!guard) return;
+        QMetaObject::invokeMethod(guard.data(), [guard, names, indices, previousIndex]() {
+            if (!guard) return;
+            SettingsDialog* self = guard.data();
+            self->m_cameraDevice->clear();
             if (names.isEmpty()) {
-                m_cameraDevice->addItem(tr("No camera detected"));
+                self->m_cameraDevice->addItem(tr("No camera detected"));
             } else {
                 for (int i = 0; i < names.size(); ++i)
-                    m_cameraDevice->addItem(names[i], indices.value(i, i));
+                    self->m_cameraDevice->addItem(names[i], indices.value(i, i));
             }
-            m_cameraDevice->setEnabled(true);
-            if (m_refreshCameras)
-                m_refreshCameras->setEnabled(true);
-            const int pos = m_cameraDevice->findData(previousIndex);
+            self->m_cameraDevice->setEnabled(true);
+            if (self->m_refreshCameras)
+                self->m_refreshCameras->setEnabled(true);
+            const int pos = self->m_cameraDevice->findData(previousIndex);
             if (pos >= 0)
-                m_cameraDevice->setCurrentIndex(pos);
+                self->m_cameraDevice->setCurrentIndex(pos);
         }, Qt::QueuedConnection);
     }).detach();
 }

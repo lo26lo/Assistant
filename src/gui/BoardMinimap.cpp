@@ -76,6 +76,8 @@ void BoardMinimap::rebuildCache()
 
     double pcbW = m_pcbMaxX - m_pcbMinX;
     double pcbH = m_pcbMaxY - m_pcbMinY;
+    if (pcbW < 1e-6) pcbW = 1.0;
+    if (pcbH < 1e-6) pcbH = 1.0;
     int ww = width()  - 2 * m_marginPx;
     int wh = height() - 2 * m_marginPx;
     if (ww < 1) ww = 1;

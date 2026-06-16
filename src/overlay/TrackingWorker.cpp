@@ -66,7 +66,7 @@ void TrackingWorker::resetReference()
     m_cumulativeH      = cv::Mat();
     m_accumulatedDrift = 0.0;
     m_lostFrames       = 0;
-    m_state            = State::Lost;
+    setState(State::Lost);
 }
 
 void TrackingWorker::setState(State s)
@@ -231,7 +231,10 @@ void TrackingWorker::processIncremental(const std::vector<cv::KeyPoint>& kp,
         m_hasReference     = true;
         setState(State::Locked);
         emit referenceCaptured(static_cast<int>(m_prevKeypoints.size()));
-        emit homographyUpdated(m_cumulativeH.clone(), static_cast<int>(kp.size()), 0.0);
+        // Don't emit homographyUpdated here: no match/RANSAC has happened yet,
+        // so there is no real inlier count. Consumers (e.g. DatasetCreator)
+        // gate on `inliers`, and a fabricated value (keypoint count) could pass
+        // quality gates incorrectly. The next processed frame emits a real one.
         spdlog::info("TrackingWorker: incremental anchor bootstrapped ({} keypoints)",
                      m_prevKeypoints.size());
         return;

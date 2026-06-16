@@ -594,6 +594,17 @@ void Application::switchProfile(int profileIndex)
         m_baseHomography = st.baseHomography.clone();
     }
 
+    // Push the restored state into the rendering/UI components. With
+    // m_liveMode forced false above, the normal homographyUpdated handler
+    // won't run for this switch, so OverlayRenderer / StatsPanel scale /
+    // BoardMinimap would otherwise keep showing the outgoing profile's values.
+    if (m_homography && m_homography->isValid() && m_overlayRenderer)
+        m_overlayRenderer->setHomography(*m_homography);
+    if (auto* sp = m_mainWindow->statsPanel())
+        sp->setScale(m_currentPixelsPerMm);
+    if (m_mainWindow->boardMinimap())
+        m_mainWindow->boardMinimap()->update();
+
     // Tracking mode follows the profile: the microscope (V4L2, narrow FOV) uses
     // incremental frame→frame tracking when enabled; the D405 (RealSense, wide
     // field) keeps global reference matching. See §0bis of the placement plan.
@@ -893,9 +904,19 @@ void Application::wireCameraSignals()
     // switch to V4L2). The connection itself dies with the old camera object.
     const CameraBackend backend = m_activeBackend;
     connect(m_camera.get(), &camera::ICameraSource::frameReady, this,
-            [this, backend, intrinsicsShown = false](ibom::camera::FrameRef frameRef) mutable {
+            [this, backend, intrinsicsShown = false, minimapSized = false](ibom::camera::FrameRef frameRef) mutable {
         if (!frameRef || frameRef->empty()) return;
         const cv::Mat& frame = *frameRef;
+
+        // The minimap's FOV rectangle is sized from m_config's nominal
+        // resolution at startup, but the actual camera (e.g. RealSense
+        // defaulting to 848×480 instead of the generic 1920×1080 in config)
+        // may not match it. Push the real frame size in once per connection.
+        if (!minimapSized && m_mainWindow->boardMinimap()) {
+            m_mainWindow->boardMinimap()->setHomography(
+                m_homography.get(), QSize(frame.cols, frame.rows));
+            minimapSized = true;
+        }
 
 #ifdef IBOM_HAVE_REALSENSE
         // Factory intrinsics are cached by the capture thread when it grabs its
