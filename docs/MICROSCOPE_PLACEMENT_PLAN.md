@@ -251,4 +251,21 @@ L'**Étape 1** seule rend l'outil exploitable (ancrage manuel = fiable). Les ét
 | Q2 | Champ réel (en mm) avec la bague 0.3x, au grossissement typique de placement 0201 ? | Dimensionne la fenêtre de matching et l'overlay |
 | Q3 | Combien de composants visibles à l'écran à ce grossissement (ordre de grandeur) ? | Si < 3, le matching incrémental devient prioritaire ; si > 10, le global peut suffire — **à mesurer sur le matériel** |
 | Q4 | La carte reste-t-elle **immobile** pendant que tu déplaces le microscope ? | Si la carte bouge aussi, le suivi incrémental devient plus difficile |
-| Q5 | Index V4L2 de la caméra micro stable au reboot Jetson ? | Auto-détection vs index figé en config |
+| Q5 | ~~Index V4L2 de la caméra micro stable au reboot Jetson ?~~ | 🟡 **Partiellement résolu** : caméra = `/dev/video6` (`HAYEAR_CAMERA / MOS-4K`). L'énumération se fait désormais par `VIDIOC_QUERYCAP` (nom de carte), donc même si l'index bouge, la caméra reste listée et sélectionnable ; mais le `config.json` mémorise un index figé. Auto-sélection par nom = amélioration future possible. |
+
+### Mesures matériel — comparaison D405 ⇄ Microscope (2026-06-16)
+
+Premières mesures réelles sur la **même carte** (la D405 et le microscope filmant le même PCB) :
+
+| | **D405** (focale fixe) | **Microscope** (zoom continu) |
+|---|---|---|
+| Résolution | 848 × 480 | 1920 × 1080 |
+| Échelle mesurée | `fx/dist` = 436.8/188 ≈ **2.3 px/mm** | calibration checkerboard = **11.58 px/mm** |
+| Distance de travail | ~188 mm | (zoom, non pertinent) |
+| Champ (FOV) calculé | ≈ **366 × 207 mm** | ≈ **166 × 93 mm** |
+| Grossissement relatif | 1× (référence) | **≈ 5×** à ce réglage |
+| Taille d'un 0201 (0,6 mm) à l'écran | ~1,4 px (**invisible**) | ~7 px (**trop petit**) |
+
+**⚠️ Caveat zoom continu** : les 11.58 px/mm (et donc le FOV 166 mm) ne valent **qu'au zoom exact de la calibration**. Les deux photos montrent des grossissements différents → ces chiffres sont **un point de mesure**, pas une constante. C'est précisément pourquoi l'échelle doit être ré-estimée live (§3) et non figée.
+
+**Conclusion (réponse partielle Q2/Q3)** : au réglage calibré, le microscope est ~5× la D405, mais **un 0201 ne fait encore que ~7 px** → insuffisant pour placer/inspecter. Il faut **zoomer davantage** : cible ~50–80 px par composant → ~80–130 px/mm → FOV ~15–25 mm → **1 à 5 composants visibles** → le **matching incrémental (§2) devient prioritaire** sur le global, comme prévu. Confirme aussi le partage des rôles §0bis : D405 pour ≥0402 + 3D, microscope (zoomé) pour 0201.
