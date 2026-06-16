@@ -14,7 +14,7 @@ L'idée initiale (D405 grand-champ qui ancre la position + microscope en gros pl
 |---------|-------------|
 | Une **seule caméra** : l'originale, montée sur le microscope via **bague de réduction 0.3x** | Pas de 2e flux. On réutilise le chemin `CameraCapture` existant. |
 | La D405 **ne peut pas** rester pointée sur la carte en continu | Pas d'ancre macro continue possible. |
-| La D405 est **sortie du workflow placement** | Reste utile pour le 3D/inspection volumétrique, mais pas ici. |
+| La D405 ne sert **pas pour le 0201** (résolution) | Mais elle couvre les composants **≥ 0402** + l'inspection 3D + la génération de dataset IA → coexistence des deux caméras (§0bis). |
 | Le microscope **et** la caméra ont un **zoom continu** (pas de crans) | L'échelle mm/px change en permanence → **estimation d'échelle live depuis l'homographie**, pas de table calibrée. |
 
 **Conséquence positive** : zéro plumbing dual-camera, zéro nouvelle classe caméra. Le gros du travail est dans la **robustesse de la localisation à fort grossissement** et la **gestion du zoom**.
@@ -32,6 +32,45 @@ Un **bras articulé** pour la D405 a une utilité **pour la flexibilité, pas po
 | Captures **multi-angles** pour relief plus complet | Carte de hauteur fiable = vue **quasi verticale** (nadir), pas inclinée |
 
 **Reco** : bras oui pour escamoter/repositionner ; position principale **quasi verticale (~10–20° max)**. **Mais** ne pas investir d'effort matériel sur la D405 tant que le pipeline microscope (Étape 1) n'est pas validé — c'est un accessoire d'inspection optionnel, pas un maillon du placement.
+
+---
+
+## 0bis. Coexistence des deux caméras (D405 + microscope)
+
+Recadrage (2026-06-16) : la D405 **n'est pas abandonnée**, elle couvre un **régime de taille différent**. Un seul logiciel, deux caméras selon le composant :
+
+```
+Composant ≥ ~0402  →  D405 : placement guidé + inspection 3D + génération dataset IA
+Composant 0201     →  Microscope (0.3x) : placement + inspection fine
+```
+
+Les deux partagent le même iBOM, la même `ComponentMap`, le même `OverlayRenderer`.
+
+### Principe : deux branchées, une active, bascule rapide
+Physiquement on n'utilise qu'une caméra à la fois (on est à une station ou l'autre) → **pas de double flux simultané**. Les deux sont des `ICameraSource` déjà en place :
+- `CameraCapture` (V4L2/UVC) → microscope
+- `RealSenseCapture` → D405
+
+Le **hot-swap backend existe déjà** (`stop()` → recrée la source → `start()`, avec le backend pinné par connexion — fix PR #8).
+
+### Notion de profil caméra
+Un profil = bundle de réglages sauvegardé par caméra :
+
+| | **Profil D405** | **Profil Microscope** |
+|-|-----------------|----------------------|
+| Backend | RealSense | V4L2/UVC (index micro) |
+| Tracking | ORB global (champ large) | Incrémental + ancrage manuel (§2) |
+| Échelle | homographie | live, zoom continu (§3) |
+| Depth | oui | non |
+| Usage | placement ≥0402, inspection 3D, dataset | placement/inspection 0201 |
+
+### À implémenter pour la coexistence
+- **`CameraProfile`** dans `Config` : liste de profils + profil actif (backend, index, résolution, params tracking, depth on/off)
+- **Sélecteur UI** dans la barre d'outils (« D405 ⇄ Microscope ») + raccourci
+- **Persistance d'état tracking par profil** : restaurer dernière homographie/ancrage/échelle au retour sur un profil → allers-retours fluides (le morceau neuf le plus utile)
+- *(Option)* **bascule assistée par taille** : cibler une réf ≤ 0201 → suggérer le microscope ; sinon D405 (indice, pas automatique)
+
+> L'abstraction `ICameraSource` + le hot-swap rendent ce chantier léger : l'essentiel est `CameraProfile` + persistance d'état, pas un nouveau pipeline.
 
 ---
 
