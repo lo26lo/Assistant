@@ -40,8 +40,9 @@ private:
     // QPointer auto-nulls if the camera is destroyed (e.g. backend hot-swap),
     // so a delayed rebuild() or a control callback never dereferences a dangler.
     QPointer<camera::RealSenseCapture> m_camera;
-    QScrollArea* m_scroll = nullptr;     // hosts the dynamically-built content
-    QLabel* m_profileDesc = nullptr;     // explains the selected profile
+    QScrollArea* m_scroll      = nullptr;
+    QWidget*     m_dynSection  = nullptr;  // container rebuilt by rebuild()
+    QLabel* m_profileDesc = nullptr;
 
     // Live stream health (Viewer-style): per-stream FPS, polled ~1 Hz.
     QLabel* m_colorFpsLabel = nullptr;

@@ -103,6 +103,22 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
         connect(camera, &QObject::destroyed, this, &QDialog::close);
 
     auto* root = new QVBoxLayout(this);
+    root->setSpacing(0);
+    root->setContentsMargins(0, 0, 0, 0);
+
+    // Everything except the Close/Refresh buttons lives inside a single
+    // QScrollArea so that both the Outils section and the dynamic Controls /
+    // Post-Processing section scroll together.
+    m_scroll = new QScrollArea(this);
+    m_scroll->setWidgetResizable(true);
+    m_scroll->setFrameShape(QFrame::NoFrame);
+    QScroller::grabGesture(m_scroll->viewport(), QScroller::TouchGesture);
+    root->addWidget(m_scroll, 1);
+
+    auto* scrollContent = new QWidget;
+    auto* scrollLay = new QVBoxLayout(scrollContent);
+    scrollLay->setContentsMargins(8, 8, 8, 8);
+    m_scroll->setWidget(scrollContent);  // set before adding children
 
     // ── Resolution / parameter profiles ──
     auto* profBox = new QGroupBox(tr("Profil"), this);
@@ -120,7 +136,7 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     m_profileDesc->setWordWrap(true);
     m_profileDesc->setStyleSheet("color: palette(mid);");
     profLay->addWidget(m_profileDesc);
-    root->addWidget(profBox);
+    scrollLay->addWidget(profBox);
 
     connect(profCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int i) {
@@ -184,7 +200,7 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
         irStateLabel->setText(on ? tr("actif") : "—");
     });
 
-    root->addWidget(streamBox);
+    scrollLay->addWidget(streamBox);
 
     // Poll per-stream FPS ~1 Hz for the live health readout.
     auto* fpsTimer = new QTimer(this);
@@ -203,6 +219,13 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
     // ── Tools (Viewer-style): AE ROI, PLY export, on-chip self-cal ──
     auto* toolsBox = new QGroupBox(tr("Outils"), this);
     auto* toolsLay = new QVBoxLayout(toolsBox);
+    // Buttons auto-size to content (not stretched to full dialog width).
+    auto addBtn = [&](QAbstractButton* b) {
+        auto* row = new QHBoxLayout;
+        row->addWidget(b);
+        row->addStretch();
+        toolsLay->addLayout(row);
+    };
 
     // Disparity shift (advanced mode) — close-range tuning per Intel's guide.
     auto* dispRow = new QHBoxLayout;
@@ -262,7 +285,7 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
             ok ? tr("ROI d'auto-exposition réglée sur le centre.")
                : tr("Ce capteur ne supporte pas la ROI d'auto-exposition."));
     });
-    toolsLay->addWidget(aeBtn);
+    addBtn(aeBtn);
 
     // Cloud/PLY decimation — Intel's canonical 3D-scan order (issue #10682).
     // Affects ONLY the 3D view + PLY export, never the overlay/depth-view depth.
@@ -299,7 +322,7 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
             this, tr("Exporter le nuage de points"), def, tr("PLY (*.ply)"));
         if (!path.isEmpty()) m_camera->requestPlyExport(path.toStdString());
     });
-    toolsLay->addWidget(plyBtn);
+    addBtn(plyBtn);
 
     auto* calBtn = new QPushButton(tr("Self-calibration depth (sans mire)…"));
     calBtn->setToolTip(tr("Lance la calibration depth embarquée du D4xx. "
@@ -313,10 +336,9 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
             m_camera->requestOnChipCalibration();
         }
     });
-    toolsLay->addWidget(calBtn);
+    addBtn(calBtn);
 
     // Advanced-mode JSON presets (load/save full device config).
-    auto* presetRow = new QVBoxLayout;
     auto* loadJson = new QPushButton(tr("Charger preset JSON…"));
     loadJson->setToolTip(tr("Applique une configuration complète (advanced mode) "
                             "depuis un fichier .json — presets recommandés Intel."));
@@ -342,9 +364,8 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
         QMessageBox::information(this, tr("Preset"),
             ok ? tr("Preset enregistré.") : tr("Échec de l'enregistrement."));
     });
-    presetRow->addWidget(loadJson);
-    presetRow->addWidget(saveJson);
-    toolsLay->addLayout(presetRow);
+    addBtn(loadJson);
+    addBtn(saveJson);
 
     // Rosbag recording (takes effect on next camera restart).
     auto* recBtn = new QPushButton(tr("Enregistrer en .bag (au prochain start)…"));
@@ -367,9 +388,9 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
             recBtn->setText(tr("Enregistrer en .bag (au prochain start)…"));
         }
     });
-    toolsLay->addWidget(recBtn);
+    addBtn(recBtn);
 
-    root->addWidget(toolsBox);
+    scrollLay->addWidget(toolsBox);
 
     // Surface async results from the capture thread.
     if (m_camera) {
@@ -386,13 +407,16 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
         });
     }
 
-    m_scroll = new QScrollArea(this);
-    m_scroll->setWidgetResizable(true);
-    m_scroll->setFrameShape(QFrame::NoFrame);
-    QScroller::grabGesture(m_scroll->viewport(), QScroller::TouchGesture);
-    root->addWidget(m_scroll, 1);
+    // Dynamic section: rebuilt by rebuild() — Controls + Post-Processing.
+    m_dynSection = new QWidget;
+    m_dynSection->setLayout(new QVBoxLayout);
+    m_dynSection->layout()->setContentsMargins(0, 0, 0, 0);
+    scrollLay->addWidget(m_dynSection);
+    scrollLay->addStretch();  // push everything up when content is short
 
+    // Refresh/Close outside the scroll (always visible at the bottom).
     auto* buttons = new QDialogButtonBox;
+    buttons->setContentsMargins(8, 4, 8, 8);
     auto* refresh = buttons->addButton(tr("Refresh"), QDialogButtonBox::ActionRole);
     buttons->addButton(QDialogButtonBox::Close);
     connect(refresh, &QPushButton::clicked, this, &RealSenseControlsDialog::rebuild);
@@ -556,7 +580,15 @@ void RealSenseControlsDialog::rebuild()
             tr("No RealSense options available.\n"
                "Start the RealSense backend with the camera connected, then Refresh.")));
         outer->addStretch();
-        m_scroll->setWidget(fresh);
+        // Replace m_dynSection content.
+        if (m_dynSection) {
+            while (m_dynSection->layout()->count()) {
+                auto* item = m_dynSection->layout()->takeAt(0);
+                if (item->widget()) item->widget()->deleteLater();
+                delete item;
+            }
+            m_dynSection->layout()->addWidget(fresh);
+        }
         return;
     }
 
@@ -613,7 +645,15 @@ void RealSenseControlsDialog::rebuild()
     }
 
     outer->addStretch();
-    m_scroll->setWidget(fresh);
+    // Replace m_dynSection content.
+    if (m_dynSection) {
+        while (m_dynSection->layout()->count()) {
+            auto* item = m_dynSection->layout()->takeAt(0);
+            if (item->widget()) item->widget()->deleteLater();
+            delete item;
+        }
+        m_dynSection->layout()->addWidget(fresh);
+    }
 }
 
 void RealSenseControlsDialog::applyProfile(int index)
