@@ -31,6 +31,7 @@
 #include "features/RemoteView.h"
 #include "gui/DatasetPanel.h"
 #include "gui/BoardMinimap.h"
+#include "gui/FovMeasureDialog.h"
 #include "export/DataExporter.h"
 #include "export/ReportGenerator.h"
 #include "gui/Theme.h"
@@ -2094,6 +2095,79 @@ void Application::connectControlSignals()
             m_mainWindow->updateStatusMessage(tr("Minimap anchor applied"));
             spdlog::info("Minimap anchor: PCB ({:.2f}, {:.2f}) → image center", pcbPt.x, pcbPt.y);
         }
+    });
+
+    // ── Dev menu: FOV & Scale measurement dialog ─────────────────────
+    connect(m_mainWindow.get(), &gui::MainWindow::fovMeasureRequested,
+            this, [this]() {
+        gui::FovMeasureDialog::Metrics m;
+
+        // Camera & profile
+        const auto& profiles = m_config->profiles();
+        const int pidx = m_config->activeProfileIndex();
+        m.profileName = (pidx >= 0 && pidx < static_cast<int>(profiles.size()))
+            ? QString::fromStdString(profiles[pidx].name) : tr("(none)");
+        m.backendName = (m_config->cameraBackend() == CameraBackend::V4L2)
+            ? tr("V4L2 (microscope, index %1)").arg(m_config->cameraIndex())
+            : tr("RealSense D405");
+        m.camWidth  = m_config->cameraWidth();
+        m.camHeight = m_config->cameraHeight();
+        if (m_camera) {
+            m.camWidth  = m_camera->resolution().width();
+            m.camHeight = m_camera->resolution().height();
+        }
+
+        // Calibration
+        m.calibrated  = m_calibration && m_calibration->isCalibrated();
+        m.calibRmsErr = m_calibration ? m_calibration->rmsError() : 0.0;
+
+        // Scale & FOV
+        m.configAnchorPxPerMm = m_config->microscopeAnchorPixelsPerMm();
+        if (m_currentPixelsPerMm > 0.0) {
+            m.pixelsPerMm = m_currentPixelsPerMm;
+            m.scaleSource = tr("homography (live)");
+        } else if (m_config->microscopeAnchorPixelsPerMm() > 0.0
+                   && m_config->cameraBackend() == CameraBackend::V4L2) {
+            m.pixelsPerMm = m_config->microscopeAnchorPixelsPerMm();
+            m.scaleSource = tr("config fallback (anchor_pixels_per_mm)");
+        }
+        if (m.pixelsPerMm > 0.0 && m.camWidth > 0) {
+            m.fovWidthMm  = m.camWidth  / m.pixelsPerMm;
+            m.fovHeightMm = m.camHeight / m.pixelsPerMm;
+        }
+
+        // iBOM components in current FOV
+        m.totalComponents = m_ibomProject
+            ? static_cast<int>(m_ibomProject->components.size()) : 0;
+        if (m_ibomProject && m_homography && m_homography->isValid()
+                && m.camWidth > 0 && m.camHeight > 0) {
+            // Map the four image corners to PCB space, find the bounding rect
+            cv::Point2f tl = m_homography->imageToPcb({0.f, 0.f});
+            cv::Point2f tr2 = m_homography->imageToPcb(
+                {static_cast<float>(m.camWidth), 0.f});
+            cv::Point2f br = m_homography->imageToPcb(
+                {static_cast<float>(m.camWidth),
+                 static_cast<float>(m.camHeight)});
+            cv::Point2f bl = m_homography->imageToPcb(
+                {0.f, static_cast<float>(m.camHeight)});
+            const float xMin = std::min({tl.x, tr2.x, br.x, bl.x});
+            const float xMax = std::max({tl.x, tr2.x, br.x, bl.x});
+            const float yMin = std::min({tl.y, tr2.y, br.y, bl.y});
+            const float yMax = std::max({tl.y, tr2.y, br.y, bl.y});
+            int count = 0;
+            for (const auto& c : m_ibomProject->components) {
+                const auto& bb = c.bbox;
+                // Component overlaps FOV if its bbox intersects the FOV rect
+                if (bb.maxX >= xMin && bb.minX <= xMax
+                        && bb.maxY >= yMin && bb.minY <= yMax)
+                    ++count;
+            }
+            m.componentsInFov = count;
+        }
+
+        auto* dlg = new gui::FovMeasureDialog(m, m_mainWindow.get());
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->exec();
     });
 
     spdlog::info("Signal/slot connections established, FPS timer started.");

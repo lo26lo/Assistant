@@ -158,6 +158,7 @@ set(SOURCES
     src/gui/StatsPanel.cpp
     src/gui/DatasetPanel.cpp
     src/gui/BoardMinimap.cpp
+    src/gui/FovMeasureDialog.cpp
     src/gui/SettingsDialog.cpp
     src/gui/HelpDialog.cpp
 
@@ -227,6 +228,7 @@ set(HEADERS
     src/gui/StatsPanel.h
     src/gui/DatasetPanel.h
     src/gui/BoardMinimap.h
+    src/gui/FovMeasureDialog.h
     src/gui/SettingsDialog.h
     src/gui/HelpDialog.h
     src/gui/Theme.h

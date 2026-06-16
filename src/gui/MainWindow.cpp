@@ -303,6 +303,23 @@ void MainWindow::createMenuBar()
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
 
+    // ── Dev menu (diagnostic / measurement tools) ─────────────────
+    auto* devMenu = menuBar()->addMenu(tr("&Dev"));
+    devMenu->setToolTipsVisible(true);
+
+    auto* actFovMeasure = devMenu->addAction(tr("Measure FOV & Scale…"));
+    actFovMeasure->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M));
+    actFovMeasure->setToolTip(tr(
+        "Compute field of view in mm, px/mm scale, and number of visible components "
+        "for the current camera. Helps answer Q2/Q3 of MICROSCOPE_PLACEMENT_PLAN.md."));
+    connect(actFovMeasure, &QAction::triggered, this, &MainWindow::fovMeasureRequested);
+
+    devMenu->addSeparator();
+    auto* actScript = devMenu->addAction(tr("How to run scripts/measure_fov.py…"));
+    connect(actScript, &QAction::triggered, this, [this]() {
+        emit fovMeasureRequested();  // opens the same dialog (shows script instructions)
+    });
+
     auto* actGettingStarted = helpMenu->addAction(tr("Getting Started"));
     actGettingStarted->setShortcut(Qt::Key_F1);
     connect(actGettingStarted, &QAction::triggered, this, [this]() { onShowHelp(0); });

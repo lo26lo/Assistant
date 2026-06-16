@@ -83,6 +83,8 @@ signals:
     void cameraProfileChangeRequested(int idx);
     /// Arm microscope 1-point anchoring on the currently selected component.
     void componentAnchorRequested();
+    /// Dev menu: measure current FOV & scale.
+    void fovMeasureRequested();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
