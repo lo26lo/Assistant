@@ -23,6 +23,7 @@ public:
         // Camera & profile
         QString profileName;
         QString backendName;      // "V4L2 (microscope)" or "RealSense D405"
+        bool    isMicroscope = false;  // V4L2 microscope (continuous zoom) vs D405 (fixed)
         int     camWidth  = 0;
         int     camHeight = 0;
 

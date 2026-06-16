@@ -2107,9 +2107,10 @@ void Application::connectControlSignals()
         const int pidx = m_config->activeProfileIndex();
         m.profileName = (pidx >= 0 && pidx < static_cast<int>(profiles.size()))
             ? QString::fromStdString(profiles[pidx].name) : tr("(none)");
-        m.backendName = (m_config->cameraBackend() == CameraBackend::V4L2)
+        m.isMicroscope = (m_config->cameraBackend() == CameraBackend::V4L2);
+        m.backendName = m.isMicroscope
             ? tr("V4L2 (microscope, index %1)").arg(m_config->cameraIndex())
-            : tr("RealSense D405");
+            : tr("RealSense D405 (fixed lens, no zoom)");
         m.camWidth  = m_config->cameraWidth();
         m.camHeight = m_config->cameraHeight();
         if (m_camera) {
@@ -2121,13 +2122,18 @@ void Application::connectControlSignals()
         m.calibrated  = m_calibration && m_calibration->isCalibrated();
         m.calibRmsErr = m_calibration ? m_calibration->rmsError() : 0.0;
 
-        // Scale & FOV
+        // Scale & FOV. The scale source depends on the backend: the D405 derives
+        // it live from depth (fx / distance); the microscope from the tracking
+        // homography, or the config fallback before the first anchor.
         m.configAnchorPxPerMm = m_config->microscopeAnchorPixelsPerMm();
         if (m_currentPixelsPerMm > 0.0) {
             m.pixelsPerMm = m_currentPixelsPerMm;
-            m.scaleSource = tr("homography (live)");
-        } else if (m_config->microscopeAnchorPixelsPerMm() > 0.0
-                   && m_config->cameraBackend() == CameraBackend::V4L2) {
+            m.scaleSource = (!m.isMicroscope
+                             && m_config->scaleMethod() == ScaleMethod::Depth)
+                ? tr("depth (fx / working distance)")
+                : tr("homography (live)");
+        } else if (m.isMicroscope
+                   && m_config->microscopeAnchorPixelsPerMm() > 0.0) {
             m.pixelsPerMm = m_config->microscopeAnchorPixelsPerMm();
             m.scaleSource = tr("config fallback (anchor_pixels_per_mm)");
         }

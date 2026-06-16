@@ -90,7 +90,17 @@ FovMeasureDialog::FovMeasureDialog(const Metrics& m, QWidget* parent)
         auto* grp  = new QGroupBox(tr("Config Recommendations"));
         auto* form = new QFormLayout(grp);
 
-        if (m.pixelsPerMm > 0.0) {
+        if (!m.isMicroscope) {
+            // D405 has a fixed lens — no zoom. The scale is derived live from
+            // depth (fx / working distance) and varies only with distance, so
+            // there is nothing to tune. The microscope anchor config is N/A here.
+            form->addRow(new QLabel(tr(
+                "D405 has no zoom: scale = fx / working distance, derived live\n"
+                "from depth. It varies only with distance, not magnification —\n"
+                "nothing to configure. The anchor_pixels_per_mm setting applies\n"
+                "to the microscope profile only.\n\n"
+                "Switch to the Microscope profile to tune its anchor scale.")));
+        } else if (m.pixelsPerMm > 0.0) {
             const double diff = m.pixelsPerMm - m.configAnchorPxPerMm;
             const bool changed = std::abs(diff) > 0.5;
             const QString curStr = tr("%1 px/mm").arg(m.configAnchorPxPerMm, 0, 'f', 2);
@@ -106,7 +116,9 @@ FovMeasureDialog::FovMeasureDialog(const Metrics& m, QWidget* parent)
                 form->addRow(new QLabel(tr(
                     "Update Settings → Camera (microscope section)\n"
                     "  Anchor px/mm = %1\n"
-                    "so the first anchor gets the right scale bootstrap.").arg(
+                    "so the first anchor gets the right scale bootstrap.\n"
+                    "Note: with continuous zoom this is only a bootstrap — the\n"
+                    "live homography refines it once tracking locks.").arg(
                     m.pixelsPerMm, 0, 'f', 1)));
             else
                 form->addRow(new QLabel(tr("✓ Stored value is close — no change needed.")));
