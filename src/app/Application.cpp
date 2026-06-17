@@ -695,15 +695,29 @@ void Application::refreshCameraDeviceList()
     if (cameraNames.isEmpty()) {
         // Enumeration can come back empty transiently — e.g. querying a
         // RealSense while it is busy streaming throws "failed to set power
-        // state". Don't clobber a populated combo (and don't flip it to "No
-        // camera detected") when a camera is in fact live; just keep what's
-        // there until a clean enumeration succeeds.
+        // state". When a camera is in fact live we must NOT show "No camera
+        // detected", but we also must not keep a list from the *other* backend
+        // (that leaves the combo showing the microscope while the D405 streams).
         if (m_camera && m_camera->isCapturing()) {
-            spdlog::debug("Device enumeration empty while capturing — keeping current list");
-            return;
+#ifdef IBOM_HAVE_REALSENSE
+            if (m_config->cameraBackend() == CameraBackend::RealSense) {
+                // Synthesize a single entry that at least reflects the active
+                // backend, instead of keeping the stale V4L2 microscope list.
+                cameraNames   << tr("0: Intel RealSense (active)");
+                cameraIndices << 0;
+            } else
+#endif
+            {
+                // V4L2 enumeration works even while streaming (QUERYCAP is a
+                // read-only open), so an empty result here is unexpected —
+                // keep whatever is there rather than risk a wrong label.
+                spdlog::debug("Device enumeration empty while capturing — keeping current list");
+                return;
+            }
+        } else {
+            cameraNames   << tr("No camera detected");
+            cameraIndices << 0;
         }
-        cameraNames   << tr("No camera detected");
-        cameraIndices << 0;
     }
     if (m_mainWindow && m_mainWindow->controlPanel())
         m_mainWindow->controlPanel()->setCameraDevices(

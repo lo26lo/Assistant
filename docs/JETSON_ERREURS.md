@@ -15,8 +15,10 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 33 | 2026-06-17 | IBomParser / minimap bbox | ✅ RÉSOLU | [Bounding boxes composants décalées/superposées sur la minimap — `bbox.pos` lu comme coin, `relpos`/`angle` iBOM ignorés](#erreur-33--bbox-composants-decalees-relposangle-ignores) |
+| 32 | 2026-06-17 | Application / device combo | ✅ RÉSOLU | [Combo Device montre le microscope alors que la D405 est active — énumération RealSense vide (device busy) → ancienne liste V4L2 conservée](#erreur-32--combo-device-montre-le-mauvais-backend) |
 | 31 | 2026-06-17 | CameraCapture / GStreamer + index | 🟡 CONTOURNÉ | [Microscope inouvrable : index `/dev/video` instable (6→0) + pipeline GStreamer HW « ouvert » sans EGL ne produit aucune frame](#erreur-31--microscope-inouvrable-index-instable--gstreamer-sans-egl) |
-| 30 | 2026-06-17 | RealSenseCapture / self-cal | 🟡 CONTOURNÉ | [Self-calibration D405 `hwmon ... -7 HW not ready` — firmware pas prêt (lancée trop tôt / USB2)](#erreur-30--self-calibration-d405-hw-not-ready) |
+| 30 | 2026-06-17 | RealSenseCapture / self-cal | 🟡 CONTOURNÉ | [Self-calibration D405 `hwmon ... -7 HW not ready` — profil depth 256×144@90 requis par le firmware (PAS l'USB2)](#erreur-30--self-calibration-d405-hw-not-ready) |
 | 29 | 2026-06-17 | CameraCapture / V4L2 bandwidth | 🟡 CONTOURNÉ | [Microscope `select() timeout` (aucune frame) — YUYV 1280×720 négocié au lieu de MJPG sature l'USB 2.0](#erreur-29--microscope-select-timeout--yuyv-sature-lusb-20) |
 | 28 | 2026-06-17 | Application / RealSense switch + USB | 🟡 CONTOURNÉ | [Freeze GUI au switch caméra + disparition de tout l'USB (`lsusb` = root hubs) — `query_devices()` sur le thread GUI pendant le hot-swap + reset xHCI Tegra](#erreur-28--freeze-au-switch-camera--disparition-usb) |
 | 27 | 2026-06-16 | Application.cpp / calibration | ✅ RÉSOLU | [Calibration de mauvaise qualité (RMS 11 px) acceptée et sauvegardée — écrase une bonne calibration + corrompt l'overlay](#erreur-27--calibration-de-mauvaise-qualite-rms-11-px-acceptee) |
@@ -81,6 +83,32 @@ Une seule frame de warmup, puis `select() timeout` toutes les ~10 s (le timeout 
 
 ---
 
+## ERREUR 33 — bbox composants décalées (relpos/angle ignorés)
+
+**Date** : 2026-06-17
+**Statut** : ✅ RÉSOLU
+
+**Symptôme** : sur la minimap PCB, les bounding boxes des composants sont décalées et se chevauchent (signalé par l'utilisateur, screenshot).
+
+**Cause** : `IBomParser` lisait `footprint.bbox.pos` comme le **coin** de la boîte (`minX = pos.x; maxX = pos.x + size.x`). Or iBOM dessine la bbox ainsi : `translate(pos) → rotate(-angle) → translate(relpos) → rect(0,0,size)`. Donc `pos` est le **point de référence** du footprint, `relpos` l'offset vers le coin local, et la boîte est **tournée** de `angle`. En ignorant `relpos` (≈ `-size/2`) et `angle`, chaque boîte était décalée d'environ une demi-taille et mal orientée → positions fausses + chevauchements.
+
+**Solution** : reconstruire les **4 coins tournés** (`pos + R(-angle)·(relpos + coin·size)`) et prendre leurs vraies bornes axis-aligned. `relpos` défaut `{0,0}`, `angle` défaut `0`. Fichier : `src/ibom/IBomParser.cpp` (+ `#include <cmath>`).
+
+---
+
+## ERREUR 32 — combo Device montre le mauvais backend
+
+**Date** : 2026-06-17
+**Statut** : ✅ RÉSOLU
+
+**Symptôme** : la D405 est active (feed depth visible, toolbar « D405 »), mais le combo Device à droite montre encore « 0: HAYEAR_CAMERA » (le microscope V4L2).
+
+**Cause** : `refreshCameraDeviceList()` interroge `RealSenseCapture::listDevices()` pendant que la D405 stream → lève « failed to set power state » → liste vide. Le garde anti-flicker (« ne pas écraser une liste peuplée quand une caméra est live ») **conservait alors la liste V4L2** du backend précédent.
+
+**Solution** : dans la branche « énumération vide pendant capture », si le backend actif est RealSense, **synthétiser une entrée** « 0: Intel RealSense (active) » au lieu de garder la liste microscope. Le cas V4L2 (QUERYCAP en O_RDONLY marche même en streaming) garde l'ancien comportement. Fichier : `src/app/Application.cpp`.
+
+---
+
 ## ERREUR 31 — Microscope inouvrable : index instable + GStreamer sans EGL
 
 **Date** : 2026-06-17
@@ -128,7 +156,7 @@ nvbufsurftransform: Could not get EGL display connection
 - Côté capture (`RealSenseCapture.cpp`, bloc on-chip calib) : refuse si `!m_depthStreamEnabled` ou si aucun flux (`colorFps`/`depthFps` ≤ 0) ; warning si lien USB 2.x (`RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR`) ; **retry ×3 avec pause 800 ms** sur l'erreur transitoire ; message d'aide enrichi (USB3 + immobile + surface texturée) en cas d'échec « HW not ready ».
 - Côté UI (`RealSenseControlsDialog.cpp`) : pré-checks avant d'envoyer la requête (caméra qui diffuse + depth actif) avec QMessageBox clair, et mention USB3 dans la confirmation.
 
-**À valider** : prochain build — lancer la self-cal après quelques secondes de stream sur USB3 ; soit elle réussit, soit elle échoue avec un message explicite (plus de `-7` opaque). Le succès reste dépendant de l'état du bus (lié à [ERREUR 28](#erreur-28--freeze-au-switch-camera--disparition-usb) / [ERREUR 29](#erreur-29--microscope-select-timeout--yuyv-sature-lusb-20)).
+**Update suite 55 — VRAIE CAUSE TROUVÉE (recherche web, pas USB2)** : l'utilisateur a confirmé que la D405 est en **USB 3.2** → l'hypothèse USB2 était fausse. Les 3 tentatives échouaient toutes alors que la D405 streame bien (fx=436.8, distance 188mm, depth fill 84%). **Cause réelle** : `run_on_chip_calibration()` exige que le **flux depth tourne au profil 256×144 @ 90 fps** au moment de l'appel — c'est une **contrainte firmware D4xx**. Avec n'importe quel autre profil depth (on streame normalement en 848×480 / 1280×720), le firmware rejette la commande hwmon avec `-7 = HW not ready`. Confirmé par les issues librealsense [#7087](https://github.com/IntelRealSense/librealsense/issues/7087) (code C++ : `cfg.enable_stream(RS2_STREAM_DEPTH, 256, 144, RS2_FORMAT_Z16, 90)` avant l'appel) et [#12014](https://github.com/IntelRealSense/librealsense/issues/12014) (marche via le Viewer GUI — qui bascule sur ce profil — mais pas en script qui garde la pleine résolution). **Fix (suite 55)** : dans le bloc on-chip calib (`RealSenseCapture.cpp`), on **stoppe le pipeline normal**, on redémarre **depth-only en 256×144@90** (lié au même device par serial), on laisse le flux se stabiliser, on lance la calibration (retry ×3 conservé pour le résiduel transitoire), puis on **restaure le pipeline de streaming normal** (color+depth+IR à la résolution courante) dans tous les cas (succès/échec/exception), avec re-publication du device + depth_units. ⚠️ Non compilé/testé ici. **À valider** : prochain build — la self-cal doit réussir (log « calibration done, health=… ») ou afficher un message clair, et le streaming normal reprendre après. La **calibration usine reste valide** de toute façon → feature optionnelle.
 
 ---
 

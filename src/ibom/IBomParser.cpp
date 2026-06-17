@@ -5,6 +5,7 @@
 #include <sstream>
 #include <regex>
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 
 namespace ibom {
@@ -632,16 +633,38 @@ Component IBomParser::parseFootprint(const nlohmann::json& fp, Layer layer)
     }
     comp.rotation = fp.value("rotation", 0.0);
 
-    // Bounding box: has pos [x,y] and size [w,h] arrays
+    // Bounding box. iBOM does NOT store an axis-aligned min/max here: it draws
+    //   translate(pos) → rotate(-angle) → translate(relpos) → rect(0,0,size)
+    // i.e. `pos` is the footprint reference point, `relpos` the offset to the
+    // box's local origin, and the box is rotated by `angle`. Treating `pos` as
+    // the min corner (ignoring relpos/angle) shifts and mis-sizes every box, so
+    // on the minimap they land in the wrong place and overlap. Reconstruct the
+    // four rotated corners and take their true axis-aligned bounds.
     if (fp.contains("bbox")) {
         auto& bb = fp["bbox"];
         if (bb.contains("pos") && bb.contains("size")) {
             auto pos  = readPoint(bb["pos"]);
             auto size = readPoint(bb["size"]);
-            comp.bbox.minX = pos.x;
-            comp.bbox.minY = pos.y;
-            comp.bbox.maxX = pos.x + size.x;
-            comp.bbox.maxY = pos.y + size.y;
+            Point2D relpos{0.0, 0.0};
+            if (bb.contains("relpos")) relpos = readPoint(bb["relpos"]);
+            const double angleDeg = bb.value("angle", 0.0);
+            const double a  = -angleDeg * 3.14159265358979323846 / 180.0;
+            const double ca = std::cos(a), sa = std::sin(a);
+
+            double minX =  1e18, minY =  1e18;
+            double maxX = -1e18, maxY = -1e18;
+            for (int cx = 0; cx < 2; ++cx) {
+                for (int cy = 0; cy < 2; ++cy) {
+                    const double lx = relpos.x + cx * size.x;
+                    const double ly = relpos.y + cy * size.y;
+                    const double rx = pos.x + (lx * ca - ly * sa);
+                    const double ry = pos.y + (lx * sa + ly * ca);
+                    minX = std::min(minX, rx); maxX = std::max(maxX, rx);
+                    minY = std::min(minY, ry); maxY = std::max(maxY, ry);
+                }
+            }
+            comp.bbox.minX = minX; comp.bbox.minY = minY;
+            comp.bbox.maxX = maxX; comp.bbox.maxY = maxY;
         } else {
             // Fallback: minx/miny/maxx/maxy format
             comp.bbox.minX = bb.value("minx", 0.0);
