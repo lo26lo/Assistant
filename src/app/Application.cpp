@@ -544,8 +544,6 @@ void Application::switchCameraBackend(CameraBackend backend)
     createCamera();
     wireCameraSignals();
 
-    refreshCameraDeviceList();
-
     spdlog::info("Camera backend switched to {}",
                  backend == CameraBackend::RealSense ? "RealSense" : "V4L2");
 
@@ -553,6 +551,17 @@ void Application::switchCameraBackend(CameraBackend backend)
         if (!m_camera->start())
             m_mainWindow->updateStatusMessage(tr("Failed to start camera after backend switch"));
     }
+
+    // Do NOT re-enumerate the USB bus inline here. refreshCameraDeviceList()
+    // calls RealSenseCapture::listDevices() → rs2::context::query_devices(),
+    // which blocks the GUI thread AND probes the whole USB tree at the most
+    // fragile instant — right after releasing the old camera and while the new
+    // capture thread is itself bringing the device up (it enumerates too).
+    // On the Jetson that double hit froze the UI and could trip the Tegra xHCI
+    // controller, dropping every USB device. Defer it: by the time this fires
+    // the bus has settled and the new pipeline is already streaming, so the
+    // (single) enumeration is quick and safe.
+    QTimer::singleShot(1500, this, [this]() { refreshCameraDeviceList(); });
 }
 
 void Application::switchProfile(int profileIndex)
@@ -684,6 +693,15 @@ void Application::refreshCameraDeviceList()
         }
     }
     if (cameraNames.isEmpty()) {
+        // Enumeration can come back empty transiently — e.g. querying a
+        // RealSense while it is busy streaming throws "failed to set power
+        // state". Don't clobber a populated combo (and don't flip it to "No
+        // camera detected") when a camera is in fact live; just keep what's
+        // there until a clean enumeration succeeds.
+        if (m_camera && m_camera->isCapturing()) {
+            spdlog::debug("Device enumeration empty while capturing — keeping current list");
+            return;
+        }
         cameraNames   << tr("No camera detected");
         cameraIndices << 0;
     }

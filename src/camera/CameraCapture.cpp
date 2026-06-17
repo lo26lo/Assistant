@@ -16,6 +16,8 @@
 #include <unistd.h>
 #include <cstring>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #endif
 
 namespace ibom::camera {
@@ -49,6 +51,45 @@ bool gstreamerAvailable()
     }
     return false;
 }
+
+#ifdef __linux__
+/// Human-readable USB link type for a /dev/video<N> node, read from sysfs.
+///
+/// Resolves /sys/class/video4linux/video<N>/device (a symlink to the USB
+/// *interface*), walks up to the owning USB *device* directory and reads its
+/// negotiated link "speed" (Mbit/s). Returns e.g. "USB 2.0 HS (480 Mb/s)" or
+/// an empty string if the node isn't USB / sysfs can't be read.
+///
+/// This is the *negotiated* speed, so a UVC microscope that is a USB-2.0 device
+/// (or a USB-3 camera that fell back to a 2.0 port) shows 480 Mb/s — which is
+/// exactly what tells the user why an uncompressed YUYV stream starves the bus.
+std::string usbLinkTag(int videoIndex)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path dev = fs::canonical(
+        "/sys/class/video4linux/video" + std::to_string(videoIndex) + "/device", ec);
+    if (ec) return {};
+
+    // Walk up the device tree until we hit the USB device node (it owns "speed").
+    for (int hop = 0; hop < 6 && !dev.empty() && dev != dev.root_path(); ++hop) {
+        std::ifstream f(dev / "speed");
+        int mbps = 0;
+        if (f && (f >> mbps) && mbps > 0) {
+            const char* gen =
+                  mbps >= 20000 ? "USB 3.2 Gen 2x2"
+                : mbps >= 10000 ? "USB 3.2 Gen 2"
+                : mbps >=  5000 ? "USB 3.2 Gen 1"
+                : mbps >=   480 ? "USB 2.0 HS"
+                : mbps >=    12 ? "USB 1.1 FS"
+                :                 "USB 1.0 LS";
+            return std::string(gen) + " (" + std::to_string(mbps) + " Mb/s)";
+        }
+        dev = dev.parent_path();
+    }
+    return {};
+}
+#endif
 
 } // namespace
 
@@ -173,6 +214,12 @@ std::vector<std::pair<int, std::string>> CameraCapture::listDevices()
                     ::close(fd);
                     continue;
                 }
+                // Append the negotiated USB link type so the UI shows whether a
+                // camera is on USB 2.0 (480 Mb/s ceiling → uncompressed HD
+                // starves) vs USB 3.x. Best-effort; omitted if unreadable.
+                const std::string usb = usbLinkTag(i);
+                if (!usb.empty())
+                    name += " — " + usb;
                 devices.emplace_back(i, std::move(name));
             }
         }

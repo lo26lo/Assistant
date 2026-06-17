@@ -15,6 +15,8 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 29 | 2026-06-17 | CameraCapture / V4L2 bandwidth | 🟡 CONTOURNÉ | [Microscope `select() timeout` (aucune frame) — YUYV 1280×720 négocié au lieu de MJPG sature l'USB 2.0](#erreur-29--microscope-select-timeout--yuyv-sature-lusb-20) |
+| 28 | 2026-06-17 | Application / RealSense switch + USB | 🟡 CONTOURNÉ | [Freeze GUI au switch caméra + disparition de tout l'USB (`lsusb` = root hubs) — `query_devices()` sur le thread GUI pendant le hot-swap + reset xHCI Tegra](#erreur-28--freeze-au-switch-camera--disparition-usb) |
 | 27 | 2026-06-16 | Application.cpp / calibration | ✅ RÉSOLU | [Calibration de mauvaise qualité (RMS 11 px) acceptée et sauvegardée — écrase une bonne calibration + corrompt l'overlay](#erreur-27--calibration-de-mauvaise-qualite-rms-11-px-acceptee) |
 | 26 | 2026-06-16 | Application.cpp / Config | ✅ RÉSOLU | [Scale microscope faux (3.47 px/mm) — `opticalMultiplier` 0.3 multiplié par-dessus la calibration checkerboard (double comptage optique)](#erreur-26--scale-microscope-faux--double-comptage-optique) |
 | 25 | 2026-06-16 | Application.cpp / StatsPanel | ✅ RÉSOLU | [Distance / Depth fill périmés affichés pour le microscope (stats depth D405 jamais réinitialisées)](#erreur-25--distance--depth-fill-perimes-affiches-pour-le-microscope) |
@@ -48,6 +50,59 @@
 - 🟡 CONTOURNÉ — solution temporaire en place
 - ✅ RÉSOLU — fix appliqué et validé
 - 📝 INFO — note pour mémoire (pas un bug, juste un piège)
+
+---
+
+## ERREUR 29 — Microscope `select() timeout` : YUYV sature l'USB 2.0
+
+**Date** : 2026-06-17
+**Statut** : 🟡 CONTOURNÉ (diagnostic + affichage du type USB ; négociation MJPG à durcir)
+
+**Symptôme** (logs Jetson) :
+```
+Camera opened: 1280x720 @ 30 fps, FOURCC=YUYV ...
+Camera warmup OK after 1 attempt(s)
+[ WARN] global cap_v4l.cpp:1136 tryIoctl VIDEOIO(V4L2:/dev/video6): select() timeout.
+```
+Une seule frame de warmup, puis `select() timeout` toutes les ~10 s (le timeout select() d'OpenCV) → plus aucune frame.
+
+**Cause** : la caméra a négocié **YUYV** (non compressé) et **non MJPG**, malgré `cap.set(CAP_PROP_FOURCC, MJPG)` avant la résolution. YUYV 1280×720@30 = 1280·720·2·30 ≈ **442 Mbit/s**, ce qui dépasse le débit utile pratique de l'**USB 2.0** (~300 Mbit/s). Le microscope est une caméra USB 2.0 (même branché sur un hub USB 3.2 Gen1, il négocie à 480 Mbit/s sur les lignes USB 2.0 du hub) → la bande passante est saturée → famine de frames.
+
+**Pistes de contournement** :
+1. **Affichage du type USB ajouté** (cette session) : `CameraCapture::listDevices()` lit la vitesse négociée dans sysfs (`/sys/class/video4linux/videoN/device` → remonte au nœud USB → `speed`) et l'affiche dans le combo (« USB 2.0 HS (480 Mb/s) »). Idem D405 via `RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR`. L'utilisateur voit ainsi pourquoi le microscope sature.
+2. **Réduire la résolution YUYV** : 640×480 YUYV ≈ 147 Mbit/s passe en USB 2.0.
+3. **Forcer réellement MJPG** : la négociation FOURCC d'OpenCV ne « colle » pas toujours. À durcir (re-essayer après open, ou via le pipeline GStreamer `image/jpeg`).
+
+**À valider** : prochain build — vérifier le label USB du microscope dans le combo, puis tester 640×480 ou MJPG forcé.
+
+---
+
+## ERREUR 28 — Freeze au switch caméra + disparition USB
+
+**Date** : 2026-06-17
+**Statut** : 🟡 CONTOURNÉ (freeze GUI atténué côté logiciel ; collapse USB = matériel/kernel)
+
+**Symptôme** : au passage profil Microscope (V4L2) → D405 (RealSense), l'appli **freeze**. Les logs s'arrêtent net après « Creating RealSenseCapture (D405)... » (rien après). Puis, de retour sur l'hôte, **tout l'USB a disparu** :
+```
+lololo@jetson:~$ lsusb
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+```
+(plus aucun device — seulement les root hubs).
+
+**Causes** (deux problèmes distincts) :
+1. **Freeze GUI (logiciel)** : `switchCameraBackend()` tourne sur le thread GUI et appelait `refreshCameraDeviceList()` → `RealSenseCapture::listDevices()` → `rs2::context::query_devices()` **de façon synchrone**, juste après avoir relâché le microscope défaillant. `query_devices()` énumère tout l'arbre USB et **bloque le thread GUI**. Pire : le thread de capture (`captureLoop`) énumère **lui aussi** (`query_devices()`) quelques ms plus tard → l'USB est sondé **deux fois** au moment le plus fragile.
+2. **Disparition de tout l'USB (matériel/kernel)** : c'est le contrôleur **xHCI Tegra qui se reset et largue tous les devices**. Sur AGX Orin c'est quasi toujours un **reset de bus / budget d'alimentation** : monter le lien USB3 de la D405 (renégociation + ~2 W) au moment précis où une caméra USB2 défaillante est relâchée, sur le même contrôleur. **Aucun code applicatif ne peut empêcher de façon fiable un reset du contrôleur xHCI.** Un hub alimenté règle le *budget de puissance* mais **pas forcément** le reset du contrôleur (le lien amont du hub vers le Jetson peut se reset quand la D405 renégocie l'USB3).
+
+**Fix logiciel (cette session, atténuation du freeze)** :
+- `switchCameraBackend()` : suppression de l'appel synchrone à `refreshCameraDeviceList()` pendant le hot-swap. Remplacé par un `QTimer::singleShot(1500, …)` → l'énumération est différée hors de l'instant fragile (bus stabilisé, pipeline déjà en stream, une seule énumération au lieu de deux).
+- `refreshCameraDeviceList()` : garde « ne pas écraser » — si l'énumération revient vide **alors qu'une caméra est en cours de capture** (cas RealSense occupée → `query_devices` jette « failed to set power state »), on **conserve la liste existante** au lieu de basculer le combo en « No camera detected ».
+
+**Côté matériel (à faire par l'utilisateur)** :
+- Récupérer le bus sans reboot : `unbind`/`bind` du driver `xhci_hcd` via `/sys/bus/pci/drivers/xhci_hcd/` (ou power-cycle).
+- Les deux caméras sont déjà sur un hub alimenté **USB 3.2 Gen1** — bien pour la puissance. Si le collapse persiste, c'est un **reset de contrôleur**, pas un manque de jus : capturer `dmesg` juste après pour confirmer (chercher `xhci`, `USB disconnect`, `over-current`). Pistes : brancher la D405 sur un **contrôleur xHCI distinct** du microscope, ou désactiver l'autosuspend USB.
+
+**À valider** : prochain build — vérifier que le switch ne freeze plus (surtout microscope sans frame → D405) ; capturer `dmesg` si l'USB retombe pour confirmer la nature du reset xHCI.
 
 ---
 

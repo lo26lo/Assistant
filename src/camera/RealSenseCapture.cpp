@@ -162,7 +162,15 @@ std::vector<std::string> RealSenseCapture::listDevices()
                 ? dev.get_info(RS2_CAMERA_INFO_NAME) : "RealSense";
             std::string serial = dev.supports(RS2_CAMERA_INFO_SERIAL_NUMBER)
                 ? dev.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER) : "";
-            devices.push_back(serial.empty() ? name : (name + " " + serial));
+            // USB type descriptor ("2.1", "3.2", …) — the link the D405 actually
+            // negotiated. A D405 that enumerated at 2.1 has far less depth
+            // bandwidth, so surfacing this in the UI is a real diagnostic.
+            std::string usb = dev.supports(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR)
+                ? dev.get_info(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR) : "";
+            std::string label = serial.empty() ? name : (name + " " + serial);
+            if (!usb.empty())
+                label += " — USB " + usb;
+            devices.push_back(std::move(label));
         }
     } catch (const rs2::error& e) {
         // "failed to set power state" and similar happen when the device is
