@@ -623,10 +623,22 @@ void SettingsDialog::enumerateCameras()
         }
         (void)realsense;
         if (!guard) return;
-        QMetaObject::invokeMethod(guard.data(), [guard, names, indices, previousIndex]() {
+        QMetaObject::invokeMethod(guard.data(), [guard, names, indices, previousIndex, realsense]() mutable {
             if (!guard) return;
             SettingsDialog* self = guard.data();
             self->m_cameraDevice->clear();
+            if (names.isEmpty() && realsense) {
+                // rs2::context::query_devices() opens a *new* librealsense
+                // context; if the device is already held by this process's
+                // live streaming pipeline (the normal case — Settings is
+                // opened while the camera view is running), the device can
+                // appear busy/invisible to that fresh context even though
+                // it is actively capturing. Don't report "No camera" in
+                // that case — synthesize a placeholder for the index
+                // already in use so the combo reflects reality.
+                names   << tr("%1: Intel RealSense (active)").arg(previousIndex);
+                indices << previousIndex;
+            }
             if (names.isEmpty()) {
                 self->m_cameraDevice->addItem(tr("No camera detected"));
             } else {

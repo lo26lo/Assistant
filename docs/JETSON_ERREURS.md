@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 34 | 2026-06-17 | SettingsDialog / device combo | ✅ RÉSOLU | [Settings → Camera affiche "No camera detected" alors que la D405 streame — `enumerateCameras()` n'avait pas le même garde-fou que `Application::refreshCameraDeviceList()`](#erreur-34--settings-no-camera-detected-sur-d405-active) |
 | 33 | 2026-06-17 | IBomParser / minimap bbox | ✅ RÉSOLU | [Bounding boxes composants décalées/superposées sur la minimap — `bbox.pos` lu comme coin, `relpos`/`angle` iBOM ignorés](#erreur-33--bbox-composants-decalees-relposangle-ignores) |
 | 32 | 2026-06-17 | Application / device combo | ✅ RÉSOLU | [Combo Device montre le microscope alors que la D405 est active — énumération RealSense vide (device busy) → ancienne liste V4L2 conservée](#erreur-32--combo-device-montre-le-mauvais-backend) |
 | 31 | 2026-06-17 | CameraCapture / GStreamer + index | 🟡 CONTOURNÉ | [Microscope inouvrable : index `/dev/video` instable (6→0) + pipeline GStreamer HW « ouvert » sans EGL ne produit aucune frame](#erreur-31--microscope-inouvrable-index-instable--gstreamer-sans-egl) |
@@ -1277,3 +1278,21 @@ Aucune — on attend de voir l'erreur exacte au premier build pour choisir. Le `
 ### Notes / prévention
 - À régler en Phase 1b dès le premier retour de build du Jetson.
 - Documenter le choix de version (compatibilité TRT 10.3 + CUDA 12.6) avant download.
+
+## ERREUR 34 — Settings → Camera affiche "No camera detected" sur D405 active
+
+**Date :** 2026-06-17
+**Composant :** `src/gui/SettingsDialog.cpp` (`enumerateCameras()`)
+**Statut :** ✅ RÉSOLU
+
+### Symptôme
+Caméra D405 active et streamant normalement (depth fill 83%, fx=436.8, calibration on-chip réussie dans le log) mais le dialogue Settings → onglet Camera affiche **"No camera detected"** dans le combo Device, en surbrillance jaune sur le screenshot utilisateur.
+
+### Cause
+`SettingsDialog::enumerateCameras()` a sa **propre** logique d'énumération RealSense (`RealSenseCapture::listDevices()` → `rs2::context ctx; ctx.query_devices()`), indépendante de celle d'`Application::refreshCameraDeviceList()`. Un `rs2::context` fraîchement créé peut ne voir aucun device si celui-ci est déjà exclusivement détenu par le pipeline de streaming actif du process (cas normal : Settings est ouvert pendant que la caméra tourne). `Application::refreshCameraDeviceList()` avait déjà ce garde-fou ([ERREUR #32](#erreur-32)), mais `SettingsDialog` ne le reprenait pas — d'où le "No camera detected" alors même que la D405 est visiblement active dans le viewport principal.
+
+### Solution appliquée ✅
+Dans `SettingsDialog::enumerateCameras()`, callback de fin d'énumération : si `realsense && names.isEmpty()`, synthétiser une entrée `"<previousIndex>: Intel RealSense (active)"` au lieu de tomber sur "No camera detected", en réutilisant l'index précédemment sélectionné (`previousIndex`, déjà tracké pour la ré-sélection après refresh). Lambda passée à `QMetaObject::invokeMethod` rendue `mutable` (capturait `names`/`indices` par valeur en `const` sinon) + capture de `realsense`.
+
+### Leçon
+Deux endroits enuméraient les caméras RealSense avec le même piège (`rs2::context` frais ≠ device visible si déjà ouvert ailleurs dans le process) mais un seul avait le garde-fou. Vérifier toutes les implémentations dupliquées d'une même logique d'énumération quand un bug de ce type est corrigé une fois.
