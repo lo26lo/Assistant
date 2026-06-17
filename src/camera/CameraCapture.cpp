@@ -322,6 +322,15 @@ void CameraCapture::captureLoop()
         cap.set(cv::CAP_PROP_FRAME_HEIGHT, m_height);
         cap.set(cv::CAP_PROP_FPS, m_fps);
         cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+
+        // Re-apply MJPG AFTER the resolution. Several UVC drivers (and OpenCV's
+        // V4L2 backend) reset the pixel format back to raw YUYV when the frame
+        // size changes, silently undoing the FOURCC set above. Setting it a
+        // second time here is what actually makes MJPG stick on those cameras —
+        // without it the microscope streams uncompressed YUYV, which saturates
+        // the USB bus (select() timeouts, ~5-10 fps, and bus instability that
+        // can collapse the whole controller on a backend switch).
+        cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
     }
 
     // Decode and log the FOURCC the camera actually settled on — if it isn't
@@ -341,6 +350,19 @@ void CameraCapture::captureLoop()
         static_cast<int>(cap.get(cv::CAP_PROP_FPS)),
         fourccStr,
         unifiedMemoryAvailable() ? "yes" : "no");
+
+    // If the camera ignored the MJPG hint and stayed on a raw format, warn
+    // loudly: at 720p+ the uncompressed stream starves the USB bus, which both
+    // throttles the fps and destabilises the controller (the source of the
+    // "select() timeout" warnings and the USB-collapse-on-switch we have seen).
+    if (!openedViaGst && std::string(fourccStr) != "MJPG") {
+        spdlog::warn("Camera is streaming '{}' (not MJPG) at {}x{} — the driver "
+                     "ignored the compression hint. Expect reduced fps and USB "
+                     "bandwidth pressure; consider a lower resolution.",
+                     fourccStr,
+                     static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH)),
+                     static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT)));
+    }
 
     cv::MatAllocator* alloc = unifiedAllocator();
 

@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 30 | 2026-06-17 | RealSenseCapture / self-cal | 🟡 CONTOURNÉ | [Self-calibration D405 `hwmon ... -7 HW not ready` — firmware pas prêt (lancée trop tôt / USB2)](#erreur-30--self-calibration-d405-hw-not-ready) |
 | 29 | 2026-06-17 | CameraCapture / V4L2 bandwidth | 🟡 CONTOURNÉ | [Microscope `select() timeout` (aucune frame) — YUYV 1280×720 négocié au lieu de MJPG sature l'USB 2.0](#erreur-29--microscope-select-timeout--yuyv-sature-lusb-20) |
 | 28 | 2026-06-17 | Application / RealSense switch + USB | 🟡 CONTOURNÉ | [Freeze GUI au switch caméra + disparition de tout l'USB (`lsusb` = root hubs) — `query_devices()` sur le thread GUI pendant le hot-swap + reset xHCI Tegra](#erreur-28--freeze-au-switch-camera--disparition-usb) |
 | 27 | 2026-06-16 | Application.cpp / calibration | ✅ RÉSOLU | [Calibration de mauvaise qualité (RMS 11 px) acceptée et sauvegardée — écrase une bonne calibration + corrompt l'overlay](#erreur-27--calibration-de-mauvaise-qualite-rms-11-px-acceptee) |
@@ -56,7 +57,7 @@
 ## ERREUR 29 — Microscope `select() timeout` : YUYV sature l'USB 2.0
 
 **Date** : 2026-06-17
-**Statut** : 🟡 CONTOURNÉ (diagnostic + affichage du type USB ; négociation MJPG à durcir)
+**Statut** : 🟡 CONTOURNÉ (affichage du type USB + MJPG re-forcé après résolution ; à valider sur Jetson)
 
 **Symptôme** (logs Jetson) :
 ```
@@ -71,9 +72,29 @@ Une seule frame de warmup, puis `select() timeout` toutes les ~10 s (le timeout 
 **Pistes de contournement** :
 1. **Affichage du type USB ajouté** (cette session) : `CameraCapture::listDevices()` lit la vitesse négociée dans sysfs (`/sys/class/video4linux/videoN/device` → remonte au nœud USB → `speed`) et l'affiche dans le combo (« USB 2.0 HS (480 Mb/s) »). Idem D405 via `RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR`. L'utilisateur voit ainsi pourquoi le microscope sature.
 2. **Réduire la résolution YUYV** : 640×480 YUYV ≈ 147 Mbit/s passe en USB 2.0.
-3. **Forcer réellement MJPG** : la négociation FOURCC d'OpenCV ne « colle » pas toujours. À durcir (re-essayer après open, ou via le pipeline GStreamer `image/jpeg`).
+3. **Forcer réellement MJPG** ✅ (suite 51) : plusieurs drivers UVC / le backend V4L2 d'OpenCV resettent le pixelformat en YUYV **quand on change la résolution**, annulant le `CAP_PROP_FOURCC` posé avant. Fix : re-poser MJPG **après** `CAP_PROP_FRAME_WIDTH/HEIGHT/FPS` dans `CameraCapture::captureLoop()`, + warning spdlog explicite si le FOURCC effectif n'est toujours pas `MJPG`.
 
-**À valider** : prochain build — vérifier le label USB du microscope dans le combo, puis tester 640×480 ou MJPG forcé.
+**À valider** : prochain build — vérifier que le log microscope affiche `FOURCC=MJPG` (plus de `select() timeout`). Si le warning « not MJPG » persiste, la caméra ne supporte pas MJPG à cette résolution → fallback 640×480 ou pipeline GStreamer `image/jpeg`.
+
+---
+
+## ERREUR 30 — Self-calibration D405 `HW not ready`
+
+**Date** : 2026-06-17
+**Statut** : 🟡 CONTOURNÉ (garde-fous + retry ; le succès dépend de l'état USB/firmware)
+
+**Symptôme** (log Jetson, bouton « Self-calibration depth (sans mire)… » du panneau RealSense Controls) :
+```
+[warning] RealSense on-chip calibration failed: hwmon command 0x80( 8 3 0 8 ) failed (response -7= HW not ready)
+```
+
+**Cause** : erreur **firmware** (pas applicative) renvoyée par `rs2::auto_calibrated_device::run_on_chip_calibration()`. Le D4xx refuse la commande hwmon quand il n'est pas dans un état stable : (a) routine lancée **trop tôt** après l'ouverture / un switch de backend (streams pas encore stabilisés) ; (b) lien **USB 2.x** dégradé (la self-cal stéréo demande de la bande passante/puissance) ; (c) flux depth désactivé.
+
+**Solution (garde-fous, suite 51)** :
+- Côté capture (`RealSenseCapture.cpp`, bloc on-chip calib) : refuse si `!m_depthStreamEnabled` ou si aucun flux (`colorFps`/`depthFps` ≤ 0) ; warning si lien USB 2.x (`RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR`) ; **retry ×3 avec pause 800 ms** sur l'erreur transitoire ; message d'aide enrichi (USB3 + immobile + surface texturée) en cas d'échec « HW not ready ».
+- Côté UI (`RealSenseControlsDialog.cpp`) : pré-checks avant d'envoyer la requête (caméra qui diffuse + depth actif) avec QMessageBox clair, et mention USB3 dans la confirmation.
+
+**À valider** : prochain build — lancer la self-cal après quelques secondes de stream sur USB3 ; soit elle réussit, soit elle échoue avec un message explicite (plus de `-7` opaque). Le succès reste dépendant de l'état du bus (lié à [ERREUR 28](#erreur-28--freeze-au-switch-camera--disparition-usb) / [ERREUR 29](#erreur-29--microscope-select-timeout--yuyv-sature-lusb-20)).
 
 ---
 

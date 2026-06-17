@@ -329,10 +329,29 @@ RealSenseControlsDialog::RealSenseControlsDialog(camera::RealSenseCapture* camer
                           "Bloque quelques secondes ; expérimental."));
     connect(calBtn, &QPushButton::clicked, this, [this]() {
         if (!m_camera) return;
+        // Pre-flight: the D4xx firmware rejects the self-cal hwmon command
+        // ("HW not ready") if the streams have not settled yet — usual right
+        // after a backend switch. Block the request with clear guidance rather
+        // than letting it fail deep in the firmware.
+        if (!m_camera->isCapturing()
+            || (m_camera->colorFps() <= 0.0 && m_camera->depthFps() <= 0.0)) {
+            QMessageBox::warning(this, tr("Self-calibration"),
+                tr("La caméra ne diffuse pas encore d'images.\n"
+                   "Attends quelques secondes après le démarrage, puis réessaie."));
+            return;
+        }
+        if (!m_camera->depthStreamEnabled()) {
+            QMessageBox::warning(this, tr("Self-calibration"),
+                tr("Le flux depth est désactivé. Réactive-le avant de lancer "
+                   "la self-calibration."));
+            return;
+        }
         if (QMessageBox::question(this, tr("Self-calibration"),
                 tr("Lancer la calibration depth embarquée ?\n"
                    "Garde la caméra immobile face à une surface plane texturée "
-                   "pendant quelques secondes.")) == QMessageBox::Yes) {
+                   "pendant quelques secondes.\n\n"
+                   "Nécessite un lien USB3 — sur USB2 le firmware refuse souvent "
+                   "la commande.")) == QMessageBox::Yes) {
             m_camera->requestOnChipCalibration();
         }
     });

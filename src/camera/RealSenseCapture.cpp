@@ -664,22 +664,76 @@ void RealSenseCapture::captureLoop()
         if (m_calibPending.exchange(false)) {
             try {
                 std::lock_guard<std::mutex> lk(m_deviceMutex);
-                if (m_device) {
+                if (!m_device) {
+                    emit onChipCalibrationFinished(false, 0.f, "No device handle");
+                } else if (!m_depthStreamEnabled.load()) {
+                    // The on-chip routine drives the stereo/depth module — it
+                    // cannot run with the depth stream disabled.
+                    emit onChipCalibrationFinished(false, 0.f,
+                        QString("Self-calibration needs the depth stream enabled. "
+                                "Re-enable depth, then retry."));
+                } else if (m_colorFps.load() <= 0.0 && m_depthFps.load() <= 0.0) {
+                    // No frames flowing yet — the firmware rejects hwmon commands
+                    // until the streams have settled ("HW not ready", -7). This is
+                    // the usual cause right after a backend switch.
+                    emit onChipCalibrationFinished(false, 0.f,
+                        QString("Camera is not streaming yet. Wait a couple of "
+                                "seconds after starting, then retry."));
+                } else {
+                    // Guard against USB2: the D4xx self-calibration is known to
+                    // fail (hwmon "HW not ready") on a degraded USB 2.1 link. Warn
+                    // up front so the user can re-seat the cable / use a USB3 port.
+                    std::string usb = m_device->supports(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR)
+                        ? m_device->get_info(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR) : "";
+                    if (!usb.empty() && usb[0] == '2') {
+                        spdlog::warn("RealSense self-calibration on USB {} link — "
+                                     "the D4xx firmware often rejects it below USB3.", usb);
+                    }
+
                     auto cal = m_device->as<rs2::auto_calibrated_device>();
-                    float health = 0.f;
                     // Default config: speed=slow for best accuracy on a static rig.
                     const std::string cfg =
                         "{\n \"speed\": 3,\n \"scan parameter\": 0\n}";
-                    rs2::calibration_table table =
-                        cal.run_on_chip_calibration(cfg, &health, 10000);
-                    cal.set_calibration_table(table);
-                    cal.write_calibration();
-                    spdlog::info("RealSense on-chip calibration done, health={:.4f}", health);
-                    emit onChipCalibrationFinished(
-                        true, health,
-                        QString("Self-calibration OK (health %1)").arg(health, 0, 'f', 4));
-                } else {
-                    emit onChipCalibrationFinished(false, 0.f, "No device handle");
+
+                    // "HW not ready" (-7) is a transient firmware state — the
+                    // device frequently accepts the command on a second attempt
+                    // once it has settled. Retry a few times before giving up.
+                    constexpr int kMaxAttempts = 3;
+                    float health = 0.f;
+                    bool  done   = false;
+                    std::string lastErr;
+                    for (int attempt = 1; attempt <= kMaxAttempts && !done; ++attempt) {
+                        try {
+                            rs2::calibration_table table =
+                                cal.run_on_chip_calibration(cfg, &health, 10000);
+                            cal.set_calibration_table(table);
+                            cal.write_calibration();
+                            done = true;
+                        } catch (const rs2::error& e) {
+                            lastErr = e.what();
+                            spdlog::warn("RealSense on-chip calibration attempt {}/{} "
+                                         "failed: {}", attempt, kMaxAttempts, lastErr);
+                            if (attempt < kMaxAttempts)
+                                std::this_thread::sleep_for(std::chrono::milliseconds(800));
+                        }
+                    }
+
+                    if (done) {
+                        spdlog::info("RealSense on-chip calibration done, health={:.4f}", health);
+                        emit onChipCalibrationFinished(
+                            true, health,
+                            QString("Self-calibration OK (health %1)").arg(health, 0, 'f', 4));
+                    } else {
+                        QString hint = QString::fromUtf8(lastErr.c_str());
+                        if (lastErr.find("HW not ready") != std::string::npos) {
+                            hint += QString("\n\nThe camera firmware was not ready. "
+                                            "Make sure it is on a USB3 port%1, hold it "
+                                            "still against a flat textured surface, let "
+                                            "it stream for a few seconds, then retry.")
+                                .arg(usb.empty() ? QString() : QString(" (currently USB %1)").arg(QString::fromStdString(usb)));
+                        }
+                        emit onChipCalibrationFinished(false, 0.f, hint);
+                    }
                 }
             } catch (const rs2::error& e) {
                 spdlog::warn("RealSense on-chip calibration failed: {}", e.what());
