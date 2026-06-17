@@ -21,8 +21,10 @@
 
 services:
   dev:
+    # NB: /dev/dri est desormais monte par defaut dans compose.yml (toujours
+    # present sur un Jetson demarre). NE PAS le re-declarer ici — les listes
+    # devices sont CONCATENEES par le merge compose → doublon (erreur #14).
     devices:
-      - /dev/dri:/dev/dri           # GPU display (Tegra display engine)
       - /dev/input:/dev/input       # clavier, souris, touch screen
       # Cameras USB (/dev/video*) : NE PAS les mapper en dur ici — un device
       # declare mais absent empeche le container de demarrer (erreurs #6/#15).
@@ -34,8 +36,8 @@ services:
       - input
 
   runtime:
+    # /dev/dri monte par defaut dans compose.yml — ne pas re-declarer (doublon #14).
     devices:
-      - /dev/dri:/dev/dri
       - /dev/input:/dev/input
       # Cameras : voir note ci-dessus (override dynamique, pas de mapping en dur)
       # - /dev/bus/usb:/dev/bus/usb

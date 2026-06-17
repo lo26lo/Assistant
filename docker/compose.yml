@@ -52,16 +52,22 @@ services:
     container_name: microscope-ibom-dev
     runtime: nvidia
     network_mode: host
-    # devices: bloc commente par defaut pour ne pas bloquer le demarrage du
-    # container quand la camera/RealSense ne sont pas branchees (workflow dev).
-    # Decommenter les lignes ci-dessous quand le materiel est present.
-    # devices:
-    #   - /dev/video0:/dev/video0     # camera microscope USB
+    # /dev/dri (moteur d'affichage Tegra) est TOUJOURS present sur un Jetson
+    # demarre : le mapper par defaut ne bloque pas le demarrage et restaure
+    # l'acceleration GPU display + EGL (decodage HW GStreamer nvvidconv) pour le
+    # workflow "docker compose up" nu, sans override local. NE PAS le re-declarer
+    # dans compose.local.yml (les listes devices sont CONCATENEES → doublon #14).
+    # Les /dev/video* restent opt-in : un device absent mappe en dur empeche le
+    # demarrage du container quand la camera n'est pas branchee (#6/#15). Les
+    # scripts run_local_gui.sh / run_dev_shell.sh generent un override dynamique
+    # avec les /dev/video* reellement presents.
+    devices:
+      - /dev/dri:/dev/dri             # GPU display (Tegra) + EGL pour HW decode
+    #   - /dev/video0:/dev/video0     # camera microscope USB (opt-in / dynamique)
     #   - /dev/video1:/dev/video1     # RealSense RGB (si presente)
     #   - /dev/video2:/dev/video2     # RealSense depth (si presente)
-    #   - /dev/bus/usb:/dev/bus/usb   # hot-plug USB
-    #   - /dev/input:/dev/input       # clavier/souris/ecran tactile
-    #   - /dev/dri:/dev/dri           # GPU display
+    #   - /dev/bus/usb:/dev/bus/usb   # hot-plug USB (ajoute dynamiquement si RealSense)
+    #   - /dev/input:/dev/input       # clavier/souris/ecran tactile (compose.local.yml)
     environment:
       - DISPLAY=${DISPLAY:-:0}
       - XAUTHORITY=/tmp/.docker.xauth
@@ -101,14 +107,15 @@ services:
     container_name: microscope-ibom-runtime
     runtime: nvidia
     network_mode: host
-    # Cote runtime, la camera et l'ecran tactile SONT necessaires : si tu lances
-    # ce service sans materiel branche, decommenter ce qui est present et
-    # commenter le reste, ou utiliser un override compose.
-    # devices:
+    # /dev/dri (toujours present) par defaut — voir note du service dev. Les
+    # /dev/video*, /dev/bus/usb et /dev/input dependent du materiel branche :
+    # decommenter ce qui est present ou utiliser un override compose.
+    # NE PAS re-declarer /dev/dri dans compose.local.yml (doublon #14).
+    devices:
+      - /dev/dri:/dev/dri             # GPU display (Tegra) + EGL pour HW decode
     #   - /dev/video0:/dev/video0
     #   - /dev/bus/usb:/dev/bus/usb
     #   - /dev/input:/dev/input
-    #   - /dev/dri:/dev/dri
     environment:
       - DISPLAY=${DISPLAY:-:0}
       - XAUTHORITY=/tmp/.docker.xauth
