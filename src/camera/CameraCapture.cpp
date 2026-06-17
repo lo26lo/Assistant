@@ -43,6 +43,25 @@ std::string buildGstPipeline(int deviceIndex, int width, int height, int fps)
            " ! appsink drop=1 max-buffers=1 sync=false";
 }
 
+/// Build a CPU GStreamer pipeline that forces MJPG and decodes it on the CPU
+/// (jpegdec — no NVDEC/nvvidconv, so NO EGL display is required, unlike
+/// buildGstPipeline()). This is the reliable way to get MJPG out of UVC
+/// cameras that ignore OpenCV's CAP_PROP_FOURCC hint (e.g. the HAYEAR
+/// microscope, which stubbornly negotiates raw YUYV via cv::VideoCapture):
+/// the explicit `image/jpeg` caps make GStreamer negotiate MJPG with the V4L2
+/// driver. MJPG is compressed on-camera, so a USB-2.0 link carries full
+/// resolution/fps where uncompressed YUYV would starve the bus.
+std::string buildGstPipelineCpu(int deviceIndex, int width, int height, int fps)
+{
+    return "v4l2src device=/dev/video" + std::to_string(deviceIndex) +
+           " ! image/jpeg,width=" + std::to_string(width) +
+           ",height=" + std::to_string(height) +
+           ",framerate=" + std::to_string(fps) + "/1"
+           " ! jpegdec"
+           " ! videoconvert ! video/x-raw,format=BGR"
+           " ! appsink drop=1 max-buffers=1 sync=false";
+}
+
 /// True if OpenCV was built with the GStreamer backend available.
 bool gstreamerAvailable()
 {
@@ -395,17 +414,42 @@ void CameraCapture::captureLoop()
         fourccStr,
         unifiedMemoryAvailable() ? "yes" : "no");
 
-    // If the camera ignored the MJPG hint and stayed on a raw format, warn
-    // loudly: at 720p+ the uncompressed stream starves the USB bus, which both
-    // throttles the fps and destabilises the controller (the source of the
-    // "select() timeout" warnings and the USB-collapse-on-switch we have seen).
-    if (!openedViaGst && std::string(fourccStr) != "MJPG") {
-        spdlog::warn("Camera is streaming '{}' (not MJPG) at {}x{} — the driver "
-                     "ignored the compression hint. Expect reduced fps and USB "
-                     "bandwidth pressure; consider a lower resolution.",
-                     fourccStr,
-                     static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH)),
-                     static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT)));
+    // If the camera ignored OpenCV's MJPG hint and stayed on a raw format, the
+    // uncompressed stream starves the USB bus at 720p+ (select() timeouts, ~5-10
+    // fps, controller instability). cv::VideoCapture's CAP_PROP_FOURCC is simply
+    // unreliable on some UVC drivers (the HAYEAR microscope is one). The robust
+    // fix is to re-open through a CPU GStreamer pipeline whose explicit
+    // `image/jpeg` caps force MJPG negotiation, decoded by jpegdec (no EGL/NVDEC,
+    // so it works in a headless container where the HW pipeline can't).
+    if (!openedViaGst && std::string(fourccStr) != "MJPG" && gstreamerAvailable()) {
+        const std::string pipeline =
+            buildGstPipelineCpu(m_deviceIndex, m_width, m_height, m_fps);
+        spdlog::warn("Camera negotiated '{}' (not MJPG) via V4L2 — retrying with a "
+                     "CPU MJPG GStreamer pipeline to force compression:\n  {}",
+                     fourccStr, pipeline);
+        cv::VideoCapture gst;
+        if (gst.open(pipeline, cv::CAP_GSTREAMER) && gst.isOpened()) {
+            bool alive = false;
+            for (int i = 0; i < 20; ++i) {
+                cv::Mat probe;
+                if (gst.read(probe) && !probe.empty()) { alive = true; break; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            if (alive) {
+                spdlog::info("Camera re-opened with CPU MJPG GStreamer pipeline "
+                             "(forced image/jpeg, jpegdec)");
+                cap.release();
+                cap = std::move(gst);
+                openedViaGst = true;   // appsink delivers decoded BGR already
+            } else {
+                spdlog::warn("CPU MJPG GStreamer pipeline produced no frames — "
+                             "keeping the raw V4L2 stream (expect bandwidth issues)");
+                gst.release();
+            }
+        } else {
+            spdlog::warn("CPU MJPG GStreamer pipeline failed to open — keeping the "
+                         "raw V4L2 stream (expect bandwidth issues)");
+        }
     }
 
     cv::MatAllocator* alloc = unifiedAllocator();

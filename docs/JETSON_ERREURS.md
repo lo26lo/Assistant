@@ -73,9 +73,11 @@ Une seule frame de warmup, puis `select() timeout` toutes les ~10 s (le timeout 
 **Pistes de contournement** :
 1. **Affichage du type USB ajouté** (cette session) : `CameraCapture::listDevices()` lit la vitesse négociée dans sysfs (`/sys/class/video4linux/videoN/device` → remonte au nœud USB → `speed`) et l'affiche dans le combo (« USB 2.0 HS (480 Mb/s) »). Idem D405 via `RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR`. L'utilisateur voit ainsi pourquoi le microscope sature.
 2. **Réduire la résolution YUYV** : 640×480 YUYV ≈ 147 Mbit/s passe en USB 2.0.
-3. **Forcer réellement MJPG** ✅ (suite 51) : plusieurs drivers UVC / le backend V4L2 d'OpenCV resettent le pixelformat en YUYV **quand on change la résolution**, annulant le `CAP_PROP_FOURCC` posé avant. Fix : re-poser MJPG **après** `CAP_PROP_FRAME_WIDTH/HEIGHT/FPS` dans `CameraCapture::captureLoop()`, + warning spdlog explicite si le FOURCC effectif n'est toujours pas `MJPG`.
+3. **Forcer réellement MJPG** ✅ (suite 51 + 54) : plusieurs drivers UVC / le backend V4L2 d'OpenCV resettent le pixelformat en YUYV **quand on change la résolution**, annulant le `CAP_PROP_FOURCC` posé avant. Fix initial (suite 51) : re-poser MJPG **après** `CAP_PROP_FRAME_WIDTH/HEIGHT/FPS`. **Mais la HAYEAR ignore quand même CAP_PROP_FOURCC** (log suite 54 : toujours `FOURCC=YUYV`). Fix robuste (suite 54) : si après ouverture V4L2 le FOURCC n'est pas MJPG, **ré-ouverture via une pipeline GStreamer CPU** `v4l2src ! image/jpeg ! jpegdec ! videoconvert ! appsink` (`buildGstPipelineCpu()`). Les caps explicites `image/jpeg` **forcent** la négociation MJPG côté driver, et `jpegdec` décode en CPU (pas de NVDEC/nvvidconv → **pas besoin d'EGL**, marche en container headless). Validation par lecture réelle d'une frame avant adoption, sinon on garde le flux brut.
 
-**À valider** : prochain build — vérifier que le log microscope affiche `FOURCC=MJPG` (plus de `select() timeout`). Si le warning « not MJPG » persiste, la caméra ne supporte pas MJPG à cette résolution → fallback 640×480 ou pipeline GStreamer `image/jpeg`.
+> ⚠️ **Piège device index** (log suite 54) : l'app a ouvert `/dev/video6` (depuis `config.json`) alors que la HAYEAR expose AUSSI `/dev/video0` (le combo montrait « 0: HAYEAR_CAMERA »). `video6` est un **nœud secondaire** qui ne sort que du YUYV / pas de frames continues. **Action utilisateur** : sélectionner Device **0** + « Apply Camera » (ou corriger `camera_index` dans `config.json`). Le fallback par nom (#31) ne se déclenche pas ici car `video6` *s'ouvre* (il échoue juste à streamer).
+
+**À valider** : prochain build — vérifier que le log microscope affiche `FOURCC=MJPG` ou « re-opened with CPU MJPG GStreamer pipeline » (plus de `select() timeout`).
 
 ---
 
