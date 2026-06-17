@@ -291,7 +291,7 @@ std::optional<std::string> IBomParser::decompressLZString(const std::string& enc
     auto getBaseValue = [&](size_t index) -> int {
         if (index >= encoded.size()) return 0;
         unsigned char c = static_cast<unsigned char>(encoded[index]);
-        return (c < 256) ? baseReverseDic[c] : 0;
+        return baseReverseDic[c];
     };
 
     // _decompress(length, resetValue=32, getNextValue)
