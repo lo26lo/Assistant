@@ -20,6 +20,7 @@ class IBomParser;
 
 namespace gui {
 class MainWindow;
+class CalibrationMonitorDialog;
 }
 
 namespace camera {
@@ -140,6 +141,9 @@ private:
     /// Read back the placed refs saved for the current iBOM, if any.
     std::unordered_set<std::string> loadSavedPlacedRefs() const;
     void runCalibration();
+    /// Push the current camera/calibration state into the live calibration
+    /// monitor (no-op if the monitor was never opened).
+    void pushCalibrationMonitorState();
     void takeScreenshot();
     void updateDynamicScale();
     void startInspection();
@@ -168,6 +172,10 @@ private:
 
     // Camera calibration
     std::unique_ptr<camera::CameraCalibration> m_calibration;
+
+    // Dev tool: live calibration monitor pop-up (created lazily on first open,
+    // then kept alive so it keeps buffering warnings).
+    std::unique_ptr<gui::CalibrationMonitorDialog> m_calibMonitor;
 
     // Inspection workflow features
     std::unique_ptr<features::PickAndPlace>     m_pickAndPlace;

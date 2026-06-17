@@ -159,6 +159,7 @@ set(SOURCES
     src/gui/DatasetPanel.cpp
     src/gui/BoardMinimap.cpp
     src/gui/FovMeasureDialog.cpp
+    src/gui/CalibrationMonitorDialog.cpp
     src/gui/SettingsDialog.cpp
     src/gui/HelpDialog.cpp
 
@@ -229,6 +230,7 @@ set(HEADERS
     src/gui/DatasetPanel.h
     src/gui/BoardMinimap.h
     src/gui/FovMeasureDialog.h
+    src/gui/CalibrationMonitorDialog.h
     src/gui/SettingsDialog.h
     src/gui/HelpDialog.h
     src/gui/Theme.h

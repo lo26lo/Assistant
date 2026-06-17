@@ -314,6 +314,15 @@ void MainWindow::createMenuBar()
         "for the current camera. Helps answer Q2/Q3 of MICROSCOPE_PLACEMENT_PLAN.md."));
     connect(actFovMeasure, &QAction::triggered, this, &MainWindow::fovMeasureRequested);
 
+    auto* actCalibMonitor = devMenu->addAction(tr("Calibration Monitor (live)…"));
+    actCalibMonitor->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C));
+    actCalibMonitor->setToolTip(tr(
+        "Live cockpit for camera calibration: checkerboard detection, sharpness, "
+        "coverage, calibration state and recent warnings, with a one-click "
+        "copyable report."));
+    connect(actCalibMonitor, &QAction::triggered, this,
+            &MainWindow::calibrationMonitorRequested);
+
     devMenu->addSeparator();
     auto* actScript = devMenu->addAction(tr("How to run scripts/measure_fov.py…"));
     connect(actScript, &QAction::triggered, this, [this]() {

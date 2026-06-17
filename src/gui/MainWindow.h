@@ -85,6 +85,8 @@ signals:
     void componentAnchorRequested();
     /// Dev menu: measure current FOV & scale.
     void fovMeasureRequested();
+    /// Dev menu: open the live calibration monitor pop-up.
+    void calibrationMonitorRequested();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

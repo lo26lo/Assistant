@@ -32,6 +32,7 @@
 #include "gui/DatasetPanel.h"
 #include "gui/BoardMinimap.h"
 #include "gui/FovMeasureDialog.h"
+#include "gui/CalibrationMonitorDialog.h"
 #include "export/DataExporter.h"
 #include "export/ReportGenerator.h"
 #include "gui/Theme.h"
@@ -725,6 +726,11 @@ void Application::openRealSenseControls()
 void Application::updateCalibrationUI()
 {
     if (!m_mainWindow) return;
+
+    // Keep the live calibration monitor (Dev tool) in sync with backend
+    // switches and calibration runs.
+    pushCalibrationMonitorState();
+
     const bool isRS = (m_activeBackend == CameraBackend::RealSense);
 
     // Update calibration button in the control panel.
@@ -917,6 +923,11 @@ void Application::wireCameraSignals()
                 m_homography.get(), QSize(frame.cols, frame.rows));
             minimapSized = true;
         }
+
+        // Dev calibration monitor — feed live frames only while it is visible
+        // (it throttles detection internally). Cheap no-op otherwise.
+        if (m_calibMonitor && m_calibMonitor->isVisible())
+            m_calibMonitor->onFrame(frameRef);
 
 #ifdef IBOM_HAVE_REALSENSE
         // Factory intrinsics are cached by the capture thread when it grabs its
@@ -1368,6 +1379,7 @@ void Application::connectControlSignals()
             // Start calibration mode
             m_calibImages.clear();
             m_collectingCalibImages = true;
+            if (m_calibMonitor) m_calibMonitor->setCaptureProgress(true, 0, 5);
             QMessageBox::information(m_mainWindow.get(), tr("Calibration"),
                 tr("Calibration mode started.\n\n"
                    "1. Hold a %1x%2 checkerboard (squares %3 mm) in front of the microscope\n"
@@ -1393,6 +1405,7 @@ void Application::connectControlSignals()
                 m_calibImages.push_back(current);
                 int count = static_cast<int>(m_calibImages.size());
                 spdlog::info("Calibration image {}/5 captured", count);
+                if (m_calibMonitor) m_calibMonitor->setCaptureProgress(count < 5, count, 5);
                 // Update button text
                 for (auto* b : m_mainWindow->controlPanel()->findChildren<QPushButton*>()) {
                     if (b->text().contains("Capture") || b->text().contains("Calibrat")) {
@@ -2216,6 +2229,24 @@ void Application::connectControlSignals()
         dlg->exec();
     });
 
+    // ── Dev menu: live calibration monitor (non-modal cockpit) ───────
+    connect(m_mainWindow.get(), &gui::MainWindow::calibrationMonitorRequested,
+            this, [this]() {
+        if (!m_calibMonitor) {
+            m_calibMonitor = std::make_unique<gui::CalibrationMonitorDialog>(
+                *m_config, m_mainWindow.get());
+            // "Capture image" in the monitor drives the normal calibration
+            // capture flow (signal → signal → the shared calibHandler).
+            connect(m_calibMonitor.get(),
+                    &gui::CalibrationMonitorDialog::captureRequested,
+                    m_mainWindow.get(), &gui::MainWindow::calibrationRequested);
+        }
+        pushCalibrationMonitorState();
+        m_calibMonitor->show();
+        m_calibMonitor->raise();
+        m_calibMonitor->activateWindow();
+    });
+
     spdlog::info("Signal/slot connections established, FPS timer started.");
 }
 
@@ -2585,6 +2616,34 @@ void Application::runCalibration()
         .arg(error, 0, 'f', 4).arg(m_calibration->pixelsPerMm(), 0, 'f', 1));
 
     updateCalibrationUI();
+}
+
+void Application::pushCalibrationMonitorState()
+{
+    if (!m_calibMonitor) return;
+
+    const bool isRS = (m_activeBackend == CameraBackend::RealSense);
+    const QString backend = isRS ? tr("RealSense D405 (factory-calibrated)")
+                                 : tr("V4L2 microscope");
+
+    int w = m_config->cameraWidth();
+    int h = m_config->cameraHeight();
+    if (m_camera) {
+        w = m_camera->resolution().width();
+        h = m_camera->resolution().height();
+    }
+
+    const bool   calibrated = m_calibration && m_calibration->isCalibrated();
+    const double rms  = m_calibration ? m_calibration->rmsError() : 0.0;
+    const double ppmm = m_currentPixelsPerMm > 0.0
+        ? m_currentPixelsPerMm
+        : (m_calibration ? m_calibration->pixelsPerMm() : 0.0);
+
+    QString calibPath = QString::fromStdString(utils::dataDir().string())
+                        + "/calibration.yml";
+    if (!QFileInfo::exists(calibPath)) calibPath.clear();
+
+    m_calibMonitor->setCalibrationStatus(calibrated, rms, ppmm, backend, w, h, calibPath);
 }
 
 // ── Dynamic Scale ──────────────────────────────────────────────────
