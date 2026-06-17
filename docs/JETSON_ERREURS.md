@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 31 | 2026-06-17 | CameraCapture / GStreamer + index | 🟡 CONTOURNÉ | [Microscope inouvrable : index `/dev/video` instable (6→0) + pipeline GStreamer HW « ouvert » sans EGL ne produit aucune frame](#erreur-31--microscope-inouvrable-index-instable--gstreamer-sans-egl) |
 | 30 | 2026-06-17 | RealSenseCapture / self-cal | 🟡 CONTOURNÉ | [Self-calibration D405 `hwmon ... -7 HW not ready` — firmware pas prêt (lancée trop tôt / USB2)](#erreur-30--self-calibration-d405-hw-not-ready) |
 | 29 | 2026-06-17 | CameraCapture / V4L2 bandwidth | 🟡 CONTOURNÉ | [Microscope `select() timeout` (aucune frame) — YUYV 1280×720 négocié au lieu de MJPG sature l'USB 2.0](#erreur-29--microscope-select-timeout--yuyv-sature-lusb-20) |
 | 28 | 2026-06-17 | Application / RealSense switch + USB | 🟡 CONTOURNÉ | [Freeze GUI au switch caméra + disparition de tout l'USB (`lsusb` = root hubs) — `query_devices()` sur le thread GUI pendant le hot-swap + reset xHCI Tegra](#erreur-28--freeze-au-switch-camera--disparition-usb) |
@@ -75,6 +76,37 @@ Une seule frame de warmup, puis `select() timeout` toutes les ~10 s (le timeout 
 3. **Forcer réellement MJPG** ✅ (suite 51) : plusieurs drivers UVC / le backend V4L2 d'OpenCV resettent le pixelformat en YUYV **quand on change la résolution**, annulant le `CAP_PROP_FOURCC` posé avant. Fix : re-poser MJPG **après** `CAP_PROP_FRAME_WIDTH/HEIGHT/FPS` dans `CameraCapture::captureLoop()`, + warning spdlog explicite si le FOURCC effectif n'est toujours pas `MJPG`.
 
 **À valider** : prochain build — vérifier que le log microscope affiche `FOURCC=MJPG` (plus de `select() timeout`). Si le warning « not MJPG » persiste, la caméra ne supporte pas MJPG à cette résolution → fallback 640×480 ou pipeline GStreamer `image/jpeg`.
+
+---
+
+## ERREUR 31 — Microscope inouvrable : index instable + GStreamer sans EGL
+
+**Date** : 2026-06-17
+**Statut** : 🟡 CONTOURNÉ (fallback par nom + validation du pipeline GStreamer)
+
+**Symptômes** (logs Jetson) :
+```
+[error] Failed to open camera device 6 with any backend
+```
+puis, en activant le décodage HW :
+```
+No EGL Display
+nvbufsurftransform: Could not get EGL display connection
+[info] Camera opened with GStreamer (nvv4l2decoder, HW MJPG decode)
+[info] Camera opened: -1x-1 @ 0 fps, FOURCC= (unified memory: yes)
+```
+
+**Causes (deux problèmes distincts)** :
+1. **Index `/dev/video` instable** : après une ré-énumération USB (le collapse du bus au switch de backend, [ERREUR 28](#erreur-28--freeze-au-switch-camera--disparition-usb)), le microscope HAYEAR est passé de **`/dev/video6` à `/dev/video0`**. Le `config.json` pointe encore sur 6 → `cap.open(6)` échoue. (L'utilisateur l'a repéré : combo « 0: HAYEAR_CAMERA: MOS-4K Pro — USB 2.0 HS ».)
+2. **Pipeline GStreamer HW « ouvert » mais mort** : `nvvidconv` a besoin d'un **display EGL**, absent dans un container headless → « No EGL Display ». La négociation des caps s'effondre (width/height = -1), **aucune frame ne circule**, mais `cap.isOpened()` renvoie quand même `true`. Le code acceptait ce pipeline mort, sautait le fallback CPU V4L2, puis le warmup échouait.
+
+**Solution (suite 52)** :
+1. **Fallback par nom** (`CameraCapture::captureLoop`, Linux) : si l'index configuré échoue à l'ouverture, scanne `listDevices()` et ouvre la **première caméra capture non-RealSense** détectée, en adoptant son index réel (`m_deviceIndex = idx`). Couvre le décalage 6→0.
+2. **Validation du pipeline GStreamer** : après `cap.open(pipeline)`, on **lit réellement une frame** (jusqu'à 10 essais × 50 ms) avant de faire confiance à `isOpened()`. Si rien ne sort (cas EGL), on `release()` et on retombe sur le path CPU V4L2.
+
+**Note EGL** : le décodage HW (nvv4l2decoder/nvvidconv) reste **inutilisable dans le container headless actuel** (pas d'EGL). Le path **CPU MJPG** suffit largement pour le microscope USB 2.0 (MJPG 1080p compressé tient dans 480 Mb/s). Pour réactiver le HW decode il faudrait fournir un display EGL au container (montage X11/`/dev/dri`, `DISPLAY`/`__EGL_*`), sujet Docker à part. Recommandation : **laisser le HW decode désactivé** sur ce setup.
+
+**À valider** : prochain build — au démarrage, le microscope s'ouvre même si le config a un vieil index ; HW decode activé → fallback propre sur CPU (plus de `-1x-1 @ 0 fps`).
 
 ---
 

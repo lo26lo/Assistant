@@ -273,9 +273,29 @@ void CameraCapture::captureLoop()
                 buildGstPipeline(m_deviceIndex, m_width, m_height, m_fps);
             spdlog::info("Trying NVIDIA HW decode via GStreamer:\n  {}", pipeline);
             if (cap.open(pipeline, cv::CAP_GSTREAMER) && cap.isOpened()) {
-                spdlog::info("Camera opened with GStreamer (nvv4l2decoder, HW MJPG decode)");
-                opened = true;
-                openedViaGst = true;
+                // isOpened() lies for this pipeline: nvvidconv needs an EGL
+                // display, and in a headless container it fails with "No EGL
+                // Display" / "Could not get EGL display connection". The caps
+                // negotiation then collapses (width/height come back as -1) and
+                // NO frames ever flow — yet cap.isOpened() still reports true.
+                // Validate that the pipeline actually produces a frame before
+                // trusting it; otherwise release it and fall back to CPU V4L2.
+                bool alive = false;
+                for (int i = 0; i < 10; ++i) {
+                    cv::Mat probe;
+                    if (cap.read(probe) && !probe.empty()) { alive = true; break; }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                if (alive) {
+                    spdlog::info("Camera opened with GStreamer (nvv4l2decoder, HW MJPG decode)");
+                    opened = true;
+                    openedViaGst = true;
+                } else {
+                    spdlog::warn("GStreamer HW pipeline opened but delivered no frames "
+                                 "(likely 'No EGL Display' in a headless container) — "
+                                 "falling back to CPU V4L2 decode");
+                    cap.release();
+                }
             } else {
                 spdlog::warn("GStreamer HW pipeline failed to open — "
                              "falling back to CPU V4L2 decode");
@@ -298,6 +318,30 @@ void CameraCapture::captureLoop()
             }
         }
     }
+
+#ifdef __linux__
+    // The /dev/video<N> index is NOT stable: after a USB re-enumeration (e.g.
+    // the bus collapse on a backend switch), the microscope can move from
+    // video6 to video0, leaving the configured index pointing at nothing. If
+    // the configured index failed, fall back to the first real capture device
+    // that is not a RealSense node (those must go through the RS SDK, not V4L2).
+    if (!opened) {
+        const auto devs = listDevices();
+        for (const auto& [idx, label] : devs) {
+            if (idx == m_deviceIndex) continue;                 // already tried
+            if (label.find("RealSense") != std::string::npos) continue;
+            spdlog::warn("Configured device {} unavailable — falling back to "
+                         "detected camera {}: {}", m_deviceIndex, idx, label);
+            bool result = cap.open(idx, cv::CAP_V4L2);
+            if (result && cap.isOpened()) {
+                spdlog::info("Camera opened on fallback device {} (V4L2)", idx);
+                m_deviceIndex = idx;                            // adopt the live index
+                opened = true;
+                break;
+            }
+        }
+    }
+#endif
 
     if (!opened) {
         spdlog::error("Failed to open camera device {} with any backend", m_deviceIndex);
