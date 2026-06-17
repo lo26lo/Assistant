@@ -3,6 +3,8 @@
 #include <QDialog>
 #include <QStringList>
 #include <QElapsedTimer>
+#include <QFutureWatcher>
+#include <QImage>
 #include <opencv2/core.hpp>
 
 #include "../camera/ICameraSource.h"   // ibom::camera::FrameRef
@@ -14,6 +16,20 @@ class QPushButton;
 namespace ibom { class Config; }
 
 namespace ibom::gui {
+
+/// Result of one (off-GUI-thread) detection pass — plain data, no widget
+/// access, so it can be built freely on a QtConcurrent worker thread.
+struct CalibDetectionResult {
+    bool    detected        = false;
+    int     cornersFound    = 0;
+    int     cornersExpected = 0;
+    QString method;
+    double  sharpness   = 0.0;
+    double  brightness  = 0.0;
+    double  coveragePct = 0.0;
+    QString quadrant;
+    QImage  preview;   // already has corners drawn, ready for setPixmap()
+};
 
 /**
  * Dev tool — live calibration cockpit.
@@ -38,8 +54,11 @@ namespace ibom::gui {
  * normal calibration-capture request so the whole flow can be driven from here.
  *
  * The dialog never touches the camera itself: Application feeds it frames via
- * onFrame() and pushes calibration/progress state. All detection runs on the
- * GUI thread, throttled, on a downscaled copy.
+ * onFrame() and pushes calibration/progress state. Detection (checkerboard
+ * search + preview render) is throttled and runs on a QtConcurrent worker
+ * thread — cv::findChessboardCornersSB can take well over a frame interval
+ * to fail on a frame with no board in it, and running it inline on the GUI
+ * thread froze the whole application while the dialog was open.
  */
 class CalibrationMonitorDialog : public QDialog {
     Q_OBJECT
@@ -69,16 +88,20 @@ public slots:
     /// Receives every spdlog record (via LogBridge). Only WARN+ is kept.
     void appendLog(int level, const QString& logger, const QString& message);
 
+private slots:
+    void onDetectionFinished();       // apply a CalibDetectionResult to the UI
+
 private:
     void buildUi();
-    void refreshDetection();          // run detection on m_lastFrame, update UI
     void updateVerdict();             // recompute the top readiness banner
     QString buildReport() const;      // plain-text snapshot for the clipboard
 
     const ibom::Config& m_config;
 
+    QFutureWatcher<CalibDetectionResult>* m_watcher = nullptr;
+    bool m_detectionBusy = false;     // a worker pass is in flight — drop frames
+
     // ── Live frame / detection state ────────────────────────────────
-    cv::Mat       m_lastFrame;        // BGR or gray clone of the latest frame
     QElapsedTimer m_throttle;         // limits detection rate
     bool          m_haveFrame   = false;
     bool          m_detected    = false;

@@ -19,6 +19,7 @@
 #include <QTimer>
 #include <QFont>
 #include <QPixmap>
+#include <QtConcurrent/QtConcurrent>
 
 #include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
@@ -42,6 +43,94 @@ QString styleFor(const QString& kind)
     if (kind == "bad")   return "color:#f38ba8; font-weight:bold;";   // red
     return "color:#cdd6f4;";                                          // neutral
 }
+
+// Runs on a QtConcurrent worker thread: no widget access, pure pixel work.
+// findChessboardCornersSB can take well over kThrottleMs to give up on a
+// frame with no board in it — keeping this off the GUI thread is what stops
+// the whole application from freezing while the dialog is open.
+CalibDetectionResult computeDetection(const cv::Mat& frame, int cols, int rows)
+{
+    CalibDetectionResult r;
+    r.cornersExpected = cols * rows;
+    const cv::Size board(cols, rows);
+
+    cv::Mat gray;
+    if (frame.channels() == 3)
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    else
+        gray = frame;
+
+    const int fullW = gray.cols;
+
+    double ds = 1.0;
+    cv::Mat det = gray;
+    if (gray.cols > kDetectMaxWidth) {
+        ds = static_cast<double>(kDetectMaxWidth) / gray.cols;
+        cv::resize(gray, det, cv::Size(), ds, ds, cv::INTER_AREA);
+    }
+
+    std::vector<cv::Point2f> corners;
+    bool found = false;
+    r.method = QObject::tr("not found");
+    try {
+        found = cv::findChessboardCornersSB(
+            det, board, corners,
+            cv::CALIB_CB_NORMALIZE_IMAGE | cv::CALIB_CB_ACCURACY);
+        if (found) {
+            r.method = QObject::tr("sector-based (SB)");
+        } else {
+            found = cv::findChessboardCorners(
+                det, board, corners,
+                cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE
+                    | cv::CALIB_CB_FAST_CHECK);
+            if (found) r.method = QObject::tr("legacy adaptive");
+        }
+    } catch (const cv::Exception&) {
+        found = false;
+    }
+
+    r.detected     = found;
+    r.cornersFound = found ? static_cast<int>(corners.size()) : 0;
+
+    cv::Mat smallGray;
+    cv::resize(gray, smallGray, cv::Size(), kSharpScale, kSharpScale, cv::INTER_AREA);
+    r.sharpness  = utils::ImageUtils::computeSharpness(smallGray);
+    r.brightness = cv::mean(gray)[0];
+
+    if (found && !corners.empty()) {
+        const cv::Rect bb = cv::boundingRect(corners);
+        r.coveragePct = 100.0 * (static_cast<double>(bb.width) * bb.height)
+                              / (static_cast<double>(det.cols) * det.rows);
+        const double cx = bb.x + bb.width / 2.0;
+        const double cy = bb.y + bb.height / 2.0;
+        const QString vside = (cy < det.rows / 3.0) ? QObject::tr("top")
+                            : (cy > det.rows * 2.0 / 3.0) ? QObject::tr("bottom") : QObject::tr("middle");
+        const QString hside = (cx < det.cols / 3.0) ? QObject::tr("left")
+                            : (cx > det.cols * 2.0 / 3.0) ? QObject::tr("right") : QObject::tr("centre");
+        r.quadrant = (vside == QObject::tr("middle") && hside == QObject::tr("centre"))
+            ? QObject::tr("centre") : QObject::tr("%1-%2").arg(vside, hside);
+    }
+
+    cv::Mat previewBgr;
+    if (frame.channels() == 3)
+        previewBgr = frame.clone();
+    else
+        cv::cvtColor(frame, previewBgr, cv::COLOR_GRAY2BGR);
+
+    const double pf = static_cast<double>(kPreviewWidth) / fullW;
+    cv::resize(previewBgr, previewBgr, cv::Size(), pf, pf, cv::INTER_AREA);
+    if (found && !corners.empty()) {
+        std::vector<cv::Point2f> pc;
+        pc.reserve(corners.size());
+        const double k = pf / ds;
+        for (const auto& p : corners)
+            pc.emplace_back(p.x * k, p.y * k);
+        cv::drawChessboardCorners(previewBgr, board, pc, found);
+    }
+    r.preview = utils::ImageUtils::matToQImage(previewBgr).copy();
+
+    return r;
+}
 } // namespace
 
 CalibrationMonitorDialog::CalibrationMonitorDialog(const ibom::Config& config,
@@ -50,13 +139,18 @@ CalibrationMonitorDialog::CalibrationMonitorDialog(const ibom::Config& config,
     , m_config(config)
 {
     setWindowTitle(tr("Calibration Monitor — Dev (live)"));
-    setMinimumWidth(560);
+    setMinimumSize(720, 640);
     // Non-modal: the user keeps clicking "Calibrate" on the main window while
     // watching this. The caller shows it with show(), not exec().
     setModal(false);
 
     buildUi();
+    resize(820, 720);
     m_throttle.start();
+
+    m_watcher = new QFutureWatcher<CalibDetectionResult>(this);
+    connect(m_watcher, &QFutureWatcher<CalibDetectionResult>::finished,
+            this, &CalibrationMonitorDialog::onDetectionFinished);
 
     // Live problem feed. Records arrive from any thread; Queued marshals onto
     // the GUI thread. Connected for the dialog's whole lifetime so that recent
@@ -99,11 +193,13 @@ void CalibrationMonitorDialog::buildUi()
     mid->addWidget(m_preview);
 
     auto* liveGrp  = new QGroupBox(tr("Live frame"));
+    liveGrp->setMinimumWidth(320);
     auto* liveForm = new QFormLayout(liveGrp);
-    m_lblDetect   = new QLabel; liveForm->addRow(tr("Checkerboard:"), m_lblDetect);
-    m_lblSharp    = new QLabel; liveForm->addRow(tr("Sharpness:"),    m_lblSharp);
-    m_lblCoverage = new QLabel; liveForm->addRow(tr("Board area:"),   m_lblCoverage);
-    m_lblBright   = new QLabel; liveForm->addRow(tr("Brightness:"),   m_lblBright);
+    liveForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    m_lblDetect   = new QLabel; m_lblDetect->setWordWrap(true);   liveForm->addRow(tr("Checkerboard:"), m_lblDetect);
+    m_lblSharp    = new QLabel; m_lblSharp->setWordWrap(true);    liveForm->addRow(tr("Sharpness:"),    m_lblSharp);
+    m_lblCoverage = new QLabel; m_lblCoverage->setWordWrap(true); liveForm->addRow(tr("Board area:"),   m_lblCoverage);
+    m_lblBright   = new QLabel; m_lblBright->setWordWrap(true);   liveForm->addRow(tr("Brightness:"),   m_lblBright);
     m_lblParams   = new QLabel; m_lblParams->setWordWrap(true);
     liveForm->addRow(tr("Pattern:"), m_lblParams);
     mid->addWidget(liveGrp, 1);
@@ -179,114 +275,36 @@ void CalibrationMonitorDialog::onFrame(const ibom::camera::FrameRef& frame)
 {
     if (!frame || frame->empty()) return;
     if (m_throttle.elapsed() < kThrottleMs) return;
+    if (m_detectionBusy) return;   // previous pass still running — drop this frame
     m_throttle.restart();
-
-    // Clone: the shared buffer is reused by the capture loop and we run a few
-    // (cheap) ops on it across this function.
-    m_lastFrame = frame->clone();
+    m_detectionBusy = true;
     m_haveFrame = true;
-    refreshDetection();
+
+    const cv::Mat clone = frame->clone();
+    const int cols = m_config.calibBoardCols();
+    const int rows = m_config.calibBoardRows();
+    m_watcher->setFuture(QtConcurrent::run(
+        [clone, cols, rows]() { return computeDetection(clone, cols, rows); }));
 }
 
-void CalibrationMonitorDialog::refreshDetection()
+void CalibrationMonitorDialog::onDetectionFinished()
 {
-    if (m_lastFrame.empty()) return;
+    m_detectionBusy = false;
+    const CalibDetectionResult res = m_watcher->result();
 
-    const int cols   = m_config.calibBoardCols();
-    const int rows   = m_config.calibBoardRows();
-    const float sqmm = m_config.calibSquareSize();
-    const cv::Size board(cols, rows);
-    m_cornersExpected = cols * rows;
+    m_detected        = res.detected;
+    m_cornersFound     = res.cornersFound;
+    m_cornersExpected  = res.cornersExpected;
+    m_method           = res.method;
+    m_sharpness        = res.sharpness;
+    m_brightness       = res.brightness;
+    m_coveragePct      = res.coveragePct;
+    m_quadrant         = res.quadrant;
 
-    // Grayscale for detection / metrics.
-    cv::Mat gray;
-    if (m_lastFrame.channels() == 3)
-        cv::cvtColor(m_lastFrame, gray, cv::COLOR_BGR2GRAY);
-    else
-        gray = m_lastFrame;
+    if (!res.preview.isNull())
+        m_preview->setPixmap(QPixmap::fromImage(res.preview));
 
-    const int fullW = gray.cols;
-
-    // Downscale for a responsive detection pass (the real calibration uses the
-    // slower EXHAUSTIVE flag on full-res; a quick check here is enough to tell
-    // the user whether the board is visible and well placed).
-    double ds = 1.0;
-    cv::Mat det = gray;
-    if (gray.cols > kDetectMaxWidth) {
-        ds = static_cast<double>(kDetectMaxWidth) / gray.cols;
-        cv::resize(gray, det, cv::Size(), ds, ds, cv::INTER_AREA);
-    }
-
-    std::vector<cv::Point2f> corners;
-    bool found = false;
-    m_method = tr("not found");
-    try {
-        found = cv::findChessboardCornersSB(
-            det, board, corners,
-            cv::CALIB_CB_NORMALIZE_IMAGE | cv::CALIB_CB_ACCURACY);
-        if (found) {
-            m_method = tr("sector-based (SB)");
-        } else {
-            found = cv::findChessboardCorners(
-                det, board, corners,
-                cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE
-                    | cv::CALIB_CB_FAST_CHECK);
-            if (found) m_method = tr("legacy adaptive");
-        }
-    } catch (const cv::Exception&) {
-        found = false;
-    }
-
-    m_detected     = found;
-    m_cornersFound = found ? static_cast<int>(corners.size()) : 0;
-
-    // ── Sharpness (on a 0.25× copy, matching the app focus-assist metric) ──
-    cv::Mat smallGray;
-    cv::resize(gray, smallGray, cv::Size(), kSharpScale, kSharpScale, cv::INTER_AREA);
-    m_sharpness  = utils::ImageUtils::computeSharpness(smallGray);
-    m_brightness = cv::mean(gray)[0];
-
-    // ── Coverage + centroid quadrant (board pose hint) ──
-    m_coveragePct = 0.0;
-    m_quadrant.clear();
-    if (found && !corners.empty()) {
-        const cv::Rect bb = cv::boundingRect(corners);
-        m_coveragePct = 100.0 * (static_cast<double>(bb.width) * bb.height)
-                              / (static_cast<double>(det.cols) * det.rows);
-        const double cx = bb.x + bb.width / 2.0;
-        const double cy = bb.y + bb.height / 2.0;
-        const QString vside = (cy < det.rows / 3.0) ? tr("top")
-                            : (cy > det.rows * 2.0 / 3.0) ? tr("bottom") : tr("middle");
-        const QString hside = (cx < det.cols / 3.0) ? tr("left")
-                            : (cx > det.cols * 2.0 / 3.0) ? tr("right") : tr("centre");
-        m_quadrant = (vside == tr("middle") && hside == tr("centre"))
-            ? tr("centre") : tr("%1-%2").arg(vside, hside);
-    }
-
-    // ── Build the preview with the detected corners drawn ──
-    cv::Mat previewBgr;
-    if (m_lastFrame.channels() == 3)
-        previewBgr = m_lastFrame.clone();
-    else
-        cv::cvtColor(m_lastFrame, previewBgr, cv::COLOR_GRAY2BGR);
-
-    const double pf = static_cast<double>(kPreviewWidth) / fullW;
-    cv::resize(previewBgr, previewBgr, cv::Size(), pf, pf, cv::INTER_AREA);
-    if (found && !corners.empty()) {
-        // corners are in det coords → full-res → preview coords.
-        std::vector<cv::Point2f> pc;
-        pc.reserve(corners.size());
-        const double k = pf / ds;
-        for (const auto& p : corners)
-            pc.emplace_back(p.x * k, p.y * k);
-        cv::drawChessboardCorners(previewBgr, board, pc, found);
-    }
-    const QImage qi = utils::ImageUtils::matToQImage(previewBgr);
-    if (!qi.isNull())
-        m_preview->setPixmap(QPixmap::fromImage(qi));
-
-    // ── Labels ──
-    if (found) {
+    if (res.detected) {
         const bool full = (m_cornersFound == m_cornersExpected);
         m_lblDetect->setText(tr("✓ found %1/%2 corners (%3)")
             .arg(m_cornersFound).arg(m_cornersExpected).arg(m_method));
@@ -303,7 +321,7 @@ void CalibrationMonitorDialog::refreshDetection()
         .arg(sharpOk ? tr("sharp") : tr("BLURRY")));
     m_lblSharp->setStyleSheet(styleFor(sharpOk ? "good" : "warn"));
 
-    if (found) {
+    if (res.detected) {
         const bool covOk = m_coveragePct >= 15.0 && m_coveragePct <= 90.0;
         m_lblCoverage->setText(tr("%1% of frame · %2")
             .arg(m_coveragePct, 0, 'f', 0).arg(m_quadrant));
@@ -320,6 +338,9 @@ void CalibrationMonitorDialog::refreshDetection()
     m_lblBright->setText(tr("mean %1 — %2").arg(m_brightness, 0, 'f', 0).arg(brightNote));
     m_lblBright->setStyleSheet(styleFor(brightKind));
 
+    const int cols = m_config.calibBoardCols();
+    const int rows = m_config.calibBoardRows();
+    const float sqmm = m_config.calibSquareSize();
     m_lblParams->setText(tr("%1 × %2 inner corners · %3 mm squares · %4 expected")
         .arg(cols).arg(rows).arg(sqmm, 0, 'f', 1).arg(m_cornersExpected));
 
