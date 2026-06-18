@@ -34,6 +34,12 @@ constexpr double kAspectTolerance = 1.6;
 // search starts from bestScore = -1.0).
 constexpr double kMinAcceptableScore = 0.10;
 
+// Minimum fraction of valid (non-zero) pixels required in a depth frame
+// before trusting plane segmentation on it — below this, specular
+// reflections/glare have likely wiped out too much of the signal (see
+// locateViaDepth()).
+constexpr double kMinDepthFillRatio = 0.20;
+
 } // namespace
 
 cv::Mat BoardLocator::computeEdgeMap(const cv::Mat& colorBgr)
@@ -99,6 +105,23 @@ bool BoardLocator::locateViaDepth(const cv::Mat& depth16u,
 {
     if (depth16u.empty() || depth16u.type() != CV_16UC1) {
         reason = "no depth frame available";
+        return false;
+    }
+
+    // Bail out early if most of the depth frame is invalid (0) — typically
+    // caused by specular reflections off a glossy/shiny board surface or
+    // direct glare confusing the D405's IR stereo matching. Running the
+    // plane-segmentation below on mostly-noise depth produces a tiny,
+    // wrong-shaped "plane" (e.g. just the glare spot) rather than the real
+    // board, and also poisons the median-distance estimate used elsewhere
+    // (StatsPanel "Distance", Auto-Align's pinhole px/mm). Fail clearly
+    // instead of silently locating garbage.
+    const double fillRatio = static_cast<double>(cv::countNonZero(depth16u))
+                              / (static_cast<double>(depth16u.rows) * depth16u.cols);
+    if (fillRatio < kMinDepthFillRatio) {
+        reason = "depth data too sparse (" + std::to_string(static_cast<int>(fillRatio * 100)) +
+                  "% valid) — likely glare/reflection off the board surface; reduce lighting "
+                  "glare or try the contour method";
         return false;
     }
 

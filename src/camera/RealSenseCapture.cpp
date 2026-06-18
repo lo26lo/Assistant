@@ -778,6 +778,20 @@ void RealSenseCapture::captureLoop()
                                             "your firmware/SDK build may not support on-chip "
                                             "calibration on this D405 (factory calibration is "
                                             "still valid).");
+                        } else if (lastErr.find("Not enough") != std::string::npos) {
+                            // librealsense's own message is e.g. "Not enough depth
+                            // pixels! (Fill_Factor_LOW)" — too few valid stereo
+                            // samples during the 256x144 calibration capture.
+                            // Same root cause as low Depth fill% elsewhere: glare/
+                            // reflection or the target outside the D405's short
+                            // working range.
+                            hint += QString("\n\nNot enough valid depth pixels during "
+                                            "calibration (low fill factor) — usually "
+                                            "glare/reflection off a glossy board or the "
+                                            "target being outside the D405's short working "
+                                            "range (~7-50cm). Reduce glare, angle the light, "
+                                            "or move to a matte/textured surface and retry "
+                                            "(factory calibration is still valid meanwhile).");
                         }
                         emit onChipCalibrationFinished(false, 0.f, hint);
                     }

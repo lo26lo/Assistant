@@ -176,6 +176,10 @@ void StatsPanel::appendEventRow(const QString& level, const QString& message,
 
     auto* msgItem = new QTableWidgetItem(message);
     msgItem->setForeground(color);
+    // The Message column is narrow relative to e.g. RealSense calibration
+    // error strings — Qt elides the cell text, so stash the full text as a
+    // tooltip rather than leaving it unrecoverable short of the log file.
+    msgItem->setToolTip(message);
     m_defectTable->setItem(row, 2, msgItem);
 
     m_defectTable->scrollToBottom();

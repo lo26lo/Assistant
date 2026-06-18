@@ -15,6 +15,8 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 40 | 2026-06-18 | StatsPanel.cpp — Inspection Progress | 🔴 OUVERT | [`StatsPanel::setTotalComponents()` jamais appelé — le panneau Inspection Progress affiche toujours "No inspection data" / 0%](#erreur-40--settotalcomponents-jamais-appele--inspection-progress-toujours-a-zero) |
+| 39 | 2026-06-18 | BoardLocator.cpp / Application.cpp / RealSenseCapture.cpp / StatsPanel.cpp — D405 glare | ✅ RÉSOLU | [Distance/Auto-Align/self-cal faux sous glare D405 — depth fill bas non détecté](#erreur-39--distanceauto-alignself-cal-faux-sous-glare-d405) |
 | 38 | 2026-06-18 | Application.cpp / BoardLocator — Auto-Align D405 | ✅ RÉSOLU | [Auto-Align échoue sur D405 : scale px/mm périmé (calibration checkerboard à une autre distance/caméra) rejette le bon contour](#erreur-38--auto-align-echoue-sur-d405-scale-pxmm-perime) |
 | 37 | 2026-06-18 | Application.cpp / build Jetson | ✅ RÉSOLU | [Build Jetson échoue : variable locale `tr` masque `QObject::tr()` dans `autoAlignBoard()`](#erreur-37--variable-locale-tr-masque-qobjecttr-dans-autoalignboard) |
 | 36 | 2026-06-18 | BoardLocator / Application — Auto-Align | ✅ RÉSOLU | [Audit Auto-Align : projet périmé dans le callback, pas de seuil de score, pas de filtre de couche, race avec alignement manuel](#erreur-36--audit-auto-align-projet-perime-pas-de-seuil-pas-de-filtre-de-couche-race) |
@@ -1369,6 +1371,59 @@ Renommé les deux variables en `cornerTL`/`cornerTR` dans `autoAlignBoard()`.
 
 ### Leçon
 Ne jamais nommer une variable locale `tr` (ou tout identifiant Qt courant comme `tr`/`qDebug`/etc.) dans une méthode `QObject`, même si elle semble hors de portée du prochain appel `tr(...)` — un refactor ultérieur peut facilement élargir la portée sans qu'on s'en rende compte. Préférer un nom descriptif (`cornerTL`, `topRight`, …) systématiquement.
+
+## ERREUR 40 — `setTotalComponents()` jamais appelé — Inspection Progress toujours à zéro
+
+**Date :** 2026-06-18
+**Composant :** `src/gui/StatsPanel.{h,cpp}`
+**Statut :** 🔴 OUVERT (constaté en creusant un rapport utilisateur, pas encore corrigé)
+
+### Symptôme
+Sur un screenshot utilisateur (D405, carte visible, après reboot de l'app), le panneau « Inspection Progress » affiche « No inspection data » et 0% alors que la carte semble correctement chargée (overlay partiellement visible). `Placed`/`Missing`/`Defects`/`Pending` sont tous à 0.
+
+### Cause
+`StatsPanel::updateSummaryLabel()` affiche « No inspection data » dès que `m_total == 0` (`StatsPanel.cpp:336`). `m_total` n'est modifié que par `StatsPanel::setTotalComponents(int total)` (`StatsPanel.cpp:214`) — **grep sur tout `src/` : cette méthode n'est appelée nulle part**, y compris dans `Application.cpp` au chargement d'un iBOM (`loadIBomFile()`) ou au démarrage d'inspection (`startInspection()`). Le panneau affichera donc **toujours** « No inspection data » / 0%, qu'un iBOM soit chargé ou non — l'indicateur ne reflète rien.
+
+### Impact sur le diagnostic en cours
+Repéré en tentant de déterminer, à partir d'un screenshot, si un iBOM était chargé au moment où l'utilisateur a signalé qu'« Auto-Align ne fonctionne pas » après reboot. Ce panneau ne peut **pas** servir de signal pour ça tant qu'il n'est pas câblé — toujours à 0 par construction actuelle, qu'on ait un projet chargé ou pas.
+
+### Solution (pas encore appliquée)
+Appeler `m_mainWindow->statsPanel()->setTotalComponents(...)` après chargement d'un iBOM réussi (`loadIBomFile()`, count = `m_ibomProject->components.size()`) et le maintenir à jour quand `m_placedRefs` change (placement/retrait de composants). Périmètre exact (quels événements doivent incrémenter `Placed`/`Missing`/`Defects`) à clarifier avant d'implémenter — pas fait dans cette session pour rester focalisé sur le rapport glare/Auto-Align en cours.
+
+### Leçon
+Une méthode publique définie mais jamais appelée dans un GUI Qt ne provoque ni erreur de compilation ni warning évident — seul un grep cross-fichier (`setTotalComponents(` dans tout `src/`) l'a révélée. À surveiller : tout nouveau setter ajouté à un panneau d'affichage doit être immédiatement câblé à un site d'appel, sinon il devient un panneau mort silencieux.
+
+---
+
+## ERREUR 39 — Distance/Auto-Align/self-cal faux sous glare D405
+
+**Date :** 2026-06-18
+**Composant :** `src/overlay/BoardLocator.cpp` (`locateViaDepth()`), `src/app/Application.cpp` (handler `depthFrameReady`), `src/camera/RealSenseCapture.cpp` (self-cal on-chip), `src/gui/StatsPanel.cpp` (Event Log)
+**Statut :** ✅ RÉSOLU (code) — ⚠️ non testé sur le matériel réel à ce stade
+
+### Symptôme
+Deux rapports utilisateur distincts, même session :
+1. Screenshot D405 avec un reflet/éblouissement visible sur la carte (carte glossy) : panneau Statistics affiche **« Distance: 104.0 mm »** alors que la distance réelle mesurée par l'utilisateur est **~70 mm**, et **« Depth fill: 11% »**. Auto-Align échoue : `BoardLocator::locateViaDepth()` trouve un candidat de **4702 px²** contre une aire de carte attendue de **123295 px²** (~26× trop petit).
+2. Après reboot de l'app : self-calibration on-chip D405 échoue ses 3 tentatives avec le message **« Not enough ... »** (tronqué dans la colonne Message de l'Event Log), puis « RealSense streaming pipeline restored after calibration » (retour au pipeline normal, calibration usine conservée).
+
+### Cause
+Reflet spéculaire / éblouissement sur une carte PCB glossy confond l'appariement stéréo IR du D405 → une grande partie de la frame de profondeur devient invalide (pixels à 0). Conséquences en cascade, toutes dérivées de cette même frame corrompue :
+- La médiane sur la ROI centrale (`Application.cpp`, handler `depthFrameReady`) mélange échantillons valides et bords de zones invalides → distance fausse mais plausible (104mm au lieu de 70mm).
+- `BoardLocator::locateViaDepth()` segmente le plan le plus proche à partir du masque profondeur → avec 11% de pixels valides, le contour obtenu est minuscule/sans rapport avec la carte réelle (4702 px² vs 123295 attendus) plutôt que de représenter la vraie carte.
+- Recherche web (confirmée) : le firmware D4xx lui-même applique un garde-fou identique pour sa propre self-calibration on-chip — message officiel `"Not enough depth pixels! (Fill_Factor_LOW). Please retry in different lighting conditions"` ([GitHub issues IntelRealSense/librealsense](https://github.com/IntelRealSense/librealsense/issues/10822)). C'est exactement le même phénomène (fill factor bas) qui fait échouer la self-cal ET corrompt la distance/Auto-Align — pas une coïncidence, une seule cause physique (glare) avec trois symptômes différents.
+
+### Solution appliquée ✅
+1. **`BoardLocator.cpp`** : nouvelle constante `kMinDepthFillRatio = 0.20` (espace de noms anonyme, à côté de `kMinAcceptableScore`). `locateViaDepth()` calcule le ratio de pixels non-nuls sur toute la frame **avant** toute segmentation et échoue explicitement (`reason = "depth data too sparse (X% valid) — likely glare/reflection off the board surface; reduce lighting glare or try the contour method"`) si sous le seuil — au lieu de segmenter un plan minuscule/faux et de laisser `validateSize()` le rejeter (ou pire, l'accepter) sans explication claire.
+2. **`Application.cpp`** (handler `depthFrameReady`) : même garde, calculée une fois et réutilisée pour `sp->setFillRate(...)` puis comparée à `kMinDepthFillRatio` (dupliqué localement, même valeur 0.20) — sous le seuil, `sp->setDistance(0.0)` (affiche « — », sentinelle déjà gérée) et **return** avant le calcul de la médiane/`m_lastDepthDistanceMm`/scale px/mm, qui ne seraient plus mis à jour avec une valeur dérivée d'une frame majoritairement invalide.
+3. **`RealSenseCapture.cpp`** (bloc self-cal on-chip) : nouveau `else if (lastErr.find("Not enough") != std::string::npos)` dans la construction du message d'aide après les 3 tentatives échouées — distinct du cas déjà géré `"HW not ready"` ([ERREUR #30](#erreur-30--self-calibration-d405-hw-not-ready)) — explique le lien avec le glare/reflet ou la distance de travail hors plage D405 (~7-50cm) et suggère de réduire le glare ou changer de surface.
+4. **`StatsPanel.cpp`** (`appendEventRow()`) : `msgItem->setToolTip(message)` — la colonne Message de l'Event Log tronque visuellement les messages longs (c'est ce « Not enough … » tronqué qui a motivé ce fix) ; le texte complet était auparavant seulement récupérable via le fichier log, pas dans l'UI.
+
+### Leçon
+Un taux de remplissage (« fill ratio ») bas sur une frame de profondeur doit être traité comme **donnée invalide à rejeter explicitement**, pas comme une mesure bruitée à exploiter quand même — toute grandeur dérivée (distance médiane, segmentation de plan, scale px/mm sténopé) devient alors fausse-mais-précise-en-apparence, ce qui est strictement pire qu'un échec clair (un nombre qui a l'air correct n'invite pas à la méfiance). Le seuil choisi (20%) n'est pas arbitraire : le firmware D4xx applique le même principe en interne pour sa propre self-calibration, ce qui confirme la pertinence de la garde côté application plutôt que de compter uniquement sur le firmware pour s'en apercevoir trop tard (et seulement pour la self-cal, pas pour Auto-Align ni l'affichage Distance).
+
+**À valider au prochain build Jetson** : sous glare/reflet (Depth fill bas), la Distance doit afficher « — » plutôt qu'une valeur fausse, Auto-Align doit échouer proprement avec le message glare au lieu de proposer un mauvais placement, et le message complet d'un échec self-cal doit être lisible au survol dans l'Event Log.
+
+---
 
 ## ERREUR 38 — Auto-Align échoue sur D405 : scale px/mm périmé
 

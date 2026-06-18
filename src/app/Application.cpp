@@ -1370,9 +1370,20 @@ void Application::wireCameraSignals()
 
             // Depth fill rate over the whole frame (valid = non-zero).
             const cv::Mat& d = *depth;
-            if (auto* sp = m_mainWindow->statsPanel()) {
-                const double area = static_cast<double>(d.rows) * d.cols;
-                sp->setFillRate(area > 0 ? cv::countNonZero(d) / area : -1.0);
+            const double area = static_cast<double>(d.rows) * d.cols;
+            const double fillRatio = area > 0 ? cv::countNonZero(d) / area : -1.0;
+            if (auto* sp = m_mainWindow->statsPanel()) sp->setFillRate(fillRatio);
+
+            // Below this, specular reflections/glare on the board (or pointing
+            // at empty space) have likely corrupted too much of the frame to
+            // trust a median distance from it — mirrors BoardLocator's
+            // kMinDepthFillRatio gate. Bail out instead of showing a
+            // precise-looking but wrong "Distance" (e.g. 104mm when the real
+            // distance is ~70mm) and feeding a bogus px/mm scale downstream.
+            constexpr double kMinDepthFillRatio = 0.20;
+            if (fillRatio < kMinDepthFillRatio) {
+                if (auto* sp = m_mainWindow->statsPanel()) sp->setDistance(0.0);
+                return;
             }
 
             // Median depth over a central ROI (20%), ignoring 0 = invalid.
