@@ -74,9 +74,24 @@ bool BoardLocator::validateSize(const cv::RotatedRect& rect,
 
     if (expectedAreaPx > 0.0) {
         const double ratio = area / expectedAreaPx;
-        if (ratio < 1.0 / kAreaTolerance || ratio > kAreaTolerance) {
-            reason = "candidate quad area (" + std::to_string(static_cast<int>(area)) +
-                      " px^2) doesn't match the board outline at the known scale (" +
+        if (ratio > kAreaTolerance) {
+            // Too BIG — the usual cause on a RealSense depth plane is the board
+            // lying flush on a coplanar surface (table/mat): the ±band grabs the
+            // board plus a margin of background at the same distance and fits one
+            // rectangle around the merged blob. Loosening the tolerance would just
+            // accept that oversized quad and misplace the overlay — the real fix is
+            // to break the coplanarity (lift the board) or use manual alignment.
+            reason = "detected region (" + std::to_string(static_cast<int>(area)) +
+                      " px^2) is larger than the board at the known scale (" +
+                      std::to_string(static_cast<int>(expectedAreaPx)) +
+                      " px^2) — it is probably merged with a coplanar background. "
+                      "Lift the board off the table/surface so it stands out in depth, "
+                      "or use manual alignment";
+            return false;
+        }
+        if (ratio < 1.0 / kAreaTolerance) {
+            reason = "detected region (" + std::to_string(static_cast<int>(area)) +
+                      " px^2) is smaller than the board at the known scale (" +
                       std::to_string(static_cast<int>(expectedAreaPx)) +
                       " px^2) — make sure the whole board is in frame";
             return false;

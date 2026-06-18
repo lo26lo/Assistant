@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 41 | 2026-06-18 | BoardLocator.cpp — Auto-Align depth | 🟡 CONTOURNÉ | [Auto-Align D405 intermittent : carte posée à plat sur une surface coplanaire → le plan de profondeur englobe carte + table (2.5×), rejet par `validateSize()`](#erreur-41--auto-align-d405-carte-coplanaire-avec-la-table) |
 | 40 | 2026-06-18 | StatsPanel.cpp — Inspection Progress | 🔴 OUVERT | [`StatsPanel::setTotalComponents()` jamais appelé — le panneau Inspection Progress affiche toujours "No inspection data" / 0%](#erreur-40--settotalcomponents-jamais-appele--inspection-progress-toujours-a-zero) |
 | 39 | 2026-06-18 | BoardLocator.cpp / Application.cpp / RealSenseCapture.cpp / StatsPanel.cpp — D405 glare | ✅ RÉSOLU | [Distance/Auto-Align/self-cal faux sous glare D405 — depth fill bas non détecté](#erreur-39--distanceauto-alignself-cal-faux-sous-glare-d405) |
 | 38 | 2026-06-18 | Application.cpp / BoardLocator — Auto-Align D405 | ✅ RÉSOLU | [Auto-Align échoue sur D405 : scale px/mm périmé (calibration checkerboard à une autre distance/caméra) rejette le bon contour](#erreur-38--auto-align-echoue-sur-d405-scale-pxmm-perime) |
@@ -1371,6 +1372,44 @@ Renommé les deux variables en `cornerTL`/`cornerTR` dans `autoAlignBoard()`.
 
 ### Leçon
 Ne jamais nommer une variable locale `tr` (ou tout identifiant Qt courant comme `tr`/`qDebug`/etc.) dans une méthode `QObject`, même si elle semble hors de portée du prochain appel `tr(...)` — un refactor ultérieur peut facilement élargir la portée sans qu'on s'en rende compte. Préférer un nom descriptif (`cornerTL`, `topRight`, …) systématiquement.
+
+## ERREUR 41 — Auto-Align D405 : carte coplanaire avec la table
+
+**Date :** 2026-06-18
+**Composant :** `src/overlay/BoardLocator.cpp` (`locateViaDepth()` + `validateSize()`)
+**Statut :** 🟡 CONTOURNÉ (message corrigé + workaround physique ; pas de séparation logicielle carte/fond coplanaire à ce stade)
+
+### Symptôme
+Auto-Align D405 **intermittent** sur la même scène (log utilisateur, distance 72mm, scale 6.1 px/mm, depth fill 87%) :
+```
+21:04:04 BoardLocator: Board located via depth, edge-agreement score 0,26
+21:04:04 Auto-Align succeeded via depth (score 0.26)          ← SUCCÈS
+21:04:32 candidate quad area (356855 px^2) doesn't match the board outline
+         at the known scale (142237 px^2)                     ← ÉCHEC
+21:05:03 candidate quad area (355897 px^2) ... (142237 px^2)  ← ÉCHEC
+```
+Ratio aire = 356855 / 142237 = **2.509×**, juste au-dessus de `kAreaTolerance = 2.5` (≈1.58× en linéaire). La même scène réussit puis échoue sans réalignement.
+
+### Cause
+La carte est posée **à plat sur la table en bois** → carte et table autour sont à la **même distance** (coplanaires). `locateViaDepth()` prend la médiane de profondeur sur la ROI centrale (= surface carte, 72mm) puis masque tous les pixels à ±`kDepthBandMm` (15mm) de cette référence — ce qui inclut la carte **plus une marge de table tout autour** au même plan. Le `minAreaRect` du plus grand contour englobe donc carte+table → ~1.58× trop grand en linéaire. Comme on est pile sur le seuil (2.509 vs 2.5), le résultat **dépend de la quantité de table coplanaire visible à l'instant t** (angle/cadrage de la carte) : quand la carte ressort assez (moins de table dans le plan), l'aire matche → succès (21:04:04) ; un instant plus tard, plus de table balayée dans le plan → 2.5× → rejet. C'est une **limite fondamentale** de la segmentation par plan de profondeur quand la carte est à fleur d'une surface : aucune marche de profondeur ne les sépare.
+
+### Pourquoi ne PAS juste élargir `kAreaTolerance`
+Accepter le quad de 356855 px² (carte+table) ferait mapper les coins de la **carte** sur les coins de la **table** → overlay trop grand et mal placé (exactement le symptôme « overlay en haut à droite / mal placé » des sessions précédentes). Le garde-fou taille fait son travail ici ; le desserrer réintroduirait le mauvais placement.
+
+### Solution appliquée (partielle) ✅
+- `validateSize()` : message **directionnel** au lieu du « make sure the whole board is in frame » trompeur (qui suggère « trop petit / hors cadre » alors qu'ici c'est « trop grand »). Si `ratio > kAreaTolerance` → « detected region … is larger than the board … probably merged with a coplanar background. Lift the board off the table/surface so it stands out in depth, or use manual alignment ». Si `ratio < 1/kAreaTolerance` → message « smaller … make sure the whole board is in frame ».
+
+### Workaround utilisateur (immédiat, fiable)
+- **Surélever la carte** de la table (la poser sur une petite boîte/support) → elle ressort en profondeur, le plan ±15mm n'attrape plus la table, l'aire matche → Auto-Align fiable. C'est le mode d'emploi attendu de la méthode depth.
+- Ou **alignement manuel 4-points** — confirmé fonctionnel dans le même log (21:06, « Manual homography computed successfully, error=0.000px »).
+
+### Piste de fix logiciel (non implémentée — à valider avec l'utilisateur avant)
+Pour gérer le cas « carte à plat sur surface coplanaire » sans intervention physique, il faudrait **raffiner le plan de profondeur avec un signal couleur/arête** : à l'intérieur du masque de plan, isoler la sous-région à forte densité d'arêtes (PCB = traces/silkscreen/composants, très texturé) du fond relativement uniforme (table), puis fitter le `minAreaRect` sur cette sous-région seulement. Risqué à coder à l'aveugle (pas de matériel ici) — peut régresser le cas qui marche (carte surélevée). Reporté tant que l'utilisateur ne le demande pas explicitement.
+
+### Leçon
+La segmentation par plan de profondeur suppose que l'objet est le plan le plus proche **distinct** — un objet à fleur d'une surface plus grande viole cette hypothèse et la profondeur seule ne peut pas les séparer. Quand un garde-fou taille tape pile sur le seuil (2.51 vs 2.5), le comportement devient intermittent et dépendant du cadrage : signe qu'il faut un signal supplémentaire (couleur/arête) ou une contrainte de scène (surélever), pas un simple ajustement de seuil.
+
+---
 
 ## ERREUR 40 — `setTotalComponents()` jamais appelé — Inspection Progress toujours à zéro
 
