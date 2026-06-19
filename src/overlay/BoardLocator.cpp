@@ -34,6 +34,15 @@ constexpr double kAspectTolerance = 1.6;
 // search starts from bestScore = -1.0).
 constexpr double kMinAcceptableScore = 0.10;
 
+// Above this orientation score, the depth result is trusted outright and the
+// (slower) contour method is skipped. Below it, BOTH methods are run and the
+// higher-scoring one wins — this is what lets a high-contrast background
+// (e.g. a white sheet under a green board) actually pay off: the depth method
+// is colour-blind and, on a board lying coplanar with the table, merges board
+// + surface into one oversized/offset quad that scores poorly; the contour
+// method keys off luminance edges and can then beat it. See ERREUR #41/#44.
+constexpr double kStrongScore = 0.30;
+
 // Minimum fraction of valid (non-zero) pixels required in a depth frame
 // before trusting plane segmentation on it — below this, specular
 // reflections/glare have likely wiped out too much of the signal (see
@@ -396,26 +405,43 @@ BoardLocateResult BoardLocator::locate(const cv::Mat& colorBgr,
         expectedAreaPx = (boardWMm * expectedPixelsPerMm) * (boardHMm * expectedPixelsPerMm);
     }
 
-    cv::RotatedRect rect;
-    std::string reason;
-    std::string method;
+    // Try depth first. Disambiguate it to get a real orientation score.
+    cv::RotatedRect depthRect;
+    std::string depthReason;
+    const bool depthOk =
+        locateViaDepth(depth16u, expectedAreaPx, expectedAspect, depthRect, depthReason);
+    if (depthOk)
+        result = disambiguate(depthRect, colorBgr, project, "depth", activeLayer);
 
-    if (locateViaDepth(depth16u, expectedAreaPx, expectedAspect, rect, reason)) {
-        method = "depth";
-    } else {
-        const std::string depthReason = reason;
-        if (locateViaContour(colorBgr, expectedAreaPx, expectedAspect, rect, reason)) {
-            method = "contour";
-        } else {
-            result.message = "Depth: " + depthReason + ". Contour: " + reason;
-            spdlog::warn("BoardLocator: {}", result.message);
-            return result;
+    // If depth is unavailable or only weakly agrees with the layout, also run
+    // the contour method and keep whichever scores higher. The contour method
+    // exploits luminance contrast (a white sheet under the board), which the
+    // depth method cannot see — so it can rescue a coplanar-board case where
+    // depth merged the board with the surface (see kStrongScore / ERREUR #44).
+    if (!result.found || result.score < kStrongScore) {
+        cv::RotatedRect contourRect;
+        std::string contourReason;
+        const bool contourOk =
+            locateViaContour(colorBgr, expectedAreaPx, expectedAspect, contourRect, contourReason);
+        if (contourOk) {
+            BoardLocateResult contourRes =
+                disambiguate(contourRect, colorBgr, project, "contour", activeLayer);
+            if (contourRes.found && contourRes.score > result.score)
+                result = contourRes;
+        }
+        // Nothing usable from either path — compose a combined diagnostic.
+        if (!result.found) {
+            const std::string dr = depthOk ? "orientation score too low" : depthReason;
+            const std::string cr = contourOk ? "orientation score too low" : contourReason;
+            result.message = "Depth: " + dr + ". Contour: " + cr;
         }
     }
 
-    auto disambiguated = disambiguate(rect, colorBgr, project, method, activeLayer);
-    spdlog::info("BoardLocator: {}", disambiguated.message);
-    return disambiguated;
+    if (result.found)
+        spdlog::info("BoardLocator: {}", result.message);
+    else
+        spdlog::warn("BoardLocator: {}", result.message);
+    return result;
 }
 
 } // namespace ibom::overlay

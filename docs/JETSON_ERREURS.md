@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 44 | 2026-06-19 | BoardLocator.cpp — Auto-Align | ✅ RÉSOLU | [Auto-Align via profondeur "réussit" à score faible (0.13) sur carte coplanaire → overlay décalé ; la feuille blanche sous la carte ne servait à rien car le contour 2D n'était jamais essayé](#erreur-44--auto-align-depth-faible-score-contour-jamais-essaye) |
 | 43 | 2026-06-19 | Application — sortie process | 🔴 OUVERT | [Segmentation fault au moment de quitter l'app (après "Application exiting with code 0") — non investigué](#erreur-43--segfault-a-la-sortie-de-lapplication) |
 | 42 | 2026-06-19 | Application.cpp / BoardMinimap | ✅ RÉSOLU | [Clic minimap déplaçait tout l'overlay sur D405 (anchor 1-point pensé pour microscope FOV étroit) au lieu de surligner le composant](#erreur-42--clic-minimap-deplace-loverlay-sur-realsense-au-lieu-de-highlighter) |
 | 41 | 2026-06-18 | BoardLocator.cpp — Auto-Align depth | 🟡 CONTOURNÉ | [Auto-Align D405 intermittent : carte posée à plat sur une surface coplanaire → le plan de profondeur englobe carte + table (2.5×), rejet par `validateSize()`](#erreur-41--auto-align-d405-carte-coplanaire-avec-la-table) |
@@ -1374,6 +1375,32 @@ Renommé les deux variables en `cornerTL`/`cornerTR` dans `autoAlignBoard()`.
 
 ### Leçon
 Ne jamais nommer une variable locale `tr` (ou tout identifiant Qt courant comme `tr`/`qDebug`/etc.) dans une méthode `QObject`, même si elle semble hors de portée du prochain appel `tr(...)` — un refactor ultérieur peut facilement élargir la portée sans qu'on s'en rende compte. Préférer un nom descriptif (`cornerTL`, `topRight`, …) systématiquement.
+
+## ERREUR 44 — Auto-Align depth faible score, contour jamais essayé
+
+**Date** : 2026-06-19
+**Composant** : `BoardLocator::locate()`
+**Statut** : ✅ RÉSOLU
+
+### Symptôme
+Sur D405, carte posée à plat avec une **feuille blanche** glissée dessous (pour aider). Auto-Align "réussit" mais l'overlay déborde nettement sur la gauche (hors carte). Log : `BoardLocator: Board located via depth, edge-agreement score 0,13` puis `Auto-Align succeeded via depth (score 0.13)`. Score 0.13 = juste au-dessus de `kMinAcceptableScore = 0.10` → accepté mais placement médiocre. L'utilisateur : « mais j'ai mis une feuille blanche dessous » — et pourtant ça ne change rien.
+
+### Cause
+Deux problèmes combinés :
+1. **La feuille blanche n'aide que le contour 2D**, pas la profondeur. `locateViaDepth()` segmente un plan par distance — totalement aveugle à la couleur/luminance. Une feuille blanche **coplanaire** avec la carte (même hauteur) ne fait aucune différence en profondeur : le plan ±15mm englobe toujours carte + feuille.
+2. **`locate()` essayait la profondeur en premier et, dès qu'elle réussissait, ne tentait JAMAIS le contour** (`if (depth) … else { contour }`). Donc même quand la profondeur produit un quad médiocre (score 0.13), le contour 2D — qui lui exploiterait le contraste vert-sur-blanc de la feuille — n'était pas exécuté. La feuille blanche était donc structurellement inutilisable.
+
+### Solution appliquée ✅
+`locate()` réécrit en **course des deux méthodes quand le score profondeur est faible** :
+- Profondeur essayée + désambiguïsée → score réel.
+- Si pas de résultat **ou** score < `kStrongScore = 0.30` : on lance **aussi** le contour, on le désambiguïse, et on **garde le meilleur score** des deux (le contour ne remplace que s'il est strictement supérieur et passe `kMinAcceptableScore`).
+- Au-dessus de `kStrongScore`, la profondeur est jugée fiable → contour sauté (gain de temps).
+- Message d'échec combiné (Depth + Contour) si rien d'exploitable.
+
+Ainsi la feuille blanche paie enfin : sur carte coplanaire, la profondeur fusionne carte+surface (score bas), mais le contour détecte les arêtes nettes carte verte/feuille blanche et gagne.
+
+### Leçon
+Quand on offre plusieurs stratégies de détection avec des forces complémentaires (profondeur = robuste au contraste mais aveugle à la couplanarité ; contour = sensible au contraste mais exploite la couleur), ne pas faire un simple fallback « A sinon B » : un succès **faible** de A masque B. Préférer une course « si A est faible, essayer B et garder le meilleur ». Et bien expliquer à l'utilisateur quel levier agit sur quelle méthode (la feuille blanche → contour, la surélévation → profondeur) — sinon il optimise pour la mauvaise.
 
 ## ERREUR 43 — Segfault à la sortie de l'application
 
