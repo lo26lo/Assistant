@@ -61,6 +61,7 @@ signals:
     void recalibrateRequested();
     void generateCheckerboardRequested();
     void openCalibrationPdfRequested();
+    void alignmentWizardRequested();
     void alignHomographyRequested();
     void alignOnComponentsRequested();
     void alignMultiRequested();
@@ -102,6 +103,7 @@ private:
     QPushButton* m_btnGenPattern  = nullptr;  // microscope: generate/print board
     QPushButton* m_btnOpenPdf      = nullptr;  // microscope: open patterns PDF
     QPushButton* m_btnRealSense    = nullptr;  // RealSense: sensor controls
+    QPushButton* m_btnAlignWizard  = nullptr;
     QPushButton* m_btnAlign        = nullptr;
     QPushButton* m_btnAlignComps   = nullptr;
     QPushButton* m_btnAlignMulti   = nullptr;

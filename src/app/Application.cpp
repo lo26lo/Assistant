@@ -7,6 +7,7 @@
 #include "gui/StatsPanel.h"
 #include "gui/BomPanel.h"
 #include "gui/InspectionWizard.h"
+#include "gui/AlignmentWizard.h"
 #include "gui/InspectionPanel.h"
 #include "camera/ICameraSource.h"
 #include "camera/CameraCapture.h"
@@ -680,6 +681,13 @@ void Application::startComponentAnchor()
                  m_anchorRef, m_anchorPcb.x, m_anchorPcb.y);
 }
 
+void Application::reportAlignmentResult(const QString& summary)
+{
+    m_mainWindow->updateStatusMessage(summary);
+    if (m_alignWizard && m_alignWizard->isVisible())
+        m_alignWizard->reportResult(summary);
+}
+
 void Application::applyMultiAlignment()
 {
     // Stop collecting regardless of outcome.
@@ -762,7 +770,7 @@ void Application::applyMultiAlignment()
         QMetaObject::invokeMethod(m_trackingWorker, "resetReference", Qt::QueuedConnection);
 
     const char* model = (n >= 4) ? "homography" : (n == 3) ? "affine" : "similarity";
-    m_mainWindow->updateStatusMessage(
+    reportAlignmentResult(
         tr("Multi-align set from %1 components (%2) — scale: %3 px/mm")
         .arg(n).arg(model).arg(m_currentPixelsPerMm, 0, 'f', 1));
     spdlog::info("Multi-align OK: {} components, {} model, scale={:.2f} px/mm",
@@ -870,7 +878,7 @@ void Application::autoAlignBoard()
         if (m_trackingWorker)
             QMetaObject::invokeMethod(m_trackingWorker, "resetReference", Qt::QueuedConnection);
 
-        m_mainWindow->updateStatusMessage(
+        reportAlignmentResult(
             tr("Auto-Align: aligned via %1 (score %2)")
                 .arg(QString::fromStdString(result.method))
                 .arg(result.score, 0, 'f', 2));
@@ -1982,6 +1990,34 @@ void Application::connectControlSignals()
         });
     }
 
+    // ── Alignment Assistant (guided wizard) ─────────────────────
+    connect(m_mainWindow->controlPanel(), &gui::ControlPanel::alignmentWizardRequested,
+            this, [this]() {
+        if (!m_alignWizard) {
+            m_alignWizard = new gui::AlignmentWizard(m_mainWindow.get());
+            // The wizard only orchestrates: forward its "start" to the existing
+            // alignment code paths via the same ControlPanel signals the manual
+            // buttons use (signal→signal). The interactive clicking is unchanged.
+            connect(m_alignWizard, &gui::AlignmentWizard::startRequested,
+                    this, [this](int method) {
+                auto* cp = m_mainWindow->controlPanel();
+                switch (method) {
+                case gui::AlignmentWizard::FourCorners:    emit cp->alignHomographyRequested();   break;
+                case gui::AlignmentWizard::TwoComponents:  emit cp->alignOnComponentsRequested(); break;
+                case gui::AlignmentWizard::MultiComponent: emit cp->alignMultiRequested();        break;
+                case gui::AlignmentWizard::AutoAlign:      emit cp->autoAlignRequested();         break;
+                default: break;
+                }
+            });
+        }
+        m_alignWizard->setBackendIsRealSense(
+            m_config->cameraBackend() == CameraBackend::RealSense);
+        m_alignWizard->restart();
+        m_alignWizard->show();
+        m_alignWizard->raise();
+        m_alignWizard->activateWindow();
+    });
+
     // ── Manual Homography — point picking ───────────────────────
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::alignHomographyRequested,
             this, [this]() {
@@ -2253,7 +2289,7 @@ void Application::connectControlSignals()
 
                     spdlog::info("2-comp alignment OK: scale={:.2f} px/unit, rot={:.1f}°",
                                  scale, rot * 180.0 / CV_PI);
-                    m_mainWindow->updateStatusMessage(
+                    reportAlignmentResult(
                         tr("Alignment set from %1 + %2 — scale: %3 px/mm")
                         .arg(QString::fromStdString(m_alignRef1))
                         .arg(QString::fromStdString(m_alignRef2))
@@ -2301,8 +2337,8 @@ void Application::connectControlSignals()
                 m_overlayRenderer->setHomography(*m_homography);
                 spdlog::info("Manual homography computed successfully (error={:.3f}px)",
                              m_homography->reprojectionError());
-                m_mainWindow->updateStatusMessage(
-                    tr("Alignment set — reprojection error: %1 px")
+                reportAlignmentResult(
+                    tr("4-corner alignment set — reprojection error: %1 px")
                     .arg(m_homography->reprojectionError(), 0, 'f', 3));
                 // Capture baseline scale for dynamic zoom tracking
                 if (m_calibration && m_calibration->pixelsPerMm() > 0) {

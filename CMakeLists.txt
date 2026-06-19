@@ -155,6 +155,7 @@ set(SOURCES
     src/gui/BomPanel.cpp
     src/gui/ControlPanel.cpp
     src/gui/InspectionWizard.cpp
+    src/gui/AlignmentWizard.cpp
     src/gui/InspectionPanel.cpp
     src/gui/StatsPanel.cpp
     src/gui/DatasetPanel.cpp
@@ -227,6 +228,7 @@ set(HEADERS
     src/gui/BomPanel.h
     src/gui/ControlPanel.h
     src/gui/InspectionWizard.h
+    src/gui/AlignmentWizard.h
     src/gui/InspectionPanel.h
     src/gui/StatsPanel.h
     src/gui/DatasetPanel.h

@@ -23,6 +23,7 @@ class IBomParser;
 namespace gui {
 class MainWindow;
 class CalibrationMonitorDialog;
+class AlignmentWizard;
 }
 
 namespace camera {
@@ -287,6 +288,13 @@ private:
     std::vector<cv::Point2f> m_alignMultiPcbPts;
     std::vector<cv::Point2f> m_alignMultiImgPts;
     std::vector<std::string> m_alignMultiRefs;
+
+    // Guided alignment assistant (created lazily, parented to the main window).
+    // When non-null and visible, alignment-completion sites forward their
+    // human-readable summary to it via reportAlignmentResult().
+    gui::AlignmentWizard* m_alignWizard = nullptr;
+    /// Forward an alignment summary to the wizard (if any) and the status bar.
+    void reportAlignmentResult(const QString& summary);
 
     // Live tracking mode — ORB work happens on m_trackingThread via m_trackingWorker.
     bool     m_liveMode = false;

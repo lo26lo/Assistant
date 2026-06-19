@@ -212,6 +212,16 @@ QGroupBox* ControlPanel::createCalibrationGroup()
     layout->addWidget(m_btnRealSense);
 
     // ── Alignment + live tracking (both backends) ──
+    // Guided assistant: single entry point that walks through method choice,
+    // instructions, and a final summary. The individual buttons below remain
+    // for power users who already know which method they want.
+    m_btnAlignWizard = new QPushButton(tr("Alignment Assistant…"));
+    m_btnAlignWizard->setToolTip(tr("Step-by-step guide: pick a method, follow the "
+                                    "instructions, and see a summary of the result. "
+                                    "Recommended if you're unsure which alignment to use."));
+    connect(m_btnAlignWizard, &QPushButton::clicked, this, &ControlPanel::alignmentWizardRequested);
+    layout->addWidget(m_btnAlignWizard);
+
     m_btnAlign = new QPushButton(tr("Align: 4 Corners"));
     m_btnAlign->setToolTip(tr("Set alignment by clicking the 4 board corners."));
     connect(m_btnAlign, &QPushButton::clicked, this, &ControlPanel::alignHomographyRequested);
