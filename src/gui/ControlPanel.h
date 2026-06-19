@@ -69,6 +69,7 @@ signals:
     void alignOnComponentsRequested();
     void alignMultiRequested();
     void autoAlignRequested();
+    void resetAlignmentRequested();
     void liveModeChanged(bool enabled);
     void hybridModeChanged(bool enabled);
 
@@ -111,6 +112,7 @@ private:
     QPushButton* m_btnAlignComps   = nullptr;
     QPushButton* m_btnAlignMulti   = nullptr;
     QPushButton* m_btnAutoAlign    = nullptr;
+    QPushButton* m_btnResetAlign   = nullptr;
     QCheckBox*   m_liveMode        = nullptr;
     QCheckBox*   m_hybridMode      = nullptr;
 };

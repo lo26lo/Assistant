@@ -2227,6 +2227,35 @@ void Application::connectControlSignals()
         spdlog::info("Multi-component alignment started (method {})", m_alignMultiMethod);
     });
 
+    // ── Reset Alignment ──────────────────────────────────────────
+    connect(m_mainWindow->controlPanel(), &gui::ControlPanel::resetAlignmentRequested,
+            this, [this]() {
+        // Cancel any in-progress alignment flow first.
+        m_pickingHomographyPoints = false;
+        m_alignOnComponents = false;
+        m_alignCompStep = 0;
+        m_alignMulti = false;
+        m_alignMultiAwaitClick = false;
+        m_alignMultiHaveCorner1 = false;
+        m_anchorMode = false;
+        setMultiAlignUIState(false);  // also clears the PCB Map click targets
+
+        m_homography->reset();
+        if (m_overlayRenderer) m_overlayRenderer->setHomography(*m_homography);
+        ++m_alignmentEpoch;
+        m_currentPixelsPerMm = 0.0;
+        if (auto* sp = m_mainWindow->statsPanel()) sp->setScale(0.0);
+
+        // Forget the saved profile too, so it isn't offered back on next reload.
+        m_config->clearSavedAlignment();
+        m_config->save();
+
+        m_mainWindow->updateStatusMessage(
+            tr("Alignment reset — the overlay is unaligned. Use one of the "
+               "Align buttons (or the Alignment Assistant) to set it up again."));
+        spdlog::info("Alignment reset by user");
+    });
+
     // ── Auto-Align (board outline detection) ────────────────────
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::autoAlignRequested,
             this, [this]() {

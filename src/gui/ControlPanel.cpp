@@ -252,6 +252,13 @@ QGroupBox* ControlPanel::createCalibrationGroup()
     connect(m_btnAutoAlign, &QPushButton::clicked, this, &ControlPanel::autoAlignRequested);
     layout->addWidget(m_btnAutoAlign);
 
+    m_btnResetAlign = new QPushButton(tr("Reset Alignment"));
+    m_btnResetAlign->setToolTip(tr("Clear the current overlay alignment (and the saved profile "
+                                   "for this board) and start fresh. Use this if a saved/auto "
+                                   "alignment is wrong or the camera/board moved."));
+    connect(m_btnResetAlign, &QPushButton::clicked, this, &ControlPanel::resetAlignmentRequested);
+    layout->addWidget(m_btnResetAlign);
+
     m_liveMode = new QCheckBox(tr("Live Tracking Mode"));
     m_liveMode->setToolTip(tr("Track PCB movement in real-time using feature matching"));
     connect(m_liveMode, &QCheckBox::toggled, this, &ControlPanel::liveModeChanged);
