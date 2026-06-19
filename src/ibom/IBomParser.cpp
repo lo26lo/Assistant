@@ -727,9 +727,17 @@ std::vector<Pad> IBomParser::parsePads(const nlohmann::json& padsJson)
         else if (shapeStr == "trapezoid") pad.shape = Pad::Shape::Trapezoid;
         else                              pad.shape = Pad::Shape::Custom;
 
-        // pin1 can be a boolean field or deduced from pin number
-        if (p.contains("pin1") && p["pin1"].is_boolean()) {
-            pad.isPin1 = p["pin1"].get<bool>();
+        // pin1 marker. In real iBOM JSON this is usually an INTEGER (1/0), not a
+        // boolean, so the old is_boolean()-only check silently missed it and fell
+        // back to the pin-number heuristic — which fails for parts whose pin-1 pad
+        // isn't named "1" (e.g. ESP32 modules). Accept boolean, number, or string.
+        if (p.contains("pin1")) {
+            const auto& v = p["pin1"];
+            if (v.is_boolean())      pad.isPin1 = v.get<bool>();
+            else if (v.is_number())  pad.isPin1 = (v.get<double>() != 0.0);
+            else if (v.is_string())  pad.isPin1 = (v.get<std::string>() == "1" ||
+                                                   v.get<std::string>() == "true");
+            else                     pad.isPin1 = (pad.pinNumber == "1" || pad.pinNumber == "A1");
         } else {
             pad.isPin1 = (pad.pinNumber == "1" || pad.pinNumber == "A1");
         }

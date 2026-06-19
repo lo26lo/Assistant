@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 45 | 2026-06-19 | IBomParser.cpp — détection pin 1 | ✅ RÉSOLU | [`pin1` lu uniquement comme booléen alors que l'iBOM l'encode en entier → pin 1 jamais détectée pour les parts dont le pad pin 1 n'est pas nommé "1" (ex. ESP32 U7)](#erreur-45--pin1-ibom-entier-non-detecte) |
 | 44 | 2026-06-19 | BoardLocator.cpp — Auto-Align | ✅ RÉSOLU | [Auto-Align via profondeur "réussit" à score faible (0.13) sur carte coplanaire → overlay décalé ; la feuille blanche sous la carte ne servait à rien car le contour 2D n'était jamais essayé](#erreur-44--auto-align-depth-faible-score-contour-jamais-essaye) |
 | 43 | 2026-06-19 | Application — sortie process | 🔴 OUVERT | [Segmentation fault au moment de quitter l'app (après "Application exiting with code 0") — non investigué](#erreur-43--segfault-a-la-sortie-de-lapplication) |
 | 42 | 2026-06-19 | Application.cpp / BoardMinimap | ✅ RÉSOLU | [Clic minimap déplaçait tout l'overlay sur D405 (anchor 1-point pensé pour microscope FOV étroit) au lieu de surligner le composant](#erreur-42--clic-minimap-deplace-loverlay-sur-realsense-au-lieu-de-highlighter) |
@@ -1375,6 +1376,26 @@ Renommé les deux variables en `cornerTL`/`cornerTR` dans `autoAlignBoard()`.
 
 ### Leçon
 Ne jamais nommer une variable locale `tr` (ou tout identifiant Qt courant comme `tr`/`qDebug`/etc.) dans une méthode `QObject`, même si elle semble hors de portée du prochain appel `tr(...)` — un refactor ultérieur peut facilement élargir la portée sans qu'on s'en rende compte. Préférer un nom descriptif (`cornerTL`, `topRight`, …) systématiquement.
+
+## ERREUR 45 — `pin1` iBOM (entier) non détecté
+
+**Date** : 2026-06-19
+**Composant** : `IBomParser::parsePads()`
+**Statut** : ✅ RÉSOLU
+
+### Symptôme
+En multi-align, choisir « Pin 1 » sur U7 (module ESP32) affiche « U7 has no pin-1 pad in the iBOM — use the corners method ». Or l'iBOM **connaît** la pin 1 de U7 (visible/surlignée dans le viewer iBOM, pointée par l'utilisateur). La pin 1 n'est détectée pour **aucune** part dont le pad pin 1 n'est pas nommé exactement "1"/"A1".
+
+### Cause
+Le parser ne lisait le champ `pin1` du pad **que s'il était un booléen** (`p["pin1"].is_boolean()`). Or dans le JSON iBOM réel, `pin1` est encodé en **entier** (`1`/`0`). `is_boolean()` renvoyait donc `false` → on tombait sur l'heuristique de repli `pad.pinNumber == "1" || "A1"`. Pour un module ESP32, le pad pin 1 a un `num` qui n'est pas "1" → jamais marqué `isPin1`.
+
+### Solution appliquée
+`parsePads()` : si le pad contient `pin1`, l'interpréter quel que soit le type — **booléen** (`get<bool>`), **nombre** (`!= 0`), ou **string** ("1"/"true") ; sinon repli sur le `num`. Fichier `src/ibom/IBomParser.cpp`.
+
+### Leçon
+Ne jamais présumer du **type JSON** d'un champ iBOM : `pin1`, comme beaucoup de flags iBOM, est un entier, pas un booléen. Lire défensivement (number OU bool OU string).
+
+---
 
 ## ERREUR 44 — Auto-Align depth faible score, contour jamais essayé
 
