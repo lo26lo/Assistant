@@ -11,6 +11,18 @@
 
 ---
 
+## État actuel — au 2026-06-19 (Live Tracking — Phase 1 implémentée : statique + MAGSAC + subpix + gating)
+
+> **2026-06-19 (suite 86)** : **implémentation Phase 1** du [plan Live Tracking](LIVE_TRACKING_PLAN.md) (« go » utilisateur). 4 changements dans `src/overlay/TrackingWorker.{h,cpp}` :
+> - **1.1 Détection de scène statique** : nouveau `emitHomography()` — point d'émission unique qui compare le déplacement max des coins board (`cornerDisp()`) entre l'estimée courante et la **dernière émise** (`m_lastEmittedH`). Si < `m_staticThreshPx` (0.8px), **n'émet rien** → l'overlay se fige au lieu de scintiller. Anti-freeze permanent : l'ancre de comparaison est la dernière pose émise (pas accumulée), donc un mouvement lent finit toujours par dépasser le seuil (lag max ~0.8px).
+> - **1.2 USAC_MAGSAC** : les 3 `findHomography(... cv::RANSAC ...)` (reference / hybrid re-lock / delta incrémental) passent à `cv::USAC_MAGSAC` (déterministe + plus précis) ; `cv::setRNGSeed(12345)` au constructeur.
+> - **1.3 `cornerSubPix`** : nouveau `refineKeypointsSubPix()` appelé dans `processFrame()` après le rescale des keypoints en pleine résolution → réduit le jitter de quantification ORB à la source (fenêtre 5×5, no-op sur erreur).
+> - **1.4 Gating qualité + hystérésis** : `emitHomography()` ne trust pas un fit avec `inliers < minMatchCount` → garde la dernière bonne pose (au lieu de sauter) ; passe `State::Lost` après 3 frames mauvaises consécutives (`m_lowQualityFrames`).
+>
+> `emitHomography()` enchaîne gate inliers → gate statique → `smoothHomography()` (lissage suite 82 conservé) → `emit`. `smoothHomography()` refactorisé pour réutiliser `cornerDisp()`. Nouveaux membres : `m_lastEmittedH`, `m_staticFrames`, `m_lowQualityFrames`, `m_staticThreshPx`. Reset dans `resetReference()`. **Cas utilisateur = reference mode** (log « reference captured (194 keypoints) ») → la Phase 1 s'y applique directement et proprement (recompute frais chaque frame, pas d'accumulation). Met à jour [JETSON_ERREURS #47](JETSON_ERREURS.md#erreur-47--overlay-vibre-en-live-tracking-sur-scene-statique-pas-de-lissage) (statut : lissage suite 82 + Phase 1 suite 86).
+>
+> ⚠️ **Non compilé/testé ici** (pas de toolchain Qt6/OpenCV). **À valider au prochain build Jetson** (protocole §6 du plan) : (1) caméra+carte fixes → overlay parfaitement immobile (gate statique) ; (2) mouvement lent → suit sans coller (lag ≤ ~1px) ; (3) main qui passe/glare → overlay fige au lieu de sauter (gate inliers) ; (4) vérifier le FPS (MAGSAC + cornerSubPix ajoutent un coût CPU — si trop lourd, réduire la fenêtre cornerSubPix ou limiter aux inliers). Réglages `m_staticThreshPx`/fenêtre subpix hardcodés pour l'instant → à exposer en Config (Phase 2). Tunables `USAC_MAGSAC` : si trop de rejets, repli `cv::RANSAC` possible.
+
 ## État actuel — au 2026-06-19 (Plan d'amélioration Live Tracking — docs/LIVE_TRACKING_PLAN.md)
 
 > **2026-06-19 (suite 85)** : **demande utilisateur** — « est-ce qu'on peut encore améliorer le live tracking… fais-moi un plan de propositions », puis « j'aimerais un plan md, et regarde aussi sur le net… peut-être aussi utiliser le GPU du Jetson ». **Livré** : nouveau document **[docs/LIVE_TRACKING_PLAN.md](LIVE_TRACKING_PLAN.md)** — diagnostic des 3 sources de jitter (RANSAC randomisé, keypoints ORB quantifiés ×2 au downscale, sur-paramétrisation 8 DDL vs carte plane), revue d'état de l'art (recherche web : **1€ Filter** CHI 2012, motion smoothing IPOL 2017, optical flow LK planaire, ORB/optical-flow GPU sur Jetson), et **plan en 3 phases** :

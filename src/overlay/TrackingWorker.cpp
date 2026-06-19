@@ -15,6 +15,9 @@ TrackingWorker::TrackingWorker(QObject* parent)
     m_detector = cv::ORB::create(200);
     // crossCheck must be false: knnMatch(k=2) is incompatible with crossCheck.
     m_matcher  = cv::BFMatcher::create(cv::NORM_HAMMING, false);
+    // Determinism: USAC is deterministic but fix the global RNG too so any
+    // residual randomness can't add frame-to-frame wobble.
+    cv::setRNGSeed(12345);
 }
 
 void TrackingWorker::configure(int orbKeypoints,
@@ -115,7 +118,74 @@ void TrackingWorker::resetReference()
     m_accumulatedDrift = 0.0;
     m_lostFrames       = 0;
     m_smoothedHomography = cv::Mat();
+    m_lastEmittedH       = cv::Mat();
+    m_staticFrames       = 0;
+    m_lowQualityFrames   = 0;
     setState(State::Lost);
+}
+
+double TrackingWorker::cornerDisp(const cv::Mat& a, const cv::Mat& b) const
+{
+    if (a.empty() || b.empty() || m_pcbPolygon.size() < 4)
+        return -1.0;
+    std::vector<cv::Point2f> pa, pb;
+    try {
+        cv::perspectiveTransform(m_pcbPolygon, pa, a);
+        cv::perspectiveTransform(m_pcbPolygon, pb, b);
+    } catch (const cv::Exception&) {
+        return -1.0;
+    }
+    double maxDisp = 0.0;
+    for (size_t i = 0; i < pa.size(); ++i)
+        maxDisp = std::max(maxDisp, cv::norm(pb[i] - pa[i]));
+    return maxDisp;
+}
+
+bool TrackingWorker::emitHomography(const cv::Mat& rawH, int inliers, double reprojErr)
+{
+    // Quality gate: too few inliers ⇒ don't trust this fit, hold the last good
+    // pose rather than letting the overlay jump. A short hysteresis avoids
+    // flickering the state on a single bad frame.
+    if (inliers < m_minMatchCount) {
+        if (++m_lowQualityFrames >= 3) setState(State::Lost);
+        return false;
+    }
+    m_lowQualityFrames = 0;
+
+    // Static-scene gate: if the new estimate barely differs from the last one
+    // we emitted, the scene isn't really moving — emit nothing so the overlay
+    // freezes instead of shimmering on keypoint noise. cornerDisp() returns -1
+    // when it can't measure (no polygon yet) → fall through and emit.
+    const double disp = cornerDisp(rawH, m_lastEmittedH);
+    if (disp >= 0.0 && disp < m_staticThreshPx) {
+        ++m_staticFrames;
+        return false;
+    }
+    m_staticFrames = 0;
+
+    const cv::Mat smoothed = smoothHomography(rawH);
+    m_lastEmittedH = smoothed.clone();
+    emit homographyUpdated(smoothed, inliers, reprojErr);
+    return true;
+}
+
+void TrackingWorker::refineKeypointsSubPix(const cv::Mat& fullGray,
+                                           std::vector<cv::KeyPoint>& kp)
+{
+    if (kp.empty() || fullGray.empty() || fullGray.type() != CV_8UC1)
+        return;
+    std::vector<cv::Point2f> pts;
+    pts.reserve(kp.size());
+    for (const auto& k : kp) pts.push_back(k.pt);
+    try {
+        cv::cornerSubPix(
+            fullGray, pts, cv::Size(5, 5), cv::Size(-1, -1),
+            cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER,
+                             20, 0.03));
+        for (size_t i = 0; i < kp.size(); ++i) kp[i].pt = pts[i];
+    } catch (const cv::Exception&) {
+        // Leave keypoints unrefined on any failure (e.g. point near border).
+    }
 }
 
 cv::Mat TrackingWorker::smoothHomography(const cv::Mat& rawH)
@@ -279,6 +349,11 @@ void TrackingWorker::processFrame(ibom::camera::FrameRef frame)
             k.pt.y *= invScale;
         }
 
+        // Sub-pixel refinement on the full-res gray image — cuts the
+        // quantization jitter ORB carries (worse after the ×downscale
+        // upscaling). Done before matching so descriptors keep their indices.
+        refineKeypointsSubPix(gray, kp);
+
         if (m_incremental)
             processIncremental(kp, desc);
         else
@@ -314,7 +389,7 @@ void TrackingWorker::processReference(const std::vector<cv::KeyPoint>& kp,
         return;
 
     cv::Mat inlierMask;
-    cv::Mat frameH = cv::findHomography(srcPts, dstPts, cv::RANSAC,
+    cv::Mat frameH = cv::findHomography(srcPts, dstPts, cv::USAC_MAGSAC,
                                         m_ransacThreshold, inlierMask);
     if (frameH.empty() || frameH.rows != 3 || frameH.cols != 3)
         return;
@@ -326,7 +401,7 @@ void TrackingWorker::processReference(const std::vector<cv::KeyPoint>& kp,
 
     cv::Mat combined = frameH * m_baseHomography;
     m_lastHomography = combined.clone();
-    emit homographyUpdated(smoothHomography(combined), inliers, reprojErr);
+    emitHomography(combined, inliers, reprojErr);
 }
 
 void TrackingWorker::processIncremental(const std::vector<cv::KeyPoint>& kp,
@@ -376,7 +451,7 @@ void TrackingWorker::processIncremental(const std::vector<cv::KeyPoint>& kp,
         matchPoints(m_refDescriptors, m_refKeypoints, desc, kp, rSrc, rDst);
         if (rSrc.size() >= static_cast<size_t>(m_minMatchCount)) {
             cv::Mat rMask;
-            cv::Mat refH = cv::findHomography(rSrc, rDst, cv::RANSAC,
+            cv::Mat refH = cv::findHomography(rSrc, rDst, cv::USAC_MAGSAC,
                                               m_ransacThreshold, rMask);
             if (!refH.empty() && refH.rows == 3 && refH.cols == 3) {
                 int rInliers = 0;
@@ -393,7 +468,7 @@ void TrackingWorker::processIncremental(const std::vector<cv::KeyPoint>& kp,
                     m_accumulatedDrift = 0.0;
                     m_lostFrames       = 0;
                     setState(State::Locked);
-                    emit homographyUpdated(smoothHomography(combined), rInliers, rErr);
+                    emitHomography(combined, rInliers, rErr);
                     spdlog::debug("TrackingWorker[hybrid]: anchor re-locked, "
                                   "inliers={}/{} err={:.2f}px (drift reset)",
                                   rInliers, rSrc.size(), rErr);
@@ -417,7 +492,7 @@ void TrackingWorker::processIncremental(const std::vector<cv::KeyPoint>& kp,
     }
 
     cv::Mat inlierMask;
-    cv::Mat deltaH = cv::findHomography(srcPts, dstPts, cv::RANSAC,
+    cv::Mat deltaH = cv::findHomography(srcPts, dstPts, cv::USAC_MAGSAC,
                                         m_ransacThreshold, inlierMask);
     if (deltaH.empty() || deltaH.rows != 3 || deltaH.cols != 3) {
         if (++m_lostFrames >= 4)
@@ -443,7 +518,7 @@ void TrackingWorker::processIncremental(const std::vector<cv::KeyPoint>& kp,
     m_accumulatedDrift += reprojErr;
     setState(m_accumulatedDrift > m_reanchorDriftPx ? State::Drifting : State::Locked);
 
-    emit homographyUpdated(smoothHomography(m_cumulativeH), inliers, reprojErr);
+    emitHomography(m_cumulativeH, inliers, reprojErr);
 
     spdlog::debug("TrackingWorker[incr]: inliers={}/{} err={:.2f}px drift={:.1f}px state={}",
                   inliers, srcPts.size(), reprojErr, m_accumulatedDrift,

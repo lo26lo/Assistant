@@ -141,6 +141,24 @@ private:
     /// Falls back to returning `rawH` unchanged if no board polygon is set.
     cv::Mat smoothHomography(const cv::Mat& rawH);
 
+    /// Max displacement (px) of the board-polygon corners projected through
+    /// `a` vs `b`. Returns -1 when it can't be computed (no polygon / empty
+    /// matrix / cv error). Shared by the static-scene gate and smoothing.
+    double cornerDisp(const cv::Mat& a, const cv::Mat& b) const;
+
+    /// Single exit point for a freshly-fit PCB→image homography: applies the
+    /// quality gate (too few inliers → hold the last good pose), the static-
+    /// scene gate (estimate barely moved → emit nothing so the overlay stops
+    /// shimmering), then temporal smoothing, and finally emits. Returns true
+    /// when an update was actually emitted.
+    bool emitHomography(const cv::Mat& rawH, int inliers, double reprojErr);
+
+    /// Refine keypoint positions to sub-pixel on the full-resolution gray
+    /// image (cv::cornerSubPix) — reduces the quantization jitter that ORB
+    /// keypoints carry, especially after the ×downscale upscaling. No-op on
+    /// failure (out-of-range points etc.).
+    void refineKeypointsSubPix(const cv::Mat& fullGray, std::vector<cv::KeyPoint>& kp);
+
     cv::Ptr<cv::Feature2D>         m_detector;
     cv::Ptr<cv::DescriptorMatcher> m_matcher;
 
@@ -160,6 +178,12 @@ private:
     // raw/best current estimate used for mask projection) so smoothing always
     // damps against the last value actually emitted to consumers.
     cv::Mat m_smoothedHomography;
+
+    // Phase-1 stabilization state (see docs/LIVE_TRACKING_PLAN.md).
+    cv::Mat m_lastEmittedH;            // last pose actually sent to consumers
+    int     m_staticFrames     = 0;    // consecutive frames judged "not moving"
+    int     m_lowQualityFrames = 0;    // consecutive frames below the inlier gate
+    double  m_staticThreshPx   = 0.8;  // corner motion below this ⇒ scene static
 
     int    m_minMatchCount      = 10;
     double m_loweRatio          = 0.75;

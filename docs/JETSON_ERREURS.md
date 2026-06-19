@@ -1424,6 +1424,9 @@ Repli sans lissage si `m_pcbPolygon` a moins de 4 points. Reset dans `resetRefer
 ### Leçon
 Une estimée géométrique (homographie, pose...) recalculée indépendamment à chaque frame depuis des données bruitées (keypoints, RANSAC) **vibrera visuellement** même sans mouvement réel, sauf lissage temporel explicite. Le lissage doit comparer un déplacement géométrique concret (ici : déplacement des coins projetés en pixels) plutôt que les coefficients bruts de la matrice — moyenner des matrices d'homographie élément par élément n'a pas de sens géométrique direct.
 
+### Suivi (suite 86) — Phase 1 du plan Live Tracking
+Au-delà du lissage (suite 82), 4 mesures s'attaquent aux **causes** (cf. [LIVE_TRACKING_PLAN.md](LIVE_TRACKING_PLAN.md)) : (1) **gate de scène statique** — si l'estimée ne bouge quasi pas vs la dernière émise, ne rien émettre (overlay figé, plus de scintillement) ; (2) **USAC_MAGSAC** + seed fixe (estimateur déterministe, supprime la variation du tirage RANSAC) ; (3) **cornerSubPix** (réduit le jitter de quantification ORB à la source) ; (4) **gate inliers + hystérésis** (fige au lieu de sauter quand le matching se dégrade). Fichiers `src/overlay/TrackingWorker.{h,cpp}`. Phases 2-3 (1€ Filter, modèle adaptatif, GPU) à venir.
+
 ---
 
 ## ERREUR 46 — « Reset Alignment ne fait rien » (overlay figé)
