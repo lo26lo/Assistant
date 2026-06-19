@@ -222,6 +222,14 @@ QGroupBox* ControlPanel::createCalibrationGroup()
     connect(m_btnAlignComps, &QPushButton::clicked, this, &ControlPanel::alignOnComponentsRequested);
     layout->addWidget(m_btnAlignComps);
 
+    m_btnAlignMulti = new QPushButton(tr("Align: Multi-Comp (Beta)"));
+    m_btnAlignMulti->setToolTip(tr("Align using several components (≥2, ≥4 for perspective). "
+                                   "Works on non-rectangular boards. Mark each component by its "
+                                   "2 opposite corners (midpoint) or by pin 1. Click again to "
+                                   "finish once enough components are marked."));
+    connect(m_btnAlignMulti, &QPushButton::clicked, this, &ControlPanel::alignMultiRequested);
+    layout->addWidget(m_btnAlignMulti);
+
     m_btnAutoAlign = new QPushButton(tr("Auto-Align (Beta)"));
     m_btnAutoAlign->setToolTip(tr("Automatically locate the board outline in the current frame "
                                   "and orient the overlay to match — no clicking required. Works "

@@ -131,6 +131,11 @@ private:
     /// required. Runs on a worker thread (QtConcurrent) since edge detection +
     /// orientation scoring can take tens of ms. See docs/AUTO_ALIGN_PLAN.md.
     void autoAlignBoard();
+    /// Finish multi-component alignment: fit a transform from the collected
+    /// PCB↔image landmark pairs (≥4 → homography, 3 → affine, 2 → similarity)
+    /// and apply it like the other alignment paths. No-op (with a message) if
+    /// fewer than 2 landmarks were marked.
+    void applyMultiAlignment();
     /// Enumerate devices for the active backend and refresh the ControlPanel.
     void refreshCameraDeviceList();
     /// Open the dynamic RealSense sensor-controls panel (from ControlPanel or
@@ -265,6 +270,23 @@ private:
     cv::Point2f m_alignPcb2;
     cv::Point2f m_alignImg1;
     cv::Point2f m_alignImg2;
+
+    // Multi-component alignment (≥2 landmarks). Works on non-rectangular boards
+    // since it uses component positions, not board corners. Each landmark is
+    // marked either by clicking 2 opposite body corners (the midpoint is used,
+    // matched to the component bbox center) or by a single click on pin 1
+    // (matched to the iBOM pin-1 pad position). ≥4 landmarks → full homography
+    // (corrects perspective/tilt); 3 → affine; 2 → similarity.
+    bool m_alignMulti = false;
+    bool m_alignMultiAwaitClick = false;  // a component is chosen, waiting image click(s)
+    int  m_alignMultiMethod = 0;          // 0 = 2 corners (midpoint), 1 = pin 1
+    std::string m_alignMultiRef;          // component currently being marked
+    cv::Point2f m_alignMultiPcb;          // its known PCB point (center or pin 1)
+    bool m_alignMultiHaveCorner1 = false; // corners method: first corner captured
+    cv::Point2f m_alignMultiCorner1;
+    std::vector<cv::Point2f> m_alignMultiPcbPts;
+    std::vector<cv::Point2f> m_alignMultiImgPts;
+    std::vector<std::string> m_alignMultiRefs;
 
     // Live tracking mode — ORB work happens on m_trackingThread via m_trackingWorker.
     bool     m_liveMode = false;

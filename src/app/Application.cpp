@@ -680,6 +680,95 @@ void Application::startComponentAnchor()
                  m_anchorRef, m_anchorPcb.x, m_anchorPcb.y);
 }
 
+void Application::applyMultiAlignment()
+{
+    // Stop collecting regardless of outcome.
+    m_alignMulti = false;
+    m_alignMultiAwaitClick = false;
+    m_alignMultiHaveCorner1 = false;
+
+    const auto& pcb = m_alignMultiPcbPts;
+    const auto& img = m_alignMultiImgPts;
+    const int n = static_cast<int>(pcb.size());
+    if (!m_ibomProject || n < 2) {
+        m_mainWindow->updateStatusMessage(
+            tr("Multi-align cancelled — need at least 2 components (got %1)").arg(n));
+        return;
+    }
+
+    // Fit PCB→image transform: ≥4 → homography (perspective), 3 → affine,
+    // 2 → similarity (uniform scale + rotation + translation).
+    cv::Mat H;  // 3x3, CV_64F
+    if (n >= 4) {
+        H = cv::findHomography(pcb, img, cv::RANSAC, 5.0);
+    } else if (n == 3) {
+        cv::Mat A = cv::estimateAffine2D(pcb, img);  // 2x3
+        if (!A.empty()) {
+            H = cv::Mat::eye(3, 3, CV_64F);
+            A.copyTo(H(cv::Rect(0, 0, 3, 2)));
+        }
+    } else {  // n == 2 — similarity
+        const double dxp = pcb[1].x - pcb[0].x, dyp = pcb[1].y - pcb[0].y;
+        const double dxi = img[1].x - img[0].x, dyi = img[1].y - img[0].y;
+        const double dp = std::hypot(dxp, dyp), di = std::hypot(dxi, dyi);
+        if (dp >= 0.1 && di >= 1.0) {
+            const double s = di / dp;
+            const double rot = std::atan2(dyi, dxi) - std::atan2(dyp, dxp);
+            const double c = std::cos(rot) * s, sn = std::sin(rot) * s;
+            const double tx = img[0].x - (c * pcb[0].x - sn * pcb[0].y);
+            const double ty = img[0].y - (sn * pcb[0].x + c * pcb[0].y);
+            H = (cv::Mat_<double>(3, 3) << c, -sn, tx, sn, c, ty, 0, 0, 1);
+        }
+    }
+    if (H.empty() || H.rows != 3 || H.cols != 3) {
+        m_mainWindow->updateStatusMessage(
+            tr("Multi-align failed — could not fit a transform (try components farther apart)"));
+        spdlog::error("Multi-align: transform fit failed (n={})", n);
+        return;
+    }
+
+    // Project the board bbox corners through H to feed the standard path.
+    auto& bb = m_ibomProject->boardInfo.boardBBox;
+    std::vector<cv::Point2f> pcbCorners = {
+        {static_cast<float>(bb.minX), static_cast<float>(bb.minY)},
+        {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)},
+        {static_cast<float>(bb.maxX), static_cast<float>(bb.maxY)},
+        {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
+    };
+    std::vector<cv::Point2f> imgCorners;
+    cv::perspectiveTransform(pcbCorners, imgCorners, H);
+
+    ++m_alignmentEpoch;
+    if (!m_homography->compute(pcbCorners, imgCorners)) {
+        m_mainWindow->updateStatusMessage(tr("Multi-align failed — homography compute error"));
+        spdlog::error("Multi-align: Homography::compute failed");
+        return;
+    }
+    m_overlayRenderer->setHomography(*m_homography);
+    if (m_liveMode) m_baseHomography = m_homography->matrix().clone();
+
+    // Scale px/mm from the projected top edge (same as the 4-corner path).
+    const double topEdgePx = cv::norm(imgCorners[1] - imgCorners[0]);
+    const double boardWMm = bb.width();
+    if (boardWMm > 0.0 && topEdgePx > 0.0) {
+        m_basePixelsPerMm = topEdgePx / boardWMm;
+        m_currentPixelsPerMm = m_basePixelsPerMm;
+        if (auto* sp = m_mainWindow->statsPanel())
+            sp->setScale(m_currentPixelsPerMm);
+    } else {
+        updateDynamicScale();
+    }
+    if (m_trackingWorker)
+        QMetaObject::invokeMethod(m_trackingWorker, "resetReference", Qt::QueuedConnection);
+
+    const char* model = (n >= 4) ? "homography" : (n == 3) ? "affine" : "similarity";
+    m_mainWindow->updateStatusMessage(
+        tr("Multi-align set from %1 components (%2) — scale: %3 px/mm")
+        .arg(n).arg(model).arg(m_currentPixelsPerMm, 0, 'f', 1));
+    spdlog::info("Multi-align OK: {} components, {} model, scale={:.2f} px/mm",
+                 n, model, m_currentPixelsPerMm);
+}
+
 void Application::autoAlignBoard()
 {
     if (m_autoAligning) return;  // already running, ignore re-clicks
@@ -1623,6 +1712,62 @@ void Application::connectControlSignals()
             m_overlayRenderer->setHighlightedRefs({ref});
         m_mainWindow->boardMinimap()->setSelectedRef(ref);
 
+        // Handle multi-component alignment selection
+        if (m_alignMulti) {
+            if (m_alignMultiAwaitClick) {
+                m_mainWindow->updateStatusMessage(
+                    tr("Finish marking %1 in the image first")
+                    .arg(QString::fromStdString(m_alignMultiRef)));
+                return;
+            }
+            const Component* comp = nullptr;
+            for (const auto& c : m_ibomProject->components) {
+                if (c.reference == ref) { comp = &c; break; }
+            }
+            if (!comp) return;
+
+            // Ask how to mark this component.
+            QMessageBox box(m_mainWindow.get());
+            box.setWindowTitle(tr("Mark %1").arg(QString::fromStdString(ref)));
+            box.setText(tr("How do you want to mark %1?")
+                        .arg(QString::fromStdString(ref)));
+            QPushButton* cornersBtn = box.addButton(tr("2 Opposite Corners"), QMessageBox::AcceptRole);
+            QPushButton* pin1Btn    = box.addButton(tr("Pin 1"), QMessageBox::AcceptRole);
+            box.addButton(QMessageBox::Cancel);
+            box.exec();
+            if (box.clickedButton() == pin1Btn) {
+                // Use the iBOM pin-1 pad position for precision.
+                const Pad* pin1 = nullptr;
+                for (const auto& p : comp->pads) {
+                    if (p.isPin1) { pin1 = &p; break; }
+                }
+                if (!pin1) {
+                    QMessageBox::information(m_mainWindow.get(), tr("Pin 1"),
+                        tr("%1 has no pin-1 pad in the iBOM — use the corners method.")
+                        .arg(QString::fromStdString(ref)));
+                    return;
+                }
+                m_alignMultiMethod = 1;
+                m_alignMultiPcb = cv::Point2f(static_cast<float>(pin1->position.x),
+                                              static_cast<float>(pin1->position.y));
+                m_alignMultiAwaitClick = true;
+                m_alignMultiRef = ref;
+                m_mainWindow->updateStatusMessage(
+                    tr("Click PIN 1 of %1 in the camera image").arg(QString::fromStdString(ref)));
+            } else if (box.clickedButton() == cornersBtn) {
+                m_alignMultiMethod = 0;
+                m_alignMultiPcb = cv::Point2f(static_cast<float>(comp->bbox.center().x),
+                                              static_cast<float>(comp->bbox.center().y));
+                m_alignMultiAwaitClick = true;
+                m_alignMultiHaveCorner1 = false;
+                m_alignMultiRef = ref;
+                m_mainWindow->updateStatusMessage(
+                    tr("Click the FIRST corner of %1's body in the camera image")
+                    .arg(QString::fromStdString(ref)));
+            }
+            return;
+        }
+
         // Handle 2-component alignment selection
         if (m_alignOnComponents) {
             // Find the component's center position
@@ -1848,6 +1993,7 @@ void Application::connectControlSignals()
             return;
         }
         m_alignOnComponents = false;  // cancel any 2-comp align in progress
+        m_alignMulti = false;         // cancel any multi-comp align in progress
         m_pickingHomographyPoints = true;
         m_homographyImagePoints.clear();
         m_mainWindow->updateStatusMessage(
@@ -1869,11 +2015,46 @@ void Application::connectControlSignals()
             return;
         }
         m_pickingHomographyPoints = false;  // cancel any 4-corner align
+        m_alignMulti = false;               // cancel any multi-comp align
         m_alignOnComponents = true;
         m_alignCompStep = 0;
         m_mainWindow->updateStatusMessage(
             tr("Select the FIRST component in the BOM panel (choose 2 components far apart)"));
         spdlog::info("2-component alignment started");
+    });
+
+    // ── Multi-Component Alignment (≥2 landmarks; non-rectangular boards) ──
+    // Click once to start collecting; click again to finish & compute. Each
+    // component is marked either by its 2 opposite corners (midpoint) or pin 1.
+    connect(m_mainWindow->controlPanel(), &gui::ControlPanel::alignMultiRequested,
+            this, [this]() {
+        if (m_alignMulti) {
+            // Second click = finish & compute.
+            applyMultiAlignment();
+            return;
+        }
+        if (!m_ibomProject) {
+            QMessageBox::information(m_mainWindow.get(), tr("Alignment"),
+                tr("Load an iBOM file first."));
+            return;
+        }
+        if (!m_camera->isCapturing()) {
+            QMessageBox::information(m_mainWindow.get(), tr("Alignment"),
+                tr("Start the camera first."));
+            return;
+        }
+        m_pickingHomographyPoints = false;
+        m_alignOnComponents = false;
+        m_alignMulti = true;
+        m_alignMultiAwaitClick = false;
+        m_alignMultiHaveCorner1 = false;
+        m_alignMultiPcbPts.clear();
+        m_alignMultiImgPts.clear();
+        m_alignMultiRefs.clear();
+        m_mainWindow->updateStatusMessage(
+            tr("Multi-align: select a component in the BOM panel "
+               "(mark ≥2 spread out; ≥4 for perspective). Click the button again to finish."));
+        spdlog::info("Multi-component alignment started");
     });
 
     // ── Auto-Align (board outline detection) ────────────────────
@@ -1894,6 +2075,42 @@ void Application::connectControlSignals()
 
     connect(m_mainWindow->cameraView(), &gui::CameraView::clicked,
             this, [this](QPointF imagePos) {
+        // ── Multi-component alignment click handling ──
+        if (m_alignMulti && m_alignMultiAwaitClick) {
+            cv::Point2f imgPt(static_cast<float>(imagePos.x()),
+                              static_cast<float>(imagePos.y()));
+            if (m_alignMultiMethod == 0) {  // 2 opposite corners → midpoint
+                if (!m_alignMultiHaveCorner1) {
+                    m_alignMultiCorner1 = imgPt;
+                    m_alignMultiHaveCorner1 = true;
+                    m_mainWindow->updateStatusMessage(
+                        tr("Click the OPPOSITE corner of %1's body")
+                        .arg(QString::fromStdString(m_alignMultiRef)));
+                    return;
+                }
+                cv::Point2f mid((m_alignMultiCorner1.x + imgPt.x) * 0.5f,
+                                (m_alignMultiCorner1.y + imgPt.y) * 0.5f);
+                m_alignMultiPcbPts.push_back(m_alignMultiPcb);
+                m_alignMultiImgPts.push_back(mid);
+                m_alignMultiRefs.push_back(m_alignMultiRef);
+            } else {  // pin 1: single click
+                m_alignMultiPcbPts.push_back(m_alignMultiPcb);
+                m_alignMultiImgPts.push_back(imgPt);
+                m_alignMultiRefs.push_back(m_alignMultiRef);
+            }
+            m_alignMultiAwaitClick = false;
+            m_alignMultiHaveCorner1 = false;
+            const int n = static_cast<int>(m_alignMultiImgPts.size());
+            m_mainWindow->updateStatusMessage(
+                tr("Marked %1 component(s). Select another, or click "
+                   "'Align: Multi-Comp' again to finish%2.")
+                .arg(n)
+                .arg(n >= 4 ? tr(" (≥4: perspective)")
+                   : n >= 2 ? tr(" (≥2: ok, 4 better)") : QString()));
+            spdlog::info("Multi-align: marked {} ({} total)", m_alignMultiRef, n);
+            return;
+        }
+
         // ── Microscope 1-point anchor click handling ──
         if (m_anchorMode) {
             m_anchorMode = false;

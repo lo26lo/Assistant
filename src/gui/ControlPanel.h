@@ -63,6 +63,7 @@ signals:
     void openCalibrationPdfRequested();
     void alignHomographyRequested();
     void alignOnComponentsRequested();
+    void alignMultiRequested();
     void autoAlignRequested();
     void liveModeChanged(bool enabled);
     void hybridModeChanged(bool enabled);
@@ -103,6 +104,7 @@ private:
     QPushButton* m_btnRealSense    = nullptr;  // RealSense: sensor controls
     QPushButton* m_btnAlign        = nullptr;
     QPushButton* m_btnAlignComps   = nullptr;
+    QPushButton* m_btnAlignMulti   = nullptr;
     QPushButton* m_btnAutoAlign    = nullptr;
     QCheckBox*   m_liveMode        = nullptr;
     QCheckBox*   m_hybridMode      = nullptr;
