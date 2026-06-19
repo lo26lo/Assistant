@@ -51,6 +51,12 @@ void BoardMinimap::setPlacedRefs(const std::unordered_set<std::string>& refs)
     update();
 }
 
+void BoardMinimap::setClickTargets(const std::vector<cv::Point2f>& pcbPts)
+{
+    m_clickTargets = pcbPts;
+    update();
+}
+
 // ---------------------------------------------------------------------------
 // Coordinate helpers
 // ---------------------------------------------------------------------------
@@ -199,6 +205,37 @@ void BoardMinimap::paintEvent(QPaintEvent*)
                 }
             }
             break;
+        }
+    }
+
+    // Click targets: the exact point(s) the user must click in the camera
+    // image to calibrate (multi-component alignment). Drawn last among the
+    // guides, as prominent bright-green numbered rings so they stand out over
+    // the dark-red selection halo and yellow pad dots.
+    if (!m_clickTargets.empty()) {
+        p.setFont(QFont("monospace", 8, QFont::Bold));
+        for (size_t i = 0; i < m_clickTargets.size(); ++i) {
+            QPointF c = pcbToWidget(m_clickTargets[i].x, m_clickTargets[i].y);
+            const QColor ring(50, 230, 90);  // bright green = "click here"
+
+            // Outer glow ring + crosshair to draw the eye, even on a busy map.
+            p.setPen(QPen(QColor(0, 0, 0, 160), 3.0));
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(c, 7.0, 7.0);
+            p.setPen(QPen(ring, 2.0));
+            p.drawEllipse(c, 7.0, 7.0);
+            p.drawLine(QPointF(c.x() - 9, c.y()), QPointF(c.x() + 9, c.y()));
+            p.drawLine(QPointF(c.x(), c.y() - 9), QPointF(c.x(), c.y() + 9));
+
+            // Number the targets when there is more than one (click order is free).
+            if (m_clickTargets.size() > 1) {
+                p.setPen(QColor(0, 0, 0));
+                p.drawText(QRectF(c.x() + 8, c.y() - 14, 14, 14),
+                           Qt::AlignCenter, QString::number(i + 1));
+                p.setPen(ring);
+                p.drawText(QRectF(c.x() + 7, c.y() - 15, 14, 14),
+                           Qt::AlignCenter, QString::number(i + 1));
+            }
         }
     }
 

@@ -743,6 +743,9 @@ void Application::setMultiAlignUIState(bool collecting)
 {
     m_mainWindow->controlPanel()->setAlignMultiActive(collecting);
     if (m_alignWizard) m_alignWizard->setMultiAlignCollecting(collecting);
+    // Leaving collection (finish or cross-cancel) clears any pending click
+    // targets drawn on the PCB Map.
+    if (!collecting) m_mainWindow->boardMinimap()->setClickTargets({});
 }
 
 void Application::beginMarkComponent(const std::string& ref)
@@ -768,6 +771,7 @@ void Application::beginMarkComponent(const std::string& ref)
         if (!pin1) {
             // Don't arm — let the user pick another component without cancelling.
             m_alignMultiAwaitClick = false;
+            m_mainWindow->boardMinimap()->setClickTargets({});
             m_mainWindow->updateStatusMessage(
                 tr("%1 has no pin-1 pad in the iBOM — pick another component, or "
                    "restart multi-align with the 'opposite pads' / 'corners' method.")
@@ -779,14 +783,16 @@ void Application::beginMarkComponent(const std::string& ref)
         m_alignMultiHaveCorner1 = false;
         m_alignMultiAwaitClick  = true;
         m_alignMultiRef = ref;
+        m_mainWindow->boardMinimap()->setClickTargets({m_alignMultiPcb});
         m_mainWindow->updateStatusMessage(
-            tr("Click PIN 1 of %1 in the image (red dot in the PCB Map). "
+            tr("Click PIN 1 of %1 in the image (green target in the PCB Map). "
                "Or pick another component to switch.").arg(qref));
         break;
     }
     case 2: {  // Two farthest-apart pads → midpoint of the two (precise anchor).
         if (comp->pads.size() < 2) {
             m_alignMultiAwaitClick = false;
+            m_mainWindow->boardMinimap()->setClickTargets({});
             m_mainWindow->updateStatusMessage(
                 tr("%1 has fewer than 2 pads — pick another component, or use the "
                    "'corners' / 'pin 1' method.").arg(qref));
@@ -807,9 +813,13 @@ void Application::beginMarkComponent(const std::string& ref)
         m_alignMultiHaveCorner1 = false;
         m_alignMultiAwaitClick  = true;
         m_alignMultiRef = ref;
+        m_mainWindow->boardMinimap()->setClickTargets({
+            cv::Point2f(static_cast<float>(pa->position.x), static_cast<float>(pa->position.y)),
+            cv::Point2f(static_cast<float>(pb->position.x), static_cast<float>(pb->position.y))});
         m_mainWindow->updateStatusMessage(
-            tr("Click the two FARTHEST-APART pads of %1 (opposite corners of the "
-               "footprint), in any order. Or pick another component to switch.").arg(qref));
+            tr("Click the two green target pads of %1 in the image (opposite "
+               "corners of the footprint), in any order. Or pick another "
+               "component to switch.").arg(qref));
         break;
     }
     default: {  // 0: two body corners → midpoint, anchored to bbox center.
@@ -818,9 +828,13 @@ void Application::beginMarkComponent(const std::string& ref)
         m_alignMultiHaveCorner1 = false;
         m_alignMultiAwaitClick  = true;
         m_alignMultiRef = ref;
+        // Mark the two diagonal corners of the body as click targets.
+        m_mainWindow->boardMinimap()->setClickTargets({
+            cv::Point2f(static_cast<float>(comp->bbox.minX), static_cast<float>(comp->bbox.minY)),
+            cv::Point2f(static_cast<float>(comp->bbox.maxX), static_cast<float>(comp->bbox.maxY))});
         m_mainWindow->updateStatusMessage(
-            tr("Click any corner of %1's body, then the opposite one (order "
-               "doesn't matter). Or pick another component to switch.").arg(qref));
+            tr("Click the two green target corners of %1's body in the image "
+               "(order doesn't matter). Or pick another component to switch.").arg(qref));
         break;
     }
     }
@@ -832,7 +846,7 @@ void Application::applyMultiAlignment()
     m_alignMulti = false;
     m_alignMultiAwaitClick = false;
     m_alignMultiHaveCorner1 = false;
-    setMultiAlignUIState(false);
+    setMultiAlignUIState(false);  // also clears the PCB Map click targets
 
     const auto& pcb = m_alignMultiPcbPts;
     const auto& img = m_alignMultiImgPts;
@@ -2264,6 +2278,7 @@ void Application::connectControlSignals()
             }
             m_alignMultiAwaitClick = false;
             m_alignMultiHaveCorner1 = false;
+            m_mainWindow->boardMinimap()->setClickTargets({});  // done with this component
             const int n = static_cast<int>(m_alignMultiImgPts.size());
             m_mainWindow->updateStatusMessage(
                 tr("Marked %1 component(s). Select another, or click "
