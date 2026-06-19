@@ -1031,6 +1031,34 @@ void Application::autoAlignBoard()
         if (m_trackingWorker)
             QMetaObject::invokeMethod(m_trackingWorker, "resetReference", Qt::QueuedConnection);
 
+        // The edge-agreement score is only weakly discriminative on a busy PCB
+        // against a cluttered/reflective background: a spatially-offset quad can
+        // still overlap ~1/3 of the real edges. Below this level the placement
+        // is untrustworthy (often visibly shifted), so flag it rather than
+        // reporting a clean "success", and point the user at the reliable
+        // manual path instead of leaving them to wonder why it looks wrong.
+        constexpr double kAutoAlignTrustScore = 0.45;
+        if (result.score < kAutoAlignTrustScore) {
+            reportAlignmentResult(
+                tr("Auto-Align: LOW confidence (score %1 via %2) — the overlay is "
+                   "likely misplaced. Use 'Reset Alignment' then 'Align: Multi-Comp' "
+                   "for this board.")
+                    .arg(result.score, 0, 'f', 2)
+                    .arg(QString::fromStdString(result.method)));
+            spdlog::warn("Auto-Align low confidence: via {} score {:.2f} (< {:.2f})",
+                         result.method, result.score, kAutoAlignTrustScore);
+            QMessageBox::warning(m_mainWindow.get(), tr("Auto-Align — Low Confidence"),
+                tr("Auto-Align placed the overlay but with low confidence "
+                   "(edge-agreement score %1).\n\n"
+                   "On a glossy board over a cluttered background the automatic "
+                   "outline detection is unreliable. If the overlay doesn't line "
+                   "up, click 'Reset Alignment' and use 'Align: Multi-Comp' — mark "
+                   "a few components (the PCB Map shows exactly where to click) for "
+                   "a precise, repeatable result that's then saved for next time.")
+                    .arg(result.score, 0, 'f', 2));
+            return;
+        }
+
         reportAlignmentResult(
             tr("Auto-Align: aligned via %1 (score %2)")
                 .arg(QString::fromStdString(result.method))
