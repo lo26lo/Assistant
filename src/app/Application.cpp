@@ -686,6 +686,57 @@ void Application::reportAlignmentResult(const QString& summary)
     m_mainWindow->updateStatusMessage(summary);
     if (m_alignWizard && m_alignWizard->isVisible())
         m_alignWizard->reportResult(summary);
+
+    // Persist the homography so it can be offered back on the next launch if
+    // the same iBOM is reloaded (see loadIBomFile()). Best-effort: there is no
+    // way to know whether the camera/board actually moved since, so this is
+    // just "what we had last time", not a correctness guarantee.
+    if (m_homography && m_homography->isValid() && m_config) {
+        Config::SavedAlignment sa;
+        sa.valid         = true;
+        sa.ibomFilePath  = m_config->ibomFilePath();
+        sa.pixelsPerMm   = m_currentPixelsPerMm;
+        sa.timestamp     = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+        const cv::Mat& m = m_homography->matrix();
+        if (m.rows == 3 && m.cols == 3) {
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c)
+                    sa.matrix[r * 3 + c] = m.at<double>(r, c);
+            m_config->setSavedAlignment(sa);
+            m_config->save();
+        }
+    }
+}
+
+cv::Point2f Application::refineClickPoint(cv::Point2f rawPoint, int searchRadiusPx) const
+{
+    if (!m_lastColorFrame || m_lastColorFrame->empty())
+        return rawPoint;
+
+    const cv::Mat& frame = *m_lastColorFrame;
+    if (rawPoint.x < 0 || rawPoint.y < 0 ||
+        rawPoint.x >= frame.cols || rawPoint.y >= frame.rows)
+        return rawPoint;
+
+    cv::Mat gray;
+    if (frame.channels() == 1) gray = frame;
+    else cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+
+    std::vector<cv::Point2f> pts = {rawPoint};
+    const int winRadius = std::max(3, searchRadiusPx / 2);
+    cv::cornerSubPix(gray, pts, cv::Size(winRadius, winRadius), cv::Size(-1, -1),
+                      cv::TermCriteria(cv::TermCriteria::EPS | cv::TermCriteria::COUNT, 20, 0.01));
+
+    cv::Point2f refined = pts[0];
+    const float dist = cv::norm(refined - rawPoint);
+    if (!std::isfinite(refined.x) || !std::isfinite(refined.y) || dist > searchRadiusPx) {
+        spdlog::debug("refineClickPoint: rejecting subpix result (dist={:.1f}px > {}px radius)",
+                      dist, searchRadiusPx);
+        return rawPoint;
+    }
+    spdlog::debug("refineClickPoint: ({:.1f},{:.1f}) -> ({:.1f},{:.1f}) [{:.2f}px]",
+                  rawPoint.x, rawPoint.y, refined.x, refined.y, dist);
+    return refined;
 }
 
 void Application::setMultiAlignUIState(bool collecting)
@@ -2130,6 +2181,11 @@ void Application::connectControlSignals()
         if (m_alignMulti && m_alignMultiAwaitClick) {
             cv::Point2f imgPt(static_cast<float>(imagePos.x()),
                               static_cast<float>(imagePos.y()));
+            // Snap the raw click onto the nearest strong local feature
+            // (cv::cornerSubPix) — hand clicks are limited by mouse/screen
+            // resolution, this recovers sub-pixel precision when there's a
+            // real corner/edge nearby (silkscreen edge, pad corner, etc.).
+            imgPt = refineClickPoint(imgPt);
             if (m_alignMultiMethod == 0) {  // 2 opposite corners → midpoint
                 if (!m_alignMultiHaveCorner1) {
                     m_alignMultiCorner1 = imgPt;
@@ -2816,6 +2872,36 @@ void Application::loadIBomFile(const QString& path)
         m_mainWindow->boardMinimap()->setPlacedRefs(m_placedRefs);
         spdlog::info("Restored {} placed components from a previous session",
                      m_placedRefs.size());
+    }
+
+    // Restore a previously saved alignment for this exact iBOM file, if any —
+    // best-effort: we have no way to know whether the camera/board moved
+    // since, so this is offered as a starting point, not a guarantee. Only
+    // applies if the live tracking/alignment flow hasn't already set one.
+    if (!m_homography->isValid()) {
+        const auto& sa = m_config->savedAlignment();
+        if (sa.valid && sa.ibomFilePath == path.toStdString()) {
+            cv::Mat m(3, 3, CV_64F);
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c)
+                    m.at<double>(r, c) = sa.matrix[r * 3 + c];
+            m_homography->setMatrix(m);
+            if (m_homography->isValid()) {
+                ++m_alignmentEpoch;
+                m_overlayRenderer->setHomography(*m_homography);
+                if (sa.pixelsPerMm > 0.0) {
+                    m_currentPixelsPerMm = sa.pixelsPerMm;
+                    m_basePixelsPerMm    = sa.pixelsPerMm;
+                    if (auto* sp = m_mainWindow->statsPanel()) sp->setScale(m_currentPixelsPerMm);
+                }
+                m_mainWindow->updateStatusMessage(
+                    tr("Restored previous alignment for this board (saved %1) — "
+                       "re-align if the camera or board has moved.")
+                        .arg(QString::fromStdString(sa.timestamp)));
+                spdlog::info("Restored saved alignment for '{}' (saved {})",
+                             path.toStdString(), sa.timestamp);
+            }
+        }
     }
 
     // Auto-compute a basic homography based on board bounding box

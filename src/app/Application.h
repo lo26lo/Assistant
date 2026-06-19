@@ -299,6 +299,15 @@ private:
     /// with whether multi-component landmark collection is in progress.
     void setMultiAlignUIState(bool collecting);
 
+    /// Sub-pixel snap of a hand-clicked Multi-Comp landmark point (corner or
+    /// pin-1 click) onto the nearest strong local feature, via
+    /// cv::cornerSubPix in a small window around the click — improves
+    /// precision over the raw click position, which is limited by mouse/
+    /// screen resolution. Falls back to the original point if no frame is
+    /// available or the window has no usable corner (e.g. a flat pad
+    /// center); never moves the point further than searchRadiusPx.
+    cv::Point2f refineClickPoint(cv::Point2f rawPoint, int searchRadiusPx = 8) const;
+
     // Live tracking mode — ORB work happens on m_trackingThread via m_trackingWorker.
     bool     m_liveMode = false;
     cv::Mat  m_baseHomography;  // Original homography before live tracking

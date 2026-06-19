@@ -135,6 +135,19 @@ bool Config::load(const std::string& path)
             for (const auto& e : j["ibom_recent"])
                 if (e.is_string()) m_recentIbomFiles.push_back(e.get<std::string>());
         }
+        if (j.contains("last_alignment")) {
+            auto& la = j["last_alignment"];
+            m_savedAlignment.valid        = la.value("valid", false);
+            m_savedAlignment.ibomFilePath = la.value("ibom_file", std::string());
+            m_savedAlignment.pixelsPerMm  = la.value("pixels_per_mm", 0.0);
+            m_savedAlignment.timestamp    = la.value("timestamp", std::string());
+            if (la.contains("matrix") && la["matrix"].is_array() && la["matrix"].size() == 9) {
+                for (size_t i = 0; i < 9; ++i)
+                    m_savedAlignment.matrix[i] = la["matrix"][i].get<double>();
+            } else {
+                m_savedAlignment.valid = false;
+            }
+        }
 
         // AI
         if (j.contains("ai")) {
@@ -291,6 +304,14 @@ bool Config::save(const std::string& path) const
         j["ibom_file"]        = m_ibomFilePath;
         j["ibom_recent"]      = m_recentIbomFiles;
         j["ibom_auto_reload"] = m_autoReloadIbom;
+
+        j["last_alignment"] = {
+            {"valid",          m_savedAlignment.valid},
+            {"ibom_file",      m_savedAlignment.ibomFilePath},
+            {"matrix",         std::vector<double>(m_savedAlignment.matrix, m_savedAlignment.matrix + 9)},
+            {"pixels_per_mm",  m_savedAlignment.pixelsPerMm},
+            {"timestamp",      m_savedAlignment.timestamp}
+        };
 
         // AI
         j["ai"] = {

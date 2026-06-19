@@ -92,6 +92,21 @@ public:
     bool autoReloadIbom() const { return m_autoReloadIbom; }
     void setAutoReloadIbom(bool e) { m_autoReloadIbom = e; }
 
+    /// Last successful alignment, persisted so it can be restored on the next
+    /// launch if the same iBOM is reloaded — best-effort only: there is no way
+    /// to detect whether the camera/board actually moved in the meantime, so
+    /// this is just "what we had last time", not a guarantee of correctness.
+    struct SavedAlignment {
+        bool        valid = false;
+        std::string ibomFilePath;     // homography is only meaningful for this board
+        double      matrix[9] = {1,0,0, 0,1,0, 0,0,1};  // row-major 3x3 homography (PCB mm -> image px)
+        double      pixelsPerMm = 0.0;
+        std::string timestamp;        // ISO 8601, informational only
+    };
+    const SavedAlignment& savedAlignment() const { return m_savedAlignment; }
+    void setSavedAlignment(const SavedAlignment& a) { m_savedAlignment = a; }
+    void clearSavedAlignment() { m_savedAlignment = SavedAlignment{}; }
+
     // --- AI Models ---
     const std::string& modelsPath() const { return m_modelsPath; }
     void setModelsPath(const std::string& path) { m_modelsPath = path; }
@@ -285,6 +300,7 @@ private:
     std::string m_ibomFilePath;
     std::vector<std::string> m_recentIbomFiles;
     bool m_autoReloadIbom = true;
+    SavedAlignment m_savedAlignment;
 
     // AI
     std::string m_modelsPath = "models";
