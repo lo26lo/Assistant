@@ -3,7 +3,10 @@
 #include <QApplication>
 #include <QTimer>
 #include <QThread>
+#include <QImage>
+#include <QSize>
 #include <opencv2/core.hpp>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <atomic>
@@ -252,6 +255,25 @@ private:
     // Dynamic scale tracking
     double m_basePixelsPerMm = 0.0;  // pixelsPerMm at initial homography
     double m_currentPixelsPerMm = 0.0;
+
+    // ── iBOM overlay render cache (perf) ───────────────────────────────────
+    // The overlay (pads/silkscreen/labels) used to be re-rendered at full frame
+    // resolution every frame on the GUI thread, even when nothing changed. It is
+    // now rendered only when one of its inputs changes (homography, selection,
+    // placed set, toggles, colors, frame size, loaded project). In static / paused
+    // mode this drops per-frame vector rendering to ~0; live tracking still
+    // re-renders each frame because the homography changes per frame.
+    QImage      m_overlayImage;            // reusable cached overlay (image coords)
+    bool        m_overlayValid = false;    // false until first successful render
+    cv::Mat     m_ovSigHomography;         // homography the cache was built from
+    std::string m_ovSigSelected;
+    std::size_t m_ovSigPlacedHash = 0;
+    QSize       m_ovSigSize;
+    bool        m_ovSigPads = false, m_ovSigSilk = false, m_ovSigFab = false;
+    std::string m_ovSigColorKey;
+    float       m_ovSigPlacedOpacity = -1.0f;
+    float       m_ovSigSelectedSilkW = -1.0f;
+    const void* m_ovSigProject = nullptr;  // identity of the rendered IBomProject
 
     // Per-profile tracking state (saved/restored on profile switch)
     struct ProfileTrackingState {

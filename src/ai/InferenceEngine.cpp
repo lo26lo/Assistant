@@ -5,9 +5,11 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/dnn.hpp>
 #include <spdlog/spdlog.h>
+#include <algorithm>
 #include <chrono>
 #include <numeric>
 #include <string>
+#include <thread>
 
 namespace ibom::ai {
 
@@ -24,7 +26,14 @@ bool InferenceEngine::initialize(bool useTensorRT, int gpuDeviceId)
         m_env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "MicroscopeIBOM");
 
         m_sessionOptions = std::make_unique<Ort::SessionOptions>();
-        m_sessionOptions->SetIntraOpNumThreads(4);
+        // Scale intra-op threads to the host (Orin = up to 12 cores) instead of a
+        // hardcoded 4; capped so the CPU fallback path can't starve the GUI/camera
+        // threads. Only relevant when the CPU EP runs (TensorRT/CUDA EP do their
+        // own scheduling).
+        const unsigned hwThreads = std::thread::hardware_concurrency();
+        const int intraThreads =
+            hwThreads > 0 ? static_cast<int>(std::min(hwThreads, 8u)) : 4;
+        m_sessionOptions->SetIntraOpNumThreads(intraThreads);
         m_sessionOptions->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
 #ifdef IBOM_HAS_TENSORRT

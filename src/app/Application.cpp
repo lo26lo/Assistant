@@ -60,6 +60,7 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <cmath>
+#include <functional>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
@@ -1046,20 +1047,56 @@ void Application::wireCameraSignals()
         if (m_remoteView && m_remoteView->isRunning() && m_remoteView->clientCount() > 0)
             m_remoteView->pushFrame(display);
 
-        // Render iBOM overlay if data is loaded and homography is set
+        // ── iBOM overlay (rendered only when an input actually changed) ─────
+        // Re-rendering the full-resolution vector overlay every frame on the GUI
+        // thread was the dominant per-frame cost. Render only when homography,
+        // selection, placed set, toggles, colors, frame size or the loaded
+        // project change. Live tracking still re-renders each frame (the
+        // homography changes per frame); static / paused mode now skips it.
         if (m_ibomProject && m_homography && m_homography->isValid()) {
-            // Create a transparent overlay the same size as the frame
-            QImage overlay(rgb.cols, rgb.rows, QImage::Format_ARGB32_Premultiplied);
-            overlay.fill(Qt::transparent);
-            QPainter painter(&overlay);
-            painter.setRenderHint(QPainter::Antialiasing, true);
-
-            // Draw component pads, silkscreen outlines, and labels
             const bool drawPads = m_config->showPads();
             const bool drawSilk = m_config->showSilkscreen();
-            [[maybe_unused]] const bool drawFab = m_config->showFabrication();
+            const bool drawFab  = m_config->showFabrication();
 
-            // Resolve per-state base colors from Config (user-customizable via Settings)
+            std::size_t placedHash = m_placedRefs.size();
+            for (const auto& r : m_placedRefs)
+                placedHash ^= std::hash<std::string>{}(r) + 0x9e3779b97f4a7c15ULL
+                              + (placedHash << 6) + (placedHash >> 2);
+
+            const QSize   curSize(rgb.cols, rgb.rows);
+            const cv::Mat& curH = m_homography->matrix();
+            const std::string colorKey =
+                m_config->selectedColorHex() + '|' + m_config->placedColorHex() + '|'
+                + m_config->normalColorHex();
+            const float placedAlphaMul = std::clamp(m_config->placedOpacity(), 0.05f, 1.0f);
+            const float selectedSilkW  = std::max(1.0f, m_config->selectedOutlineWidth());
+
+            const bool homographyChanged =
+                m_ovSigHomography.empty() || curH.empty()
+                || m_ovSigHomography.size() != curH.size()
+                || cv::norm(curH, m_ovSigHomography, cv::NORM_INF) > 1e-9;
+
+            const bool needsRender =
+                !m_overlayValid
+                || curSize != m_ovSigSize
+                || drawPads != m_ovSigPads || drawSilk != m_ovSigSilk || drawFab != m_ovSigFab
+                || m_selectedRef != m_ovSigSelected
+                || placedHash != m_ovSigPlacedHash
+                || colorKey != m_ovSigColorKey
+                || placedAlphaMul != m_ovSigPlacedOpacity
+                || selectedSilkW != m_ovSigSelectedSilkW
+                || m_ibomProject.get() != m_ovSigProject
+                || homographyChanged;
+
+            if (needsRender) {
+            // Reuse the overlay buffer across frames; only reallocate on resize.
+            if (m_overlayImage.size() != curSize)
+                m_overlayImage = QImage(curSize, QImage::Format_ARGB32_Premultiplied);
+            m_overlayImage.fill(Qt::transparent);
+            QPainter painter(&m_overlayImage);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+
+            // Resolve per-state base colors from Config (parsed once per render)
             QColor cSelected = QColor(QString::fromStdString(m_config->selectedColorHex()));
             QColor cPlaced   = QColor(QString::fromStdString(m_config->placedColorHex()));
             QColor cNormal   = QColor(QString::fromStdString(m_config->normalColorHex()));
@@ -1067,13 +1104,37 @@ void Application::wireCameraSignals()
             if (!cPlaced.isValid())   cPlaced   = QColor(72, 200, 72);
             if (!cNormal.isValid())   cNormal   = QColor(170, 170, 68);
 
-            const float placedAlphaMul = std::clamp(m_config->placedOpacity(), 0.05f, 1.0f);
-            const float selectedSilkW  = std::max(1.0f, m_config->selectedOutlineWidth());
+            // Label fonts built once per render (previously once per component).
+            const QFont selectedLabelFont("Segoe UI", 9, QFont::Bold);
+            const QFont normalLabelFont("Segoe UI", 7, QFont::Normal);
 
             auto withAlpha = [](QColor c, int a) { c.setAlpha(a); return c; };
 
             for (const auto& comp : m_ibomProject->components) {
                 if (comp.layer != Layer::Front) continue;
+
+                // Frustum cull: skip components whose projected bbox doesn't
+                // intersect the frame. Decisive at high magnification (only a
+                // handful of hundreds of components are on screen); a no-op at
+                // full-board view where everything is visible.
+                {
+                    auto bb = m_homography->transformRect(
+                        static_cast<float>(comp.bbox.minX),
+                        static_cast<float>(comp.bbox.minY),
+                        static_cast<float>(comp.bbox.maxX - comp.bbox.minX),
+                        static_cast<float>(comp.bbox.maxY - comp.bbox.minY));
+                    if (bb.size() == 4) {
+                        float minx = bb[0].x, maxx = bb[0].x;
+                        float miny = bb[0].y, maxy = bb[0].y;
+                        for (const auto& p : bb) {
+                            minx = std::min(minx, p.x); maxx = std::max(maxx, p.x);
+                            miny = std::min(miny, p.y); maxy = std::max(maxy, p.y);
+                        }
+                        if (maxx < 0.f || minx > static_cast<float>(curSize.width())
+                            || maxy < 0.f || miny > static_cast<float>(curSize.height()))
+                            continue;
+                    }
+                }
 
                 const bool isSelected = (comp.reference == m_selectedRef);
                 const bool isPlaced   = !isSelected && m_placedRefs.count(comp.reference) > 0;
@@ -1185,14 +1246,29 @@ void Application::wireCameraSignals()
                     static_cast<float>((comp.bbox.minY + comp.bbox.maxY) / 2.0));
                 cv::Point2f imgPt = m_homography->pcbToImage(bboxCenter);
                 painter.setPen(labelColor);
-                painter.setFont(QFont("Segoe UI", isSelected ? 9 : 7,
-                                       isSelected ? QFont::Bold : QFont::Normal));
+                painter.setFont(isSelected ? selectedLabelFont : normalLabelFont);
                 painter.drawText(QPointF(imgPt.x, imgPt.y - 3),
                                  QString::fromStdString(comp.reference));
                 } // drawSilk || isSelected
             }
             painter.end();
-            m_mainWindow->cameraView()->setOverlayImage(overlay);
+            m_mainWindow->cameraView()->setOverlayImage(m_overlayImage);
+
+            // Remember the inputs this overlay was rendered from, so the next
+            // frames that don't change anything skip the whole render.
+            m_overlayValid       = true;
+            m_ovSigSize          = curSize;
+            m_ovSigPads          = drawPads;
+            m_ovSigSilk          = drawSilk;
+            m_ovSigFab           = drawFab;
+            m_ovSigSelected      = m_selectedRef;
+            m_ovSigPlacedHash    = placedHash;
+            m_ovSigColorKey      = colorKey;
+            m_ovSigPlacedOpacity = placedAlphaMul;
+            m_ovSigSelectedSilkW = selectedSilkW;
+            m_ovSigProject       = m_ibomProject.get();
+            m_ovSigHomography    = curH.clone();
+            } // needsRender
         }
 
         // Draw alignment point picking visual feedback
