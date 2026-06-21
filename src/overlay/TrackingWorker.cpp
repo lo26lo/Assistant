@@ -555,15 +555,6 @@ void TrackingWorker::processFrame(ibom::camera::FrameRef frame)
     if (!frame || frame->empty())
         return;
 
-    // Throttle — if the GUI thread posts faster than m_intervalMs, drop.
-    const auto now = std::chrono::steady_clock::now();
-    if (m_hasReference) {
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now - m_lastProcessTime).count();
-        if (elapsed < m_intervalMs) return;
-    }
-    m_lastProcessTime = now;
-
     try {
         // Convert + downscale for speed. Keypoints are rescaled back to full
         // resolution so the emitted homography is in original image coords.
@@ -589,6 +580,19 @@ void TrackingWorker::processFrame(ibom::camera::FrameRef frame)
             runOpticalFlow(gray)) {
             return;
         }
+
+        // Throttle ONLY the expensive ORB detect/match path. The optical-flow
+        // fast path above runs every frame, unthrottled, so live tracking stays
+        // smooth at camera rate between periodic ORB re-detections; ORB itself
+        // is paced by m_intervalMs. Previously the throttle sat at the top of
+        // processFrame and capped optical flow to the same ~5 Hz, defeating it.
+        const auto now = std::chrono::steady_clock::now();
+        if (m_hasReference) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - m_lastProcessTime).count();
+            if (elapsed < m_intervalMs) return;
+        }
+        m_lastProcessTime = now;
 
         cv::Mat small;
         if (m_downscale > 0.0f && m_downscale < 1.0f)
