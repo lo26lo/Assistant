@@ -80,173 +80,6 @@ Q_DECLARE_METATYPE(std::vector<cv::Point2f>)
 
 namespace ibom {
 
-namespace {
-
-// Self-contained snapshot of everything renderOverlayImage() needs, so the
-// render can run on a worker thread (QtConcurrent) without touching the
-// Application / GUI objects. All members are value copies (the IBomProject is
-// shared and immutable after load; the Homography holds a refcounted cv::Mat).
-struct OverlayRenderInputs {
-    std::shared_ptr<const IBomProject> project;
-    overlay::Homography                homo;
-    QSize                              size;
-    std::string                        selectedRef;
-    std::unordered_set<std::string>    placedRefs;
-    QColor cSelected, cPlaced, cNormal, labelNormal;
-    float  placedAlphaMul = 1.0f;
-    float  selectedSilkW  = 1.0f;
-    bool   drawPads = true;
-    bool   drawSilk = true;
-};
-
-// Pure pixel work — builds the iBOM overlay (pads / silkscreen / labels) into a
-// transparent ARGB image. No widget / Application access → safe on a worker
-// thread. Includes frustum culling (skip off-frame components) and builds the
-// label fonts once per render instead of once per component.
-QImage renderOverlayImage(const OverlayRenderInputs& in)
-{
-    if (!in.project || in.size.isEmpty()) return {};
-
-    QImage overlay(in.size, QImage::Format_ARGB32_Premultiplied);
-    overlay.fill(Qt::transparent);
-    QPainter painter(&overlay);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-
-    const QFont selectedLabelFont("Segoe UI", 9, QFont::Bold);
-    const QFont normalLabelFont("Segoe UI", 7, QFont::Normal);
-    auto withAlpha = [](QColor c, int a) { c.setAlpha(a); return c; };
-
-    const overlay::Homography& H = in.homo;
-    const float fw = static_cast<float>(in.size.width());
-    const float fh = static_cast<float>(in.size.height());
-
-    for (const auto& comp : in.project->components) {
-        if (comp.layer != Layer::Front) continue;
-
-        // Frustum cull: skip components whose projected bbox is off-frame.
-        {
-            auto bb = H.transformRect(
-                static_cast<float>(comp.bbox.minX),
-                static_cast<float>(comp.bbox.minY),
-                static_cast<float>(comp.bbox.maxX - comp.bbox.minX),
-                static_cast<float>(comp.bbox.maxY - comp.bbox.minY));
-            if (bb.size() == 4) {
-                float minx = bb[0].x, maxx = bb[0].x;
-                float miny = bb[0].y, maxy = bb[0].y;
-                for (const auto& p : bb) {
-                    minx = std::min(minx, p.x); maxx = std::max(maxx, p.x);
-                    miny = std::min(miny, p.y); maxy = std::max(maxy, p.y);
-                }
-                if (maxx < 0.f || minx > fw || maxy < 0.f || miny > fh)
-                    continue;
-            }
-        }
-
-        const bool isSelected = (comp.reference == in.selectedRef);
-        const bool isPlaced   = !isSelected && in.placedRefs.count(comp.reference) > 0;
-
-        QColor padColor, silkColor, labelColor;
-        qreal silkWidth = 1.0;
-        if (isSelected) {
-            padColor   = withAlpha(in.cSelected, 220);
-            silkColor  = withAlpha(in.cSelected, 240);
-            labelColor = withAlpha(in.cSelected, 255);
-            silkWidth  = in.selectedSilkW;
-        } else if (isPlaced) {
-            int a = static_cast<int>(180 * in.placedAlphaMul);
-            padColor   = withAlpha(in.cPlaced, a);
-            silkColor  = withAlpha(in.cPlaced, std::min(255, a + 30));
-            labelColor = withAlpha(in.cPlaced, std::min(255, a + 60));
-        } else {
-            padColor   = withAlpha(in.cNormal, 180);
-            silkColor  = withAlpha(in.cNormal, 180);
-            labelColor = in.labelNormal;
-        }
-
-        // ── Draw pads ──
-        if (in.drawPads) {
-            for (const auto& pad : comp.pads) {
-                auto padCorners = H.transformRect(
-                    static_cast<float>(pad.position.x - pad.sizeX / 2.0),
-                    static_cast<float>(pad.position.y - pad.sizeY / 2.0),
-                    static_cast<float>(pad.sizeX),
-                    static_cast<float>(pad.sizeY));
-                if (padCorners.size() == 4) {
-                    QPolygonF padPoly;
-                    for (auto& c : padCorners) padPoly << QPointF(c.x, c.y);
-                    painter.setPen(Qt::NoPen);
-                    painter.setBrush(padColor);
-                    if (pad.shape == Pad::Shape::Circle || pad.shape == Pad::Shape::Oval)
-                        painter.drawEllipse(padPoly.boundingRect());
-                    else
-                        painter.drawPolygon(padPoly);
-                }
-            }
-        }
-
-        // ── Draw silkscreen / drawings ──
-        if (in.drawSilk) {
-            painter.setBrush(Qt::NoBrush);
-            for (const auto& seg : comp.drawings) {
-                if (seg.type == DrawingSegment::Type::Line) {
-                    cv::Point2f s = H.pcbToImage(cv::Point2f(
-                        static_cast<float>(seg.start.x), static_cast<float>(seg.start.y)));
-                    cv::Point2f e = H.pcbToImage(cv::Point2f(
-                        static_cast<float>(seg.end.x), static_cast<float>(seg.end.y)));
-                    painter.setPen(QPen(silkColor, silkWidth));
-                    painter.drawLine(QPointF(s.x, s.y), QPointF(e.x, e.y));
-                } else if (seg.type == DrawingSegment::Type::Rect) {
-                    auto rc = H.transformRect(
-                        static_cast<float>(std::min(seg.start.x, seg.end.x)),
-                        static_cast<float>(std::min(seg.start.y, seg.end.y)),
-                        static_cast<float>(std::abs(seg.end.x - seg.start.x)),
-                        static_cast<float>(std::abs(seg.end.y - seg.start.y)));
-                    if (rc.size() == 4) {
-                        QPolygonF rp;
-                        for (auto& c : rc) rp << QPointF(c.x, c.y);
-                        painter.setPen(QPen(silkColor, silkWidth));
-                        painter.drawPolygon(rp);
-                    }
-                } else if (seg.type == DrawingSegment::Type::Circle) {
-                    cv::Point2f c = H.pcbToImage(cv::Point2f(
-                        static_cast<float>(seg.start.x), static_cast<float>(seg.start.y)));
-                    cv::Point2f edge = H.pcbToImage(cv::Point2f(
-                        static_cast<float>(seg.start.x + seg.radius),
-                        static_cast<float>(seg.start.y)));
-                    float r = std::hypot(edge.x - c.x, edge.y - c.y);
-                    painter.setPen(QPen(silkColor, silkWidth));
-                    painter.drawEllipse(QPointF(c.x, c.y), static_cast<qreal>(r), static_cast<qreal>(r));
-                } else if (seg.type == DrawingSegment::Type::Polygon && !seg.points.empty()) {
-                    QPolygonF polyPts;
-                    for (const auto& pt : seg.points) {
-                        cv::Point2f ip = H.pcbToImage(cv::Point2f(
-                            static_cast<float>(pt.x), static_cast<float>(pt.y)));
-                        polyPts << QPointF(ip.x, ip.y);
-                    }
-                    painter.setPen(QPen(silkColor, silkWidth));
-                    painter.drawPolygon(polyPts);
-                }
-            }
-        }
-
-        // ── Draw reference label ──
-        if (in.drawSilk || isSelected) {
-            cv::Point2f bboxCenter(
-                static_cast<float>((comp.bbox.minX + comp.bbox.maxX) / 2.0),
-                static_cast<float>((comp.bbox.minY + comp.bbox.maxY) / 2.0));
-            cv::Point2f imgPt = H.pcbToImage(bboxCenter);
-            painter.setPen(labelColor);
-            painter.setFont(isSelected ? selectedLabelFont : normalLabelFont);
-            painter.drawText(QPointF(imgPt.x, imgPt.y - 3),
-                             QString::fromStdString(comp.reference));
-        }
-    }
-    painter.end();
-    return overlay;
-}
-
-} // anonymous namespace
-
 Application::Application(QApplication& qapp)
     : QObject(&qapp)
     , m_qapp(qapp)
@@ -539,9 +372,8 @@ void Application::createSubsystems()
     spdlog::info("Creating IBomParser...");
     m_ibomParser = std::make_unique<IBomParser>();
 
-    // Overlay renderer + homography
-    spdlog::info("Creating OverlayRenderer...");
-    m_overlayRenderer = std::make_unique<overlay::OverlayRenderer>();
+    // Homography (the overlay renderer is now a stateless free function,
+    // overlay::OverlayRenderer::render — no instance to create).
     m_homography = std::make_unique<overlay::Homography>();
 
     // Heatmap renderer
@@ -580,7 +412,7 @@ void Application::createSubsystems()
 
     // Overlay rendering worker: the iBOM overlay (pads/silk/labels) is built on
     // a QtConcurrent thread, off the GUI thread (see the frameReady dispatch +
-    // the file-local renderOverlayImage). The watcher delivers the finished
+    // overlay::OverlayRenderer::render). The watcher delivers the finished
     // QImage back on the GUI thread; m_overlayInFlight gates re-dispatch so the
     // GUI thread can't pile up renders.
     m_overlayWatcher = new QFutureWatcher<QImage>(this);
@@ -813,8 +645,6 @@ void Application::switchProfile(int profileIndex)
     // m_liveMode forced false above, the normal homographyUpdated handler
     // won't run for this switch, so OverlayRenderer / StatsPanel scale /
     // BoardMinimap would otherwise keep showing the outgoing profile's values.
-    if (m_homography && m_homography->isValid() && m_overlayRenderer)
-        m_overlayRenderer->setHomography(*m_homography);
     if (auto* sp = m_mainWindow->statsPanel())
         sp->setScale(m_currentPixelsPerMm);
     if (m_mainWindow->boardMinimap())
@@ -1019,7 +849,6 @@ void Application::beginMarkComponent(const std::string& ref)
 
     // Reflect the selection everywhere (overlay emphasis, minimap, BOM row).
     m_selectedRef = ref;
-    if (m_overlayRenderer) m_overlayRenderer->setHighlightedRefs({ref});
     m_mainWindow->boardMinimap()->setSelectedRef(ref);
     if (auto* bom = m_mainWindow->bomPanel()) bom->highlightComponent(ref);
 
@@ -1181,7 +1010,6 @@ void Application::applyMultiAlignment()
         spdlog::error("Multi-align: Homography::compute failed");
         return;
     }
-    m_overlayRenderer->setHomography(*m_homography);
     if (m_liveMode) m_baseHomography = m_homography->matrix().clone();
 
     // Scale px/mm from the projected top edge (same as the 4-corner path).
@@ -1284,7 +1112,6 @@ void Application::autoAlignBoard()
             return;
         }
 
-        m_overlayRenderer->setHomography(*m_homography);
         m_baseHomography = m_homography->matrix().clone();
         if (m_mainWindow->boardMinimap())
             m_mainWindow->boardMinimap()->update();
@@ -1522,8 +1349,6 @@ void Application::connectSignals()
                 this, [this](cv::Mat combined, int /*inliers*/, double /*reprojErr*/) {
             if (!m_liveMode || combined.empty() || !m_homography) return;
             m_homography->setMatrix(combined);
-            if (m_overlayRenderer)
-                m_overlayRenderer->setHomography(*m_homography);
             updateDynamicScale();
             m_mainWindow->boardMinimap()->update();
         }, Qt::QueuedConnection);
@@ -1734,7 +1559,7 @@ void Application::wireCameraSignals()
         // (homography, selection, placed set, toggles, colors, size, project),
         // and run the heavy QPainter work on a QtConcurrent worker — the GUI
         // thread only snapshots cheap value copies and dispatches. Frustum
-        // culling + the draw loop live in renderOverlayImage() (top of file).
+        // culling + the draw loop live in overlay::OverlayRenderer::render().
         if (m_ibomProject && m_homography && m_homography->isValid()) {
             const bool drawPads = m_config->showPads();
             const bool drawSilk = m_config->showSilkscreen();
@@ -1773,7 +1598,7 @@ void Application::wireCameraSignals()
             // Skip if nothing changed, or if a render is still in flight (the
             // signature stays stale so the next free frame picks up the latest).
             if (needsRender && !m_overlayInFlight) {
-                OverlayRenderInputs in;
+                overlay::OverlayInputs in;
                 in.project     = m_ibomProject;
                 in.homo        = *m_homography;
                 in.size        = curSize;
@@ -1793,7 +1618,7 @@ void Application::wireCameraSignals()
 
                 m_overlayInFlight = true;
                 m_overlayWatcher->setFuture(
-                    QtConcurrent::run([in]() { return renderOverlayImage(in); }));
+                    QtConcurrent::run([in]() { return overlay::OverlayRenderer::render(in); }));
 
                 // Commit the signature now (this exact state is being rendered).
                 m_overlayValid       = true;
@@ -2006,12 +1831,10 @@ void Application::connectControlSignals()
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::showPadsChanged,
             this, [this](bool show) {
         m_config->setShowPads(show);
-        if (m_overlayRenderer) m_overlayRenderer->setShowPads(show);
     });
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::showSilkscreenChanged,
             this, [this](bool show) {
         m_config->setShowSilkscreen(show);
-        if (m_overlayRenderer) m_overlayRenderer->setShowLabels(show);
     });
     connect(m_mainWindow->controlPanel(), &gui::ControlPanel::showFabricationChanged,
             this, [this](bool show) {
@@ -2115,8 +1938,6 @@ void Application::connectControlSignals()
     connect(m_mainWindow->bomPanel(), &gui::BomPanel::componentSelected,
             this, [this](const std::string& ref) {
         m_selectedRef = ref;
-        if (m_overlayRenderer)
-            m_overlayRenderer->setHighlightedRefs({ref});
         m_mainWindow->boardMinimap()->setSelectedRef(ref);
 
         // Handle multi-component alignment selection. The marking method is
@@ -2341,8 +2162,6 @@ void Application::connectControlSignals()
         connect(wizard, &gui::InspectionWizard::componentNavigated,
                 this, [this](const std::string& ref) {
             m_selectedRef = ref;
-            if (m_overlayRenderer)
-                m_overlayRenderer->setHighlightedRefs({ref});
             spdlog::info("Navigate to component: {}", ref);
         });
     }
@@ -2475,7 +2294,6 @@ void Application::connectControlSignals()
         setMultiAlignUIState(false);  // also clears the PCB Map click targets
 
         m_homography->reset();
-        if (m_overlayRenderer) m_overlayRenderer->setHomography(*m_homography);
         ++m_alignmentEpoch;
         m_currentPixelsPerMm = 0.0;
         if (auto* sp = m_mainWindow->statsPanel()) sp->setScale(0.0);
@@ -2598,7 +2416,6 @@ void Application::connectControlSignals()
 
             ++m_alignmentEpoch;
             if (m_homography->compute(pcbCorners, imgCorners)) {
-                m_overlayRenderer->setHomography(*m_homography);
                 m_mainWindow->boardMinimap()->update();
                 m_basePixelsPerMm = scale;
                 m_currentPixelsPerMm = scale;
@@ -2688,7 +2505,6 @@ void Application::connectControlSignals()
 
                 ++m_alignmentEpoch;
                 if (m_homography->compute(pcbCorners, imgCorners)) {
-                    m_overlayRenderer->setHomography(*m_homography);
                     m_basePixelsPerMm = scale;
                     m_currentPixelsPerMm = scale;
                     if (auto* sp = m_mainWindow->statsPanel())
@@ -2744,7 +2560,6 @@ void Application::connectControlSignals()
 
             ++m_alignmentEpoch;
             if (m_homography->compute(pcbPts, m_homographyImagePoints)) {
-                m_overlayRenderer->setHomography(*m_homography);
                 spdlog::info("Manual homography computed successfully (error={:.3f}px)",
                              m_homography->reprojectionError());
                 reportAlignmentResult(
@@ -2806,7 +2621,6 @@ void Application::connectControlSignals()
             // Restore base homography
             if (!m_baseHomography.empty()) {
                 m_homography->setMatrix(m_baseHomography);
-                m_overlayRenderer->setHomography(*m_homography);
             }
             if (m_trackingWorker)
                 QMetaObject::invokeMethod(m_trackingWorker, "resetReference",
@@ -2843,8 +2657,6 @@ void Application::connectControlSignals()
     connect(m_pickAndPlace.get(), &features::PickAndPlace::currentStepChanged,
             this, [this, inspPanel, bomPanel](const features::PickAndPlace::PlacementStep& step) {
         m_selectedRef = step.reference;
-        if (m_overlayRenderer)
-            m_overlayRenderer->setHighlightedRefs({step.reference});
         if (bomPanel)
             bomPanel->highlightComponent(step.reference);
         inspPanel->onStepChanged(
@@ -3004,8 +2816,6 @@ void Application::connectControlSignals()
             const Component* nearest = componentAtPcb(pcbPt);
             if (!nearest) return;
             m_selectedRef = nearest->reference;
-            if (m_overlayRenderer)
-                m_overlayRenderer->setHighlightedRefs({m_selectedRef});
             m_mainWindow->boardMinimap()->setSelectedRef(m_selectedRef);
             if (auto* bomPanel = m_mainWindow->bomPanel())
                 bomPanel->highlightComponent(m_selectedRef);
@@ -3047,7 +2857,6 @@ void Application::connectControlSignals()
         }
         ++m_alignmentEpoch;
         if (m_homography->compute(pcbCorners, imgCorners)) {
-            m_overlayRenderer->setHomography(*m_homography);
             if (m_liveMode) m_baseHomography = m_homography->matrix().clone();
             updateDynamicScale();
             m_mainWindow->updateStatusMessage(tr("Minimap anchor applied"));
@@ -3176,8 +2985,6 @@ void Application::loadIBomFile(const QString& path)
     spdlog::info("iBOM loaded: {} components, {} BOM groups",
                  m_ibomProject->components.size(), m_ibomProject->bomGroups.size());
 
-    // Feed to overlay renderer
-    m_overlayRenderer->setIBomData(*m_ibomProject);
 
     // Feed to BOM panel
     m_mainWindow->bomPanel()->loadBomData(m_ibomProject->bomGroups, m_ibomProject->components);
@@ -3232,7 +3039,6 @@ void Application::loadIBomFile(const QString& path)
             m_homography->setMatrix(m);
             if (m_homography->isValid()) {
                 ++m_alignmentEpoch;
-                m_overlayRenderer->setHomography(*m_homography);
                 if (sa.pixelsPerMm > 0.0) {
                     m_currentPixelsPerMm = sa.pixelsPerMm;
                     m_basePixelsPerMm    = sa.pixelsPerMm;
@@ -3273,7 +3079,6 @@ void Application::loadIBomFile(const QString& path)
             };
             ++m_alignmentEpoch;
             if (m_homography->compute(pcbPts, imgPts)) {
-                m_overlayRenderer->setHomography(*m_homography);
                 spdlog::info("Auto-homography computed: board {:.1f}x{:.1f} → scale {:.2f}", bw, bh, scale);
             }
         }

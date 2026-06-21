@@ -184,8 +184,9 @@ private:
     std::unique_ptr<IBomParser>                m_ibomParser;
     std::shared_ptr<IBomProject>               m_ibomProject;
 
-    // Overlay rendering
-    std::unique_ptr<overlay::OverlayRenderer>  m_overlayRenderer;
+    // Overlay rendering (the draw path is the stateless
+    // overlay::OverlayRenderer::render(), dispatched off-thread — see the
+    // m_overlayWatcher block below; there is no renderer instance to own).
     std::unique_ptr<overlay::Homography>       m_homography;
     std::unique_ptr<overlay::HeatmapRenderer>  m_heatmapRenderer;
 
