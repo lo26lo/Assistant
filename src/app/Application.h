@@ -184,9 +184,9 @@ private:
     std::unique_ptr<IBomParser>                m_ibomParser;
     std::shared_ptr<IBomProject>               m_ibomProject;
 
-    // Overlay rendering (the draw path is the stateless
-    // overlay::OverlayRenderer::render(), dispatched off-thread — see the
-    // m_overlayWatcher block below; there is no renderer instance to own).
+    // Overlay rendering (the draw path is the stateless, change-gated
+    // overlay::OverlayRenderer::render() called from frameReady — there is no
+    // renderer instance to own).
     std::unique_ptr<overlay::Homography>       m_homography;
     std::unique_ptr<overlay::HeatmapRenderer>  m_heatmapRenderer;
 
@@ -349,16 +349,13 @@ private:
     QThread* m_datasetThread = nullptr;
     features::DatasetCreator* m_datasetCreator = nullptr;  // lives on m_datasetThread
 
-    // ── iBOM overlay rendering (off-GUI-thread, change-gated) ──────────────
+    // ── iBOM overlay render cache (change-gated) ───────────────────────────
     // The overlay is rebuilt only when one of its inputs changes (homography,
-    // selection, placed set, toggles, colors, frame size, loaded project), and
-    // the heavy QPainter work runs on a QtConcurrent worker delivered back via
-    // this watcher. m_overlayInFlight prevents the GUI thread from queuing a new
-    // render before the previous one finished. The m_ovSig* fields are the
-    // signature of the inputs the last dispatched render was built from.
-    QFutureWatcher<QImage>* m_overlayWatcher = nullptr;
-    bool        m_overlayInFlight = false;
-    bool        m_overlayValid    = false;   // false until first render dispatched
+    // selection, placed set, toggles, colors, frame size, loaded project). It is
+    // rendered synchronously on the GUI thread and pushed with the frame so it
+    // stays locked to the camera image. The m_ovSig* fields are the signature of
+    // the inputs the cached overlay was last rendered from.
+    bool        m_overlayValid    = false;   // false until first render
     cv::Mat     m_ovSigHomography;
     std::string m_ovSigSelected;
     std::size_t m_ovSigPlacedHash = 0;

@@ -410,23 +410,6 @@ void Application::createSubsystems()
     QMetaObject::invokeMethod(m_trackingWorker, "setHybridCorrection", Qt::QueuedConnection,
         Q_ARG(bool, m_config->hybridDriftCorrection()));
 
-    // Overlay rendering worker: the iBOM overlay (pads/silk/labels) is built on
-    // a QtConcurrent thread, off the GUI thread (see the frameReady dispatch +
-    // overlay::OverlayRenderer::render). The watcher delivers the finished
-    // QImage back on the GUI thread; m_overlayInFlight gates re-dispatch so the
-    // GUI thread can't pile up renders.
-    m_overlayWatcher = new QFutureWatcher<QImage>(this);
-    connect(m_overlayWatcher, &QFutureWatcher<QImage>::finished, this, [this]() {
-        m_overlayInFlight = false;
-        // Drop stale results: the homography may have become invalid (Reset
-        // Alignment) while this render was running — the else-branch already
-        // cleared the overlay in that case, so don't re-show a stale one.
-        if (!m_ibomProject || !m_homography || !m_homography->isValid()) return;
-        const QImage img = m_overlayWatcher->result();
-        if (!img.isNull())
-            m_mainWindow->cameraView()->setOverlayImage(img);
-    });
-
     // Dataset capture worker on its own thread — JPEG writes + label
     // projection must never block the GUI (same pattern as tracking).
     m_datasetThread = new QThread(this);
@@ -1553,13 +1536,13 @@ void Application::wireCameraSignals()
         if (m_remoteView && m_remoteView->isRunning() && m_remoteView->clientCount() > 0)
             m_remoteView->pushFrame(display);
 
-        // ── iBOM overlay: render off the GUI thread, only when it changed ───
-        // The full-resolution vector overlay used to be rebuilt on the GUI
-        // thread every frame. Now: render only when an input changes
-        // (homography, selection, placed set, toggles, colors, size, project),
-        // and run the heavy QPainter work on a QtConcurrent worker — the GUI
-        // thread only snapshots cheap value copies and dispatches. Frustum
-        // culling + the draw loop live in overlay::OverlayRenderer::render().
+        // ── iBOM overlay: render synchronously, only when it changed ────────
+        // Rendered on the GUI thread and pushed together with the camera frame
+        // so the overlay stays locked to the image — an async (QtConcurrent)
+        // render decoupled the two timelines and caused visible flicker/lag in
+        // live tracking. Still gated on change (static/paused mode skips it) and
+        // frustum-culled in overlay::OverlayRenderer::render(), which keeps the
+        // per-frame cost low even when live tracking re-renders every frame.
         if (m_ibomProject && m_homography && m_homography->isValid()) {
             const bool drawPads = m_config->showPads();
             const bool drawSilk = m_config->showSilkscreen();
@@ -1595,9 +1578,7 @@ void Application::wireCameraSignals()
                 || m_ibomProject.get() != m_ovSigProject
                 || homographyChanged;
 
-            // Skip if nothing changed, or if a render is still in flight (the
-            // signature stays stale so the next free frame picks up the latest).
-            if (needsRender && !m_overlayInFlight) {
+            if (needsRender) {
                 overlay::OverlayInputs in;
                 in.project     = m_ibomProject;
                 in.homo        = *m_homography;
@@ -1616,11 +1597,9 @@ void Application::wireCameraSignals()
                 in.drawPads = drawPads;
                 in.drawSilk = drawSilk;
 
-                m_overlayInFlight = true;
-                m_overlayWatcher->setFuture(
-                    QtConcurrent::run([in]() { return overlay::OverlayRenderer::render(in); }));
+                m_mainWindow->cameraView()->setOverlayImage(overlay::OverlayRenderer::render(in));
 
-                // Commit the signature now (this exact state is being rendered).
+                // Remember the inputs this overlay was rendered from.
                 m_overlayValid       = true;
                 m_ovSigSize          = curSize;
                 m_ovSigPads          = drawPads;
