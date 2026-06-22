@@ -1716,7 +1716,11 @@ void Application::wireCameraSignals()
                 || m_ibomProject.get() != m_ovSigProject
                 || homographyChanged;
 
-            if (needsRender) {
+            // Cap the re-render rate (~25 fps): a fast tracker updates the
+            // homography every frame, but rendering the (all-visible) board's
+            // overlay every frame saturates the GUI thread. Skipping leaves the
+            // signature stale so the next eligible frame renders the latest.
+            if (needsRender && (nowMs - m_lastOverlayRenderMs) >= 40) {
                 overlay::OverlayInputs in;
                 in.project     = m_ibomProject;
                 in.homo        = *m_homography;
@@ -1735,9 +1739,14 @@ void Application::wireCameraSignals()
                 in.drawPads = drawPads;
                 in.drawSilk = drawSilk;
 
-                m_mainWindow->cameraView()->setOverlayImage(overlay::OverlayRenderer::render(in));
-                spdlog::debug("[overlay] re-rendered {}x{} (pads={} silk={} sel='{}' placed={} comps={})",
-                              curSize.width(), curSize.height(), drawPads, drawSilk,
+                const auto t0 = std::chrono::steady_clock::now();
+                QImage ov = overlay::OverlayRenderer::render(in);
+                const double renderMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t0).count();
+                m_mainWindow->cameraView()->setOverlayImage(ov);
+                m_lastOverlayRenderMs = nowMs;
+                spdlog::debug("[overlay] re-rendered {}x{} in {:.1f}ms (pads={} silk={} sel='{}' placed={} comps={})",
+                              curSize.width(), curSize.height(), renderMs, drawPads, drawSilk,
                               m_selectedRef, m_placedRefs.size(), m_ibomProject->components.size());
 
                 // Remember the inputs this overlay was rendered from.

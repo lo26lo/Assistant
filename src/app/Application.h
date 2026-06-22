@@ -234,6 +234,10 @@ private:
 
     // Focus assist — last time the sharpness metric was computed (throttle).
     qint64 m_lastSharpnessMs = 0;
+    // Overlay re-render throttle — caps the (expensive, all-visible-board)
+    // overlay render rate so a fast tracker (optical flow at camera rate) can't
+    // saturate the GUI thread. The camera video still updates every frame.
+    qint64 m_lastOverlayRenderMs = 0;
     // Depth (RealSense) — last time distance/scale was computed (throttle).
     qint64 m_lastDepthMs = 0;
     // Live view mode: false = color image, true = colorized depth map.

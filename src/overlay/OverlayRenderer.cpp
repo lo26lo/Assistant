@@ -20,7 +20,12 @@ QImage OverlayRenderer::render(const OverlayInputs& in)
     QImage overlay(in.size, QImage::Format_ARGB32_Premultiplied);
     overlay.fill(Qt::transparent);
     QPainter painter(&overlay);
-    painter.setRenderHint(QPainter::Antialiasing, true);
+    // Shape antialiasing OFF: on a board that fills the frame this draws
+    // thousands of pad/silk polygons every frame, and AA software fill is
+    // several times slower — it was the GUI-thread bottleneck (overlay render
+    // taking ~1s). Keep text AA so labels stay legible.
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
 
     const QFont selectedLabelFont("Segoe UI", 9, QFont::Bold);
     const QFont normalLabelFont("Segoe UI", 7, QFont::Normal);
