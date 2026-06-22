@@ -153,6 +153,12 @@ public:
     int remoteViewPort() const { return m_remoteViewPort; }
     void setRemoteViewPort(int port) { m_remoteViewPort = port; }
 
+    /// Verbose debug logging: when true, the logger level is lowered to trace so
+    /// every spdlog::debug/trace call is written to the log file (toggled from
+    /// the Dev menu; persisted so it survives restarts).
+    bool verboseLogging() const { return m_verboseLogging; }
+    void setVerboseLogging(bool v) { m_verboseLogging = v; }
+
     // --- Live Tracking ---
     int  trackingIntervalMs() const { return m_trackingIntervalMs; }
     void setTrackingIntervalMs(int ms) { m_trackingIntervalMs = ms; }
@@ -354,6 +360,7 @@ private:
     bool m_voiceControl    = false;
     bool m_remoteView      = false;
     int  m_remoteViewPort  = 8080;
+    bool m_verboseLogging  = false;
 
     // Live Tracking
     int    m_trackingIntervalMs = 200;

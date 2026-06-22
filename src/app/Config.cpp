@@ -175,6 +175,7 @@ bool Config::load(const std::string& path)
             m_voiceControl   = feat.value("voice_control", m_voiceControl);
             m_remoteView     = feat.value("remote_view", m_remoteView);
             m_remoteViewPort = feat.value("remote_view_port", m_remoteViewPort);
+            m_verboseLogging = feat.value("verbose_logging", m_verboseLogging);
         }
 
         // Tracking
@@ -344,7 +345,8 @@ bool Config::save(const std::string& path) const
         j["features"] = {
             {"voice_control",    m_voiceControl},
             {"remote_view",      m_remoteView},
-            {"remote_view_port", m_remoteViewPort}
+            {"remote_view_port", m_remoteViewPort},
+            {"verbose_logging",  m_verboseLogging}
         };
 
         // Tracking

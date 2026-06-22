@@ -151,6 +151,15 @@ bool Application::initialize()
     // Wire signals between subsystems
     connectSignals();
 
+    // Apply persisted verbose-logging setting (Dev menu) at startup and reflect
+    // it in the menu checkmark.
+    if (m_config->verboseLogging()) {
+        utils::Logger::setLevel(spdlog::level::trace);
+        spdlog::info("Verbose debug logging restored from config — log file: {}",
+                     utils::Logger::logFilePath());
+    }
+    m_mainWindow->setVerboseLoggingChecked(m_config->verboseLogging());
+
     // Reflect persisted AI settings in the control panel (before initializeAI
     // so the spinner already shows the threshold the detector will use).
     m_mainWindow->controlPanel()->setConfidenceThreshold(m_config->detectionConfidence());
@@ -1246,6 +1255,44 @@ void Application::updateReanchorTimer()
     }
 }
 
+void Application::logFullState()
+{
+    const Config& c = *m_config;
+    spdlog::info("================= FULL STATE DUMP =================");
+    spdlog::info("[camera]   backend={} activeBackend={} index={} {}x{}@{}fps hwDecode={} capturing={} depthDistMm={:.1f}",
+                 static_cast<int>(c.cameraBackend()), static_cast<int>(m_activeBackend),
+                 c.cameraIndex(), c.cameraWidth(), c.cameraHeight(), c.cameraFps(),
+                 c.cameraHwDecode(), (m_camera && m_camera->isCapturing()), m_lastDepthDistanceMm);
+    spdlog::info("[scale]    method={} opticalMult={:.3f} basePxPerMm={:.3f} curPxPerMm={:.3f}",
+                 static_cast<int>(c.scaleMethod()), c.opticalMultiplier(),
+                 m_basePixelsPerMm, m_currentPixelsPerMm);
+    spdlog::info("[calib]    isCalibrated={} rms={:.3f}",
+                 (m_calibration && m_calibration->isCalibrated()),
+                 (m_calibration ? m_calibration->rmsError() : -1.0));
+    spdlog::info("[track]    live={} interval={}ms orbKp={} minMatch={} lowe={:.2f} ransac={:.1f} downscale={:.2f} model={}",
+                 m_liveMode, c.trackingIntervalMs(), c.orbKeypoints(), c.minMatchCount(),
+                 c.matchDistanceRatio(), c.ransacThreshold(), c.trackingDownscale(), c.trackingModel());
+    spdlog::info("[track]    oneEuroMinCutoff={:.2f} oneEuroBeta={:.3f} clahe={} opticalFlow={} gpuMode={} incremental={} reanchorDriftPx={:.1f} hybrid={}",
+                 c.oneEuroMinCutoff(), c.oneEuroBeta(), c.trackingClahe(), c.trackingOpticalFlow(),
+                 c.trackingGpuMode(), c.microscopeIncremental(), c.microscopeReanchorDriftPx(),
+                 c.hybridDriftCorrection());
+    spdlog::info("[reanchor] enabled={} interval={:.1f}s minScore={:.2f} failStreak={}",
+                 c.reanchorEnabled(), c.reanchorIntervalS(), c.reanchorMinScore(), m_reanchorFailStreak);
+    spdlog::info("[overlay]  pads={} silk={} fab={} opacity={:.2f} placedOpacity={:.2f} selOutlineW={:.1f} colors[sel={} placed={} normal={}]",
+                 c.showPads(), c.showSilkscreen(), c.showFabrication(), c.overlayOpacity(),
+                 c.placedOpacity(), c.selectedOutlineWidth(), c.selectedColorHex(),
+                 c.placedColorHex(), c.normalColorHex());
+    spdlog::info("[ai]       enabled={} model='{}' confidence={:.2f} ready={}",
+                 c.aiEnabled(), c.detectorModel(), c.detectionConfidence(), m_aiReady.load());
+    spdlog::info("[state]    ibomLoaded={} components={} homographyValid={} selectedRef='{}' placed={} depthView={} cloudView={}",
+                 static_cast<bool>(m_ibomProject),
+                 (m_ibomProject ? m_ibomProject->components.size() : 0u),
+                 (m_homography && m_homography->isValid()), m_selectedRef, m_placedRefs.size(),
+                 m_depthViewMode, m_pointCloudMode);
+    spdlog::info("[log]      verbose={} file={}", c.verboseLogging(), utils::Logger::logFilePath());
+    spdlog::info("==================================================");
+}
+
 void Application::refreshCameraDeviceList()
 {
     QStringList cameraNames;
@@ -1417,11 +1464,14 @@ void Application::connectSignals()
     // ── Tracking worker → homography update on GUI thread ───────
     if (m_trackingWorker) {
         connect(m_trackingWorker, &overlay::TrackingWorker::homographyUpdated,
-                this, [this](cv::Mat combined, int /*inliers*/, double /*reprojErr*/) {
+                this, [this](cv::Mat combined, int inliers, double reprojErr) {
             if (!m_liveMode || combined.empty() || !m_homography) return;
             m_homography->setMatrix(combined);
             updateDynamicScale();
             m_mainWindow->boardMinimap()->update();
+            // Tracking-quality stream (visible only with verbose logging on).
+            spdlog::debug("[track] homography applied: inliers={} reprojErr={:.2f}px scale={:.3f}px/mm",
+                          inliers, reprojErr, m_currentPixelsPerMm);
         }, Qt::QueuedConnection);
 
         connect(m_trackingWorker, &overlay::TrackingWorker::trackingError,
@@ -1686,6 +1736,9 @@ void Application::wireCameraSignals()
                 in.drawSilk = drawSilk;
 
                 m_mainWindow->cameraView()->setOverlayImage(overlay::OverlayRenderer::render(in));
+                spdlog::debug("[overlay] re-rendered {}x{} (pads={} silk={} sel='{}' placed={} comps={})",
+                              curSize.width(), curSize.height(), drawPads, drawSilk,
+                              m_selectedRef, m_placedRefs.size(), m_ibomProject->components.size());
 
                 // Remember the inputs this overlay was rendered from.
                 m_overlayValid       = true;
@@ -2166,6 +2219,7 @@ void Application::connectControlSignals()
         spdlog::info("Settings applied (camera={}, ORB={}, interval={}ms, RANSAC={:.1f}, downscale={:.2f})",
                      newIdx, m_config->orbKeypoints(), m_config->trackingIntervalMs(),
                      m_config->ransacThreshold(), m_config->trackingDownscale());
+        if (m_config->verboseLogging()) logFullState();  // full audit trail when debugging
         // Sync ControlPanel combo to new camera index
         auto* cp = m_mainWindow->controlPanel();
         if (cp && newIdx >= 0)
@@ -3028,6 +3082,24 @@ void Application::connectControlSignals()
         m_calibMonitor->show();
         m_calibMonitor->raise();
         m_calibMonitor->activateWindow();
+    });
+
+    // ── Dev: verbose logging toggle + on-demand full state dump ──────
+    connect(m_mainWindow.get(), &gui::MainWindow::verboseLoggingToggled, this, [this](bool on) {
+        utils::Logger::setLevel(on ? spdlog::level::trace : spdlog::level::info);
+        m_config->setVerboseLogging(on);
+        m_config->save();
+        spdlog::info("Verbose debug logging {} — log file: {}",
+                     on ? "ENABLED" : "disabled", utils::Logger::logFilePath());
+        m_mainWindow->updateStatusMessage(
+            on ? tr("Verbose debug logging ON — %1")
+                     .arg(QString::fromStdString(utils::Logger::logFilePath()))
+               : tr("Verbose debug logging off"));
+        if (on) logFullState();
+    });
+    connect(m_mainWindow.get(), &gui::MainWindow::dumpStateRequested, this, [this]() {
+        logFullState();
+        m_mainWindow->updateStatusMessage(tr("Full state dumped to the log file"));
     });
 
     spdlog::info("Signal/slot connections established, FPS timer started.");

@@ -318,6 +318,8 @@ bool TrackingWorker::emitHomography(const cv::Mat& rawH, int inliers, double rep
     // flickering the state on a single bad frame.
     if (inliers < m_minMatchCount) {
         if (++m_lowQualityFrames >= 3) setState(State::Lost);
+        spdlog::debug("[track] HELD low-quality: inliers={}/{} reproj={:.2f}px lowQ={}",
+                      inliers, m_minMatchCount, reprojErr, m_lowQualityFrames);
         return false;
     }
     m_lowQualityFrames = 0;
@@ -329,6 +331,8 @@ bool TrackingWorker::emitHomography(const cv::Mat& rawH, int inliers, double rep
     const double disp = cornerDisp(rawH, m_lastEmittedH);
     if (disp >= 0.0 && disp < m_staticThreshPx) {
         ++m_staticFrames;
+        spdlog::debug("[track] HELD static-scene: cornerDisp={:.2f}px < {:.2f} (staticFrames={})",
+                      disp, m_staticThreshPx, m_staticFrames);
         return false;
     }
     m_staticFrames = 0;
@@ -336,6 +340,8 @@ bool TrackingWorker::emitHomography(const cv::Mat& rawH, int inliers, double rep
     const cv::Mat smoothed = smoothHomography(rawH);
     m_lastEmittedH = smoothed.clone();
     emit homographyUpdated(smoothed, inliers, reprojErr);
+    spdlog::debug("[track] EMIT: inliers={} reproj={:.2f}px cornerDisp={:.2f}px",
+                  inliers, reprojErr, disp);
     return true;
 }
 

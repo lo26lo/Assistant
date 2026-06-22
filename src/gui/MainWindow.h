@@ -53,6 +53,9 @@ public:
     void showBomPanel();
 
     void setDarkMode(bool dark);
+    /// Reflect the persisted verbose-logging state in the Dev menu checkmark
+    /// (without re-emitting the toggle). Called by Application at startup.
+    void setVerboseLoggingChecked(bool on);
     void updateFpsDisplay(double fps);
     void updateStatusMessage(const QString& msg);
     void updateAiStatus(bool ready, const QString& message);
@@ -92,6 +95,10 @@ signals:
     void fovMeasureRequested();
     /// Dev menu: open the live calibration monitor pop-up.
     void calibrationMonitorRequested();
+    /// Dev menu: toggle verbose debug logging (every spdlog::debug → log file).
+    void verboseLoggingToggled(bool on);
+    /// Dev menu: dump the full current config + runtime state to the log.
+    void dumpStateRequested();
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -156,6 +163,7 @@ private:
     QAction*  m_actCalibrate  = nullptr;
     QAction*  m_actInspect    = nullptr;
     QAction*  m_actAnchor     = nullptr;
+    QAction*  m_actVerboseLog = nullptr;
     QAction*  m_actExport     = nullptr;
     QAction*  m_actSettings   = nullptr;
     QAction*  m_actDarkMode   = nullptr;

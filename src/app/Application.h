@@ -171,6 +171,11 @@ private:
     /// Push the current camera/calibration state into the live calibration
     /// monitor (no-op if the monitor was never opened).
     void pushCalibrationMonitorState();
+    /// Write a full snapshot of the configuration + runtime state to the log
+    /// (every tunable: camera, tracking, optical flow, re-anchor, overlay,
+    /// scale, calibration, AI, alignment). Logged at info so it is always
+    /// recorded; toggled verbose logging adds the per-frame debug stream.
+    void logFullState();
     void takeScreenshot();
     void updateDynamicScale();
     void startInspection();
