@@ -11,6 +11,10 @@
 
 ---
 
+## État actuel — au 2026-06-20 (Case Settings pour le re-ancrage périodique)
+
+> **2026-06-20 (suite 97)** : **UI Settings pour le plan B**. Ajout dans `SettingsDialog` onglet Tracking : case **« Auto re-anchor on PCB outline (corrects drift) »** (`m_autoReanchorEnabled` → `reanchor_enabled`) + spin **« Auto re-anchor interval »** (0.5–30 s, `m_autoReanchorInterval` → `reanchor_interval_s`), avec tooltips (dont la limite « bords du PCB visibles, pas le microscope zoomé »). Noms distincts du `m_reanchorDrift` préexistant (qui est le seuil de dérive du **mode incrémental microscope**, feature différente). Load/save câblés ; à l'Apply, `MainWindow::settingsChanged` → `Application::updateReanchorTimer()` (déjà connecté suite 96) démarre/arrête le timer et applique l'intervalle. `reanchor_min_score` reste réglable via config.json (pas de spin, défaut 0.5). Fichiers : `src/gui/SettingsDialog.{h,cpp}`. ⚠️ Non compilé/testé ici. **À valider** : Settings → Tracking montre la case + l'intervalle ; cocher → re-ancrage auto actif sans éditer le JSON.
+
 ## État actuel — au 2026-06-20 (Plan B : re-ancrage géométrique périodique BoardLocator, sans modèle)
 
 > **2026-06-20 (suite 96)** : **implémentation du « plan B » — re-ancrage géométrique périodique** (vers un tracking hybride « Yollo-like » sans modèle IA). Idée : pendant le live tracking, re-localiser périodiquement le contour du PCB (`BoardLocator`, pur-CV, déjà utilisé par Auto-Align) et **recaler l'homographie** pour annuler la dérive accumulée — l'optical flow + ORB assurent la fluidité entre deux re-ancrages.

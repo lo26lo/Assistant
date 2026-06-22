@@ -89,6 +89,8 @@ private:
     QComboBox*      m_trackingGpuMode   = nullptr;
     QCheckBox*      m_microscopeIncremental = nullptr;
     QDoubleSpinBox* m_reanchorDrift     = nullptr;
+    QCheckBox*      m_autoReanchorEnabled  = nullptr;  // BoardLocator periodic re-anchor
+    QDoubleSpinBox* m_autoReanchorInterval = nullptr;
 
     // AI
     QLineEdit*      m_modelsPath     = nullptr;

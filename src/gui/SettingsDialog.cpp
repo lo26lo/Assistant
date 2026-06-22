@@ -325,6 +325,24 @@ void SettingsDialog::createTrackingTab(QTabWidget* tabs)
            "and invites a re-anchor."));
     form->addRow(tr("Re-anchor drift:"), m_reanchorDrift);
 
+    m_autoReanchorEnabled = new QCheckBox(
+        tr("Auto re-anchor on PCB outline (corrects drift)"));
+    m_autoReanchorEnabled->setToolTip(
+        tr("During live tracking, periodically re-locate the PCB outline "
+           "(BoardLocator) and re-anchor the overlay to cancel accumulated drift. "
+           "Only acts when the located pose disagrees enough with the current one, "
+           "so a healthy track is left undisturbed. Needs the board edges visible "
+           "(wide field / D405) — not the microscope zoomed-in case."));
+    form->addRow(QString(), m_autoReanchorEnabled);
+
+    m_autoReanchorInterval = new QDoubleSpinBox;
+    m_autoReanchorInterval->setRange(0.5, 30.0);
+    m_autoReanchorInterval->setSingleStep(0.5);
+    m_autoReanchorInterval->setSuffix(" s");
+    m_autoReanchorInterval->setToolTip(
+        tr("Seconds between automatic re-anchor attempts."));
+    form->addRow(tr("Auto re-anchor interval:"), m_autoReanchorInterval);
+
     tabs->addTab(page, tr("Tracking"));
 }
 
@@ -524,6 +542,8 @@ void SettingsDialog::loadFromConfig()
     }
     m_microscopeIncremental->setChecked(m_config.microscopeIncremental());
     m_reanchorDrift->setValue(m_config.microscopeReanchorDriftPx());
+    m_autoReanchorEnabled->setChecked(m_config.reanchorEnabled());
+    m_autoReanchorInterval->setValue(m_config.reanchorIntervalS());
 
     // AI
     m_modelsPath->setText(QString::fromStdString(m_config.modelsPath()));
@@ -615,6 +635,8 @@ void SettingsDialog::accept()
     m_config.setTrackingGpuMode(m_trackingGpuMode->currentData().toInt());
     m_config.setMicroscopeIncremental(m_microscopeIncremental->isChecked());
     m_config.setMicroscopeReanchorDriftPx(m_reanchorDrift->value());
+    m_config.setReanchorEnabled(m_autoReanchorEnabled->isChecked());
+    m_config.setReanchorIntervalS(m_autoReanchorInterval->value());
 
     // AI
     m_config.setModelsPath(m_modelsPath->text().toStdString());
