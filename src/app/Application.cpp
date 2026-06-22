@@ -27,6 +27,7 @@
 #include "overlay/HeatmapRenderer.h"
 #include "overlay/TrackingWorker.h"
 #include "overlay/BoardLocator.h"
+#include "overlay/ComponentReanchor.h"
 #include "features/PickAndPlace.h"
 #include "features/Measurement.h"
 #include "features/SnapshotHistory.h"
@@ -452,19 +453,28 @@ void Application::createSubsystems()
             Q_ARG(QString, QString::fromStdString(rulesPath.string())));
     }
 
-    // Periodic geometric re-anchor timer (plan B): fires BoardLocator (silent
-    // autoAlignBoard) during live tracking to correct accumulated drift. The
-    // timeout re-checks all conditions; updateReanchorTimer() starts/stops it
-    // and sets the interval from Config.
+    // Periodic re-anchor timer (plan B): during live tracking, correct
+    // accumulated drift. Two strategies, the better one chosen at each tick:
+    //   • a component model is loaded  -> componentReanchor() (matches AI
+    //     detections to iBOM positions; works when the board fills the frame);
+    //   • otherwise                    -> autoAlignBoard() (geometric outline,
+    //     only works when the whole board outline is visible).
+    // The timeout re-checks all conditions; updateReanchorTimer() starts/stops
+    // it and sets the interval from Config.
     m_reanchorTimer = new QTimer(this);
     m_reanchorTimer->setObjectName("ReanchorTimer");
     connect(m_reanchorTimer, &QTimer::timeout, this, [this]() {
         if (!m_config->reanchorEnabled() || !m_liveMode || !m_ibomProject || m_autoAligning)
             return;
-        // Back off when BoardLocator keeps missing (e.g. the board fills the
-        // frame, so the outline can't be separated): skip ticks in proportion
-        // to the failure streak instead of running Canny + orientation scoring
-        // every interval forever.
+        // Back off when the geometric path keeps missing (e.g. the board fills
+        // the frame, so the outline can't be separated): skip ticks in
+        // proportion to the failure streak instead of running Canny +
+        // orientation scoring every interval forever. The component path does
+        // not have this limitation, so it ignores the back-off.
+        if (componentDetector()) {
+            componentReanchor(/*silent=*/true);
+            return;
+        }
         if (m_reanchorFailStreak > 0
             && (++m_reanchorTickCount % (m_reanchorFailStreak + 1)) != 0)
             return;
@@ -1240,6 +1250,129 @@ void Application::autoAlignBoard(bool silent)
     watcher->setFuture(QtConcurrent::run([colorCopy, depthCopy, project, expectedPixelsPerMm]() {
         return overlay::BoardLocator::locate(colorCopy, depthCopy, *project, expectedPixelsPerMm,
                                               ibom::Layer::Front);
+    }));
+}
+
+void Application::componentReanchor(bool silent)
+{
+    if (m_autoAligning) return;  // shares the alignment guard with autoAlignBoard
+    auto* detector = componentDetector();
+    if (!detector) {
+        if (!silent)
+            m_mainWindow->updateStatusMessage(
+                tr("Component re-anchor: no detector loaded (need a model in models/)"));
+        return;
+    }
+    if (!m_lastColorFrame || m_lastColorFrame->empty()) {
+        if (!silent)
+            m_mainWindow->updateStatusMessage(tr("Component re-anchor: no camera frame yet"));
+        return;
+    }
+    if (!m_ibomProject || !m_homography || !m_homography->isValid()) {
+        if (!silent)
+            m_mainWindow->updateStatusMessage(
+                tr("Component re-anchor: align the board once first (need a current pose)"));
+        return;
+    }
+
+    m_autoAligning = true;
+    if (!silent)
+        m_mainWindow->updateStatusMessage(tr("Component re-anchor: detecting components..."));
+
+    const cv::Mat colorCopy = m_lastColorFrame->clone();
+    const std::shared_ptr<const IBomProject> project = m_ibomProject;
+    // Snapshot the current pose so the worker thread reads a stable matrix even
+    // if live tracking updates m_homography meanwhile.
+    overlay::Homography priorPose;
+    priorPose.setMatrix(m_homography->matrix().clone());
+    const uint64_t dispatchEpoch = ++m_alignmentEpoch;
+
+    auto* watcher = new QFutureWatcher<overlay::ComponentReanchorResult>(this);
+    connect(watcher, &QFutureWatcher<overlay::ComponentReanchorResult>::finished, this,
+            [this, watcher, project, dispatchEpoch, silent]() {
+        const overlay::ComponentReanchorResult result = watcher->result();
+        watcher->deleteLater();
+        m_autoAligning = false;
+
+        if (dispatchEpoch != m_alignmentEpoch) {
+            spdlog::info("Component re-anchor: discarding stale result");
+            return;
+        }
+        if (!result.found) {
+            if (silent) {
+                m_reanchorFailStreak = std::min(m_reanchorFailStreak + 1, 20);
+                spdlog::debug("Component re-anchor: {} (streak {})",
+                              result.message, m_reanchorFailStreak);
+            } else {
+                m_mainWindow->updateStatusMessage(
+                    tr("Component re-anchor failed: %1")
+                        .arg(QString::fromStdString(result.message)));
+                spdlog::warn("Component re-anchor failed: {}", result.message);
+            }
+            return;
+        }
+        m_reanchorFailStreak = 0;
+
+        // Drift gate (silent only): skip if the new pose barely moves the board
+        // corners, to leave healthy tracking undisturbed (a re-anchor resets the
+        // tracking reference and would otherwise stutter).
+        const auto& bb = project->boardInfo.boardBBox;
+        const std::vector<cv::Point2f> pcbCorners = {
+            {static_cast<float>(bb.minX), static_cast<float>(bb.minY)},
+            {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)},
+            {static_cast<float>(bb.maxX), static_cast<float>(bb.maxY)},
+            {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
+        };
+        std::vector<cv::Point2f> newImg;
+        cv::perspectiveTransform(pcbCorners, newImg, result.homography);
+        if (silent && m_homography && m_homography->isValid()) {
+            double maxShift = 0.0;
+            for (size_t i = 0; i < 4; ++i) {
+                const auto cur = m_homography->pcbToImage(pcbCorners[i]);
+                maxShift = std::max(maxShift,
+                    cv::norm(cv::Point2f(cur.x - newImg[i].x, cur.y - newImg[i].y)));
+            }
+            constexpr double kReanchorMinShiftPx = 12.0;
+            if (maxShift < kReanchorMinShiftPx) {
+                spdlog::debug("Component re-anchor: pose within {:.0f}px (shift {:.1f}), skipping",
+                              kReanchorMinShiftPx, maxShift);
+                return;
+            }
+            spdlog::info("Component re-anchor: correcting drift (shift {:.1f}px, {})",
+                         maxShift, result.message);
+        }
+
+        m_homography->setMatrix(result.homography);
+        m_baseHomography = m_homography->matrix().clone();
+        if (m_mainWindow->boardMinimap())
+            m_mainWindow->boardMinimap()->update();
+
+        // Refresh px/mm from the new pose (mirrors autoAlignBoard()).
+        const double pcbW = bb.width();
+        const double pixW = cv::norm(newImg[0] - newImg[1]);
+        if (pcbW > 0.0) {
+            m_basePixelsPerMm = pixW / pcbW;
+            m_currentPixelsPerMm = m_basePixelsPerMm;
+            if (auto* sp = m_mainWindow->statsPanel())
+                sp->setScale(m_currentPixelsPerMm);
+        }
+
+        if (m_trackingWorker)
+            QMetaObject::invokeMethod(m_trackingWorker, "resetReference", Qt::QueuedConnection);
+
+        if (silent) {
+            spdlog::info("Component re-anchor applied ({})", result.message);
+            return;
+        }
+        reportAlignmentResult(
+            tr("Component re-anchor: %1").arg(QString::fromStdString(result.message)));
+        spdlog::info("Component re-anchor succeeded ({})", result.message);
+    });
+
+    watcher->setFuture(QtConcurrent::run([detector, colorCopy, project, priorPose]() {
+        const std::vector<ai::Detection> detections = detector->detect(colorCopy);
+        return overlay::ComponentReanchor::estimate(
+            detections, *project, priorPose, ibom::Layer::Front);
     }));
 }
 
@@ -3109,6 +3242,10 @@ void Application::connectControlSignals()
     connect(m_mainWindow.get(), &gui::MainWindow::dumpStateRequested, this, [this]() {
         logFullState();
         m_mainWindow->updateStatusMessage(tr("Full state dumped to the log file"));
+    });
+
+    connect(m_mainWindow.get(), &gui::MainWindow::componentReanchorRequested, this, [this]() {
+        componentReanchor(/*silent=*/false);
     });
 
     spdlog::info("Signal/slot connections established, FPS timer started.");

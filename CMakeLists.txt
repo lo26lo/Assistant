@@ -160,6 +160,7 @@ set(SOURCES
     src/overlay/HeatmapRenderer.cpp
     src/overlay/TrackingWorker.cpp
     src/overlay/BoardLocator.cpp
+    src/overlay/ComponentReanchor.cpp
 
     # GUI
     src/gui/MainWindow.cpp
@@ -235,6 +236,7 @@ set(HEADERS
     src/overlay/TrackingWorker.h
     src/overlay/OneEuroFilter.h
     src/overlay/BoardLocator.h
+    src/overlay/ComponentReanchor.h
 
     # GUI
     src/gui/MainWindow.h

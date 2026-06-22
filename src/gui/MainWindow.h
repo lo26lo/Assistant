@@ -99,6 +99,8 @@ signals:
     void verboseLoggingToggled(bool on);
     /// Dev menu: dump the full current config + runtime state to the log.
     void dumpStateRequested();
+    /// Dev menu: trigger an on-demand AI component-level re-anchor.
+    void componentReanchorRequested();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

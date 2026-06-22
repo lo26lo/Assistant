@@ -88,11 +88,14 @@ la finesse boîtier reste perdue. Acceptable pour B, pénalisant pour A.
 
 | Outil | Rôle | Statut |
 |---|---|---|
-| `scripts/fetch_roboflow_dataset.py` | Télécharger un dataset Roboflow (clé API) au format YOLO | ☐ à faire |
-| `scripts/remap_classes.py` | Remapper les classes d'un dataset (table YAML) → nos 14 / vers « présence » | ☐ à faire |
-| `scripts/merge_datasets.py` | Fusionner public + sortie `DatasetCreator` (splits train/val propres) | ☐ à faire |
+| `scripts/fetch_roboflow_dataset.py` | Télécharger un dataset Roboflow (clé API) au format YOLO | ✅ fait (B) |
+| `scripts/remap_classes.py` | Remapper les classes : `--presence` (B) ou `--map` → nos 14 (A) | ✅ fait |
+| `scripts/class_mapping.example.yaml` | Gabarit de mapping source→14 classes pour `--map` | ✅ fait |
+| `scripts/train_yolo.py` | Wrapper d'entraînement Ultralytics (n/s/m, imgsz 640) | ✅ fait |
 | `scripts/export_yolov8_onnx.py` | `.pt` → `.onnx` (opset 17, 640, FP32) | ✅ existe |
-| Stratégie re-ancrage composant (app) | Boîtes détectées ↔ positions iBOM → homographie | ☐ à faire (objectif B) |
+| `src/overlay/ComponentReanchor.{h,cpp}` | Boîtes détectées ↔ positions iBOM → homographie RANSAC | ✅ fait (B) |
+| Câblage app (`componentReanchor()` + timer + menu Dev) | Re-ancrage périodique IA + déclenchement manuel | ✅ fait (B) |
+| `scripts/merge_datasets.py` | Fusionner public + sortie `DatasetCreator` (splits propres) | ☐ à faire (A) |
 
 ---
 

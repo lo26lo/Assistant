@@ -365,6 +365,14 @@ void MainWindow::createMenuBar()
     });
 
     devMenu->addSeparator();
+    auto* actCompReanchor = devMenu->addAction(tr("Component re-anchor now"));
+    actCompReanchor->setToolTip(tr(
+        "Re-anchor the overlay by matching AI component detections to the iBOM "
+        "layout (requires a detector model in models/ and a current alignment). "
+        "Works when the board fills the frame, unlike geometric Auto-Align."));
+    connect(actCompReanchor, &QAction::triggered, this, &MainWindow::componentReanchorRequested);
+
+    devMenu->addSeparator();
     auto* actScript = devMenu->addAction(tr("How to run scripts/measure_fov.py…"));
     connect(actScript, &QAction::triggered, this, [this]() {
         emit fovMeasureRequested();  // opens the same dialog (shows script instructions)

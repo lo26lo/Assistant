@@ -143,6 +143,13 @@ private:
     ///                enough with the current pose to be worth correcting drift,
     ///                so healthy live tracking is left undisturbed.
     void autoAlignBoard(bool silent = false);
+    /// Component-level re-anchor (docs/AI_MODEL_DATASETS_PLAN.md, "Piste B"):
+    /// runs the AI component detector on the current frame, matches detections
+    /// to expected iBOM positions (current pose as prior) and re-fits the
+    /// homography via RANSAC. Works when the board fills the frame — exactly
+    /// where the geometric BoardLocator path (autoAlignBoard) fails. No-op
+    /// unless a detector is ready. @param silent as in autoAlignBoard().
+    void componentReanchor(bool silent = false);
     /// Start/stop/retune the periodic geometric re-anchor timer from Config
     /// (features: reanchor_enabled / reanchor_interval_s).
     void updateReanchorTimer();

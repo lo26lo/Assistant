@@ -1,0 +1,50 @@
+# =============================================================================
+#  class_mapping.example.yaml — gabarit pour scripts/remap_classes.py --map
+#
+#  Mappe les noms de classes SOURCE d'un dataset public vers NOS 14 classes
+#  (resistor, capacitor, inductor, diode, led, transistor_sot, ic_soic,
+#   ic_qfp, ic_qfn, ic_bga, connector, crystal, button, other).
+#
+#  Comment l'utiliser :
+#   1. Télécharge le dataset : scripts/fetch_roboflow_dataset.py ...
+#   2. Lance remap une 1re fois pour VOIR les noms source réels — ils sont
+#      imprimés par "[remap] N classes source : [...]".
+#   3. Copie ce fichier, complète/corrige les clés (= noms SOURCE exacts),
+#      puis : remap_classes.py datasets/xxx --map mon_mapping.yaml
+#
+#  Toute classe source absente de ce fichier tombe en `other`
+#  (ou est supprimée avec --drop-unmapped).
+#
+#  ⚠️ Les datasets publics distinguent rarement les boîtiers d'IC
+#  (SOIC/QFP/QFN/BGA). Si la source n'a qu'un "IC"/"chip" générique, mappe-le
+#  vers le boîtier MAJORITAIRE de tes cartes, ou laisse-le en `other` et
+#  compte sur le fine-tune DatasetCreator pour la finesse.
+#
+#  Les valeurs ci-dessous sont des EXEMPLES de noms source courants — à
+#  ajuster aux noms réels du dataset.
+# =============================================================================
+
+resistor:    resistor
+R:           resistor
+capacitor:   capacitor
+C:           capacitor
+cap:         capacitor
+inductor:    inductor
+L:           inductor
+diode:       diode
+D:           diode
+led:         led
+LED:         led
+transistor:  transistor_sot
+Q:           transistor_sot
+transistor_sot: transistor_sot
+ic:          other        # IC générique -> other (pas de boîtier connu)
+IC:          other
+chip:        other
+connector:   connector
+header:      connector
+J:           connector
+crystal:     crystal
+oscillator:  crystal
+button:      button
+switch:      button
