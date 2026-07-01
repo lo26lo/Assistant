@@ -119,18 +119,18 @@ Verdict par étape :
 
 ### P3 — architecture (les vrais « faire mieux » structurels)
 
-**F11 — Rendu overlay : re-tessellation vectorielle à chaque frame → passer au warp d'image.**
+**F11 — Rendu overlay : re-tessellation vectorielle à chaque frame → passer au warp d'image.** ✅ *Implémenté (suite 111) : `OverlayRenderer::renderBoardSpace()` (buffer espace-carte 2048 px, AA réactivé, re-rendu seulement sur sélection/placed/toggles/couleurs/projet) + warp projectif par QTransform dans `CameraView` (QPixmap pour le cache texture GL), transform recomposé chaque frame depuis l'homographie courante. Cap 40 ms et signature homographie supprimés. Labels désormais en espace carte (échelle AR avec le zoom).*
 Aujourd'hui chaque mise à jour d'homographie re-projette et re-dessine **tous les pads/segments/labels visibles** (`OverlayRenderer.cpp:38-158`), capé à 25 fps, AA off pour tenir le budget. Or l'overlay en **espace carte ne change presque jamais** (seulement sélection / placed / toggles / couleurs). QPainter supporte les `QTransform` **projectifs** : on peut rendre l'overlay **une fois** en espace carte (haute résolution, AA on !), puis à chaque paint le blitter avec `painter.setTransform(H)` — un seul warp d'image par frame, coût quasi constant, **toujours collé à l'homographie courante au moment du paint**.
 Gains : GUI thread quasi libéré (plus besoin du cap 40 ms ni de la signature homographie), AA réactivable (qualité visuelle ↑), et suppression structurelle du lag de rendu.
 Points à trancher : les labels seraient warpés avec la carte (style AR — probablement mieux au microscope) ou dessinés en passe séparée légère (upright, culling par taille projetée) ; résolution du buffer carte à dimensionner (~2× la taille projetée max).
 *Effort* : M-L. *Risque* : moyen (rendu — validation visuelle Jetson obligatoire).
 
-**F12 — Pas de timestamps de capture → ni resync overlay↔frame, ni prédiction possible.**
+**F12 — Pas de timestamps de capture → ni resync overlay↔frame, ni prédiction possible.** *(Partiellement adressé par F11 : le warp utilise la pose la plus fraîche au moment du paint, ce qui supprime le lag de rendu ; reste le lag d'estimation worker → lot E.)*
 L'homographie appliquée provient d'une frame **plus vieille** que celle affichée (latence worker + 2 queued hops + prochain frameReady) : en mouvement, l'overlay traîne systématiquement de 1-2 frames (33-66 ms) derrière la vidéo — une part du « ça suit mal » perçu qui ne vient **pas** de l'estimation. `FrameRef = shared_ptr<const cv::Mat>` ne porte aucun horodatage, donc on ne peut ni mesurer cette latence, ni la compenser.
 *Proposition (fondation)* : horodater à la capture (side-channel `frameReady(FrameRef, qint64 tCaptureNs)` — évite de toucher le métatype FrameRef). Ensuite, au choix : (a) prédiction vitesse-constante des coins sur la latence mesurée (anti-lag), (b) drop-if-stale dans le worker (renforce F6), (c) alimenter le 1€ avec les **vrais** dt de capture au lieu de `steady_clock::now()` au moment du traitement (`TrackingWorker.cpp:485-486`) — supprime le bruit de latence de traitement injecté dans le filtre.
 *Effort* : M (touche CameraCapture + signatures). *Risque* : moyen.
 
-**F13 — `Homography::pcbToImage` point-par-point : 2 vecteurs + `cv::perspectiveTransform` PAR POINT.**
+**F13 — `Homography::pcbToImage` point-par-point : 2 vecteurs + `cv::perspectiveTransform` PAR POINT.** ✅ *Implémenté (suite 111) : coefficients 3×3 cachés en double à chaque `setMatrix`/`compute`/`load`, application inline (produit + division perspective) pour les deux sens + vecteurs + `transformRect`. Test de parité vs `cv::perspectiveTransform` ajouté.*
 `Homography.cpp:56-64` — et l'overlay l'appelle des **milliers de fois par rendu** (2× par segment silk, 1× par label, via `transformRect` pour chaque pad). Chaque appel = 2 constructions de `std::vector`, wrapping Mat, dispatch OpenCV… pour un produit 3×3.
 *Proposition* : inliner la transformée (cacher les 9 coefficients en double au `setMatrix`, produit + division perspective à la main) → ~×50 sur cette portion, profite au rendu overlay, à la minimap, à `updateDynamicScale`, au hit-testing. Trivial à tester unitairement (`test_homography.cpp` existe déjà).
 *Effort* : S. *Risque* : faible.
@@ -153,7 +153,7 @@ Par lots compilables/validables en une session Jetson chacun, du meilleur ROI au
 |-----|---------|---------------|
 | **A (quick wins)** ✅ fait (suite 109) | F1 défauts + F5 badge + F2 masque fallback + F7 fix scale | Le comportement « bon » devient celui par défaut ; plus de perte définitive ; badge fiable |
 | **B (robustesse flow)** ✅ fait (suite 110) | F3 prune outliers + F9 FB-check + F4 anti-saut | Suivi flow durablement propre ; plus d'« explosions » d'overlay |
-| **C (perf affichage)** | F13 transform inline, puis F11 warp overlay (si la re-capture post-suite-100 montre encore un coût overlay significatif) | GUI thread libéré, AA réactivable, cap 40 ms supprimé |
+| **C (perf affichage)** ✅ fait (suite 111) | F13 transform inline, puis F11 warp overlay (si la re-capture post-suite-100 montre encore un coût overlay significatif) | GUI thread libéré, AA réactivable, cap 40 ms supprimé |
 | **D (fin de polish)** | F8 re-seed piloté attrition + F10 delta similarité + F6 backpressure | Micro-saut 1 Hz éliminé ; dérive microscope ralentie ; latence bornée |
 | **E (fondation)** | F12 timestamps capture (+ 1€ sur dt réels, prédiction optionnelle) | Overlay synchronisé/prédit — dernier verrou du « ça suit mal » |
 

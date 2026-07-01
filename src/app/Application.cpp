@@ -382,8 +382,8 @@ void Application::createSubsystems()
     spdlog::info("Creating IBomParser...");
     m_ibomParser = std::make_unique<IBomParser>();
 
-    // Homography (the overlay renderer is now a stateless free function,
-    // overlay::OverlayRenderer::render — no instance to create).
+    // Homography (the overlay renderer is a stateless free function,
+    // overlay::OverlayRenderer::renderBoardSpace — no instance to create).
     m_homography = std::make_unique<overlay::Homography>();
 
     // Heatmap renderer
@@ -1815,57 +1815,42 @@ void Application::wireCameraSignals()
         if (m_remoteView && m_remoteView->isRunning() && m_remoteView->clientCount() > 0)
             m_remoteView->pushFrame(display);
 
-        // ── iBOM overlay: render synchronously, only when it changed ────────
-        // Rendered on the GUI thread and pushed together with the camera frame
-        // so the overlay stays locked to the image — an async (QtConcurrent)
-        // render decoupled the two timelines and caused visible flicker/lag in
-        // live tracking. Still gated on change (static/paused mode skips it) and
-        // frustum-culled in overlay::OverlayRenderer::render(), which keeps the
-        // per-frame cost low even when live tracking re-renders every frame.
+        // ── iBOM overlay: board-space buffer + per-frame warp transform ─────
+        // The overlay is rendered ONCE in board (PCB) space — it only changes
+        // on selection/placed/toggle/color/project changes — and CameraView
+        // re-projects that buffer through the current homography (projective
+        // QTransform) on every paint. Pose updates therefore cost 9 doubles
+        // per frame instead of a full vector re-render: no more 25 fps cap,
+        // shape antialiasing is back on, and the overlay is always locked to
+        // the freshest pose at paint time (LIVE_TRACKING_ANALYSE F11).
         if (m_ibomProject && m_homography && m_homography->isValid()) {
             const bool drawPads = m_config->showPads();
             const bool drawSilk = m_config->showSilkscreen();
-            const bool drawFab  = m_config->showFabrication();
 
             std::size_t placedHash = m_placedRefs.size();
             for (const auto& r : m_placedRefs)
                 placedHash ^= std::hash<std::string>{}(r) + 0x9e3779b97f4a7c15ULL
                               + (placedHash << 6) + (placedHash >> 2);
 
-            const QSize    curSize(rgb.cols, rgb.rows);
-            const cv::Mat& curH = m_homography->matrix();
             const std::string colorKey =
                 m_config->selectedColorHex() + '|' + m_config->placedColorHex() + '|'
                 + m_config->normalColorHex();
             const float placedAlphaMul = std::clamp(m_config->placedOpacity(), 0.05f, 1.0f);
             const float selectedSilkW  = std::max(1.0f, m_config->selectedOutlineWidth());
 
-            const bool homographyChanged =
-                m_ovSigHomography.empty() || curH.empty()
-                || m_ovSigHomography.size() != curH.size()
-                || cv::norm(curH, m_ovSigHomography, cv::NORM_INF) > 1e-9;
-
             const bool needsRender =
                 !m_overlayValid
-                || curSize != m_ovSigSize
-                || drawPads != m_ovSigPads || drawSilk != m_ovSigSilk || drawFab != m_ovSigFab
+                || drawPads != m_ovSigPads || drawSilk != m_ovSigSilk
                 || m_selectedRef != m_ovSigSelected
                 || placedHash != m_ovSigPlacedHash
                 || colorKey != m_ovSigColorKey
                 || placedAlphaMul != m_ovSigPlacedOpacity
                 || selectedSilkW != m_ovSigSelectedSilkW
-                || m_ibomProject.get() != m_ovSigProject
-                || homographyChanged;
+                || m_ibomProject.get() != m_ovSigProject;
 
-            // Cap the re-render rate (~25 fps): a fast tracker updates the
-            // homography every frame, but rendering the (all-visible) board's
-            // overlay every frame saturates the GUI thread. Skipping leaves the
-            // signature stale so the next eligible frame renders the latest.
-            if (needsRender && (nowMs - m_lastOverlayRenderMs) >= 40) {
+            if (needsRender) {
                 overlay::OverlayInputs in;
                 in.project     = m_ibomProject;
-                in.homo        = *m_homography;
-                in.size        = curSize;
                 in.selectedRef = m_selectedRef;
                 in.placedRefs  = m_placedRefs;
                 QColor cSel = QColor(QString::fromStdString(m_config->selectedColorHex()));
@@ -1881,40 +1866,43 @@ void Application::wireCameraSignals()
                 in.drawSilk = drawSilk;
 
                 const auto t0 = std::chrono::steady_clock::now();
-                QImage ov = overlay::OverlayRenderer::render(in);
+                overlay::BoardOverlay bo = overlay::OverlayRenderer::renderBoardSpace(in);
                 const double renderMs = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - t0).count();
-                m_mainWindow->cameraView()->setOverlayImage(ov);
-                m_lastOverlayRenderMs = nowMs;
-                spdlog::debug("[overlay] re-rendered {}x{} in {:.1f}ms (pads={} silk={} sel='{}' placed={} comps={})",
-                              curSize.width(), curSize.height(), renderMs, drawPads, drawSilk,
+                m_boardBufferToPcb = bo.pcbToBuffer.inverted();
+                m_mainWindow->cameraView()->setBoardOverlayImage(bo.image);
+                spdlog::debug("[overlay] board buffer re-rendered {}x{} in {:.1f}ms (pads={} silk={} sel='{}' placed={} comps={})",
+                              bo.image.width(), bo.image.height(), renderMs, drawPads, drawSilk,
                               m_selectedRef, m_placedRefs.size(), m_ibomProject->components.size());
 
-                // Remember the inputs this overlay was rendered from.
+                // Remember the inputs this buffer was rendered from.
                 m_overlayValid       = true;
-                m_ovSigSize          = curSize;
                 m_ovSigPads          = drawPads;
                 m_ovSigSilk          = drawSilk;
-                m_ovSigFab           = drawFab;
                 m_ovSigSelected      = m_selectedRef;
                 m_ovSigPlacedHash    = placedHash;
                 m_ovSigColorKey      = colorKey;
                 m_ovSigPlacedOpacity = placedAlphaMul;
                 m_ovSigSelectedSilkW = selectedSilkW;
                 m_ovSigProject       = m_ibomProject.get();
-                m_ovSigHomography    = curH.clone();
             }
-        } else if (!m_pickingHomographyPoints) {
-            // No valid homography (e.g. after Reset Alignment): the block above
-            // is skipped, so without this the LAST overlay image would stay
-            // frozen on screen and Reset would appear to "do nothing". Push a
-            // transparent overlay to actually clear it. (Skip while picking
-            // 4-corner points — that path draws its own feedback overlay below.)
-            m_mainWindow->cameraView()->setOverlayImage(QImage());
-            m_overlayValid = false;  // force a fresh render once it's valid again
+
+            // Per-frame: compose buffer→PCB with the freshest PCB→image pose.
+            m_mainWindow->cameraView()->setBoardOverlayTransform(
+                m_boardBufferToPcb
+                * overlay::OverlayRenderer::toQTransform(m_homography->matrix()));
+        } else if (m_overlayValid) {
+            // No valid homography (e.g. after Reset Alignment): clear the board
+            // overlay once, or the last buffer would stay frozen on screen and
+            // Reset would appear to "do nothing" (ERREUR #46).
+            m_mainWindow->cameraView()->setBoardOverlayImage(QImage());
+            m_overlayValid = false;  // force a fresh render once valid again
         }
 
-        // Draw alignment point picking visual feedback
+        // Alignment-picking visual feedback — sole owner of the full-frame
+        // overlay channel now that the iBOM overlay lives in the board-space
+        // channel (it is no longer suppressed while a valid overlay exists:
+        // during a re-alignment both are visible, which is what you want).
         if (m_pickingHomographyPoints && !m_homographyImagePoints.empty()) {
             QImage pickOverlay(rgb.cols, rgb.rows, QImage::Format_ARGB32_Premultiplied);
             pickOverlay.fill(Qt::transparent);
@@ -1936,10 +1924,13 @@ void Application::wireCameraSignals()
                 }
             }
             pickPainter.end();
-            // Merge with existing overlay or set directly
-            if (!m_ibomProject || !m_homography || !m_homography->isValid()) {
-                m_mainWindow->cameraView()->setOverlayImage(pickOverlay);
-            }
+            m_mainWindow->cameraView()->setOverlayImage(pickOverlay);
+            m_pickOverlayShown = true;
+        } else if (m_pickOverlayShown) {
+            // Picking ended (or no points yet): release the channel once so
+            // stale feedback doesn't linger on screen.
+            m_mainWindow->cameraView()->setOverlayImage(QImage());
+            m_pickOverlayShown = false;
         }
 
         // Calibration image collection — capture one image per K press

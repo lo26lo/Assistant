@@ -2,8 +2,10 @@
 
 #include <QOpenGLWidget>
 #include <QImage>
+#include <QPixmap>
 #include <QPoint>
 #include <QTimer>
+#include <QTransform>
 #include <opencv2/core.hpp>
 #include <mutex>
 #include <vector>
@@ -19,6 +21,14 @@ public:
 
     void updateFrame(const QImage& frame);
     void setOverlayImage(const QImage& overlay);
+
+    /// Board-space iBOM overlay buffer (re-rendered only on selection /
+    /// placed / toggle / color / project changes). Pass a null image to clear.
+    void setBoardOverlayImage(const QImage& boardImg);
+    /// Buffer→image projective transform for the board overlay, refreshed
+    /// every frame from the current homography. Cheap: 9 doubles + repaint.
+    void setBoardOverlayTransform(const QTransform& bufferToImage);
+
     void setOverlayOpacity(float opacity);
     void setCrosshairVisible(bool visible);
     void setZoomLevel(float zoom);
@@ -86,7 +96,14 @@ private:
     };
 
     QImage m_frame;
-    QImage m_overlay;
+    QImage m_overlay;   // full-frame overlay channel (alignment-picking feedback)
+    // Board-space iBOM overlay, warped through m_boardToImage at paint time.
+    // Stored as QPixmap so the GL paint engine caches its texture across
+    // paints — the pixels only change on selection/toggle/color changes,
+    // while the transform changes every tracked frame.
+    QPixmap    m_boardOverlay;
+    QTransform m_boardToImage;
+    bool       m_boardTransformValid = false;
     mutable std::mutex m_frameMutex;
 
     // View transform

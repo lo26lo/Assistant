@@ -5,6 +5,7 @@
 #include <QThread>
 #include <QImage>
 #include <QSize>
+#include <QTransform>
 #include <QFutureWatcher>
 #include <opencv2/core.hpp>
 #include <cstddef>
@@ -204,9 +205,10 @@ private:
     std::unique_ptr<IBomParser>                m_ibomParser;
     std::shared_ptr<IBomProject>               m_ibomProject;
 
-    // Overlay rendering (the draw path is the stateless, change-gated
-    // overlay::OverlayRenderer::render() called from frameReady — there is no
-    // renderer instance to own).
+    // Overlay rendering (the draw path is the stateless
+    // overlay::OverlayRenderer::renderBoardSpace(), re-run from frameReady only
+    // when its inputs change; CameraView warps the buffer per paint — there is
+    // no renderer instance to own).
     std::unique_ptr<overlay::Homography>       m_homography;
     std::unique_ptr<overlay::HeatmapRenderer>  m_heatmapRenderer;
 
@@ -241,10 +243,6 @@ private:
 
     // Focus assist — last time the sharpness metric was computed (throttle).
     qint64 m_lastSharpnessMs = 0;
-    // Overlay re-render throttle — caps the (expensive, all-visible-board)
-    // overlay render rate so a fast tracker (optical flow at camera rate) can't
-    // saturate the GUI thread. The camera video still updates every frame.
-    qint64 m_lastOverlayRenderMs = 0;
     // Depth (RealSense) — last time distance/scale was computed (throttle).
     qint64 m_lastDepthMs = 0;
     // Live view mode: false = color image, true = colorized depth map.
@@ -382,21 +380,27 @@ private:
     features::DatasetCreator* m_datasetCreator = nullptr;  // lives on m_datasetThread
 
     // ── iBOM overlay render cache (change-gated) ───────────────────────────
-    // The overlay is rebuilt only when one of its inputs changes (homography,
-    // selection, placed set, toggles, colors, frame size, loaded project). It is
-    // rendered synchronously on the GUI thread and pushed with the frame so it
-    // stays locked to the camera image. The m_ovSig* fields are the signature of
-    // the inputs the cached overlay was last rendered from.
+    // The overlay is rendered in BOARD space (OverlayRenderer::renderBoardSpace)
+    // and only rebuilt when one of its content inputs changes: selection, placed
+    // set, toggles, colors, loaded project. The homography is NOT part of the
+    // signature anymore — pose changes just update the warp transform pushed to
+    // CameraView every frame. The m_ovSig* fields are the signature of the
+    // inputs the cached buffer was last rendered from.
     bool        m_overlayValid    = false;   // false until first render
-    cv::Mat     m_ovSigHomography;
     std::string m_ovSigSelected;
     std::size_t m_ovSigPlacedHash = 0;
-    QSize       m_ovSigSize;
-    bool        m_ovSigPads = false, m_ovSigSilk = false, m_ovSigFab = false;
+    bool        m_ovSigPads = false, m_ovSigSilk = false;
     std::string m_ovSigColorKey;
     float       m_ovSigPlacedOpacity = -1.0f;
     float       m_ovSigSelectedSilkW = -1.0f;
     const void* m_ovSigProject = nullptr;    // identity of the rendered IBomProject
+    // buffer→PCB mapping of the current board buffer (inverse of the renderer's
+    // pcbToBuffer), composed with the live homography into the per-frame warp.
+    QTransform  m_boardBufferToPcb;
+    // Whether the picking-feedback overlay is currently shown, so it can be
+    // cleared exactly once when picking ends (it owns the full-frame overlay
+    // channel now that the iBOM overlay lives in the board channel).
+    bool        m_pickOverlayShown = false;
 
     // Dynamic scale tracking
     double m_basePixelsPerMm = 0.0;  // pixelsPerMm at initial homography
