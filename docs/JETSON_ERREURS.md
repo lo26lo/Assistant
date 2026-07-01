@@ -15,6 +15,8 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 52 | 2026-07-01 | Application.cpp — updateDynamicScale | 🔴 OUVERT | [Méthode d'échelle `IBomPads` : `bestDist` remis à zéro par composant → `padB` = pad le plus loin du *dernier* composant, pas globalement ; + scan de tous les pads à chaque émission d'homographie (jusqu'à ~30 Hz)](#erreur-52--updatedynamicscale-ibompads-recherche-du-pad-le-plus-eloigne-boguee--scan-par-emission) |
+| 51 | 2026-07-01 | TrackingWorker — buildBoardMask | 🔴 OUVERT | [Masque de détection board sans récupération : si la carte sort de la zone masquée, `m_lastHomography` ne se met plus jamais à jour → tracking perdu définitivement (mode référence, aucun compteur d'échec)](#erreur-51--masque-board-fige-apres-perte--pas-de-fallback-plein-cadre) |
 | 50 | 2026-06-20 | tests/CMakeLists.txt — link PR #20 | ✅ RÉSOLU | [`test_tracking_worker` ne linke pas : `cv::calcOpticalFlowPyrLK` (opencv_video) + `cv::cuda::ORB::create` (opencv_cudafeatures2d) non résolus — le test linkait un sous-ensemble OpenCV figé](#erreur-50--test_tracking_worker-ne-linke-pas-modules-opencv-manquants) |
 | 49 | 2026-06-20 | TrackingWorker.h — build PR #20 | ✅ RÉSOLU | [Build Jetson de PR #20 échoue : `processIncremental` déclaré deux fois dans `TrackingWorker.h` (artefact du refactor Phases 1-3)](#erreur-49--processincremental-declare-deux-fois-build-pr-20) |
 | 48 | 2026-06-19 | Application.cpp — sélection PCB Map | ✅ RÉSOLU | [Clic sur la PCB Map ne sélectionne pas le composant visé : recherche par centre le plus proche (`c.position`) peu fiable sur carte dense → hit-test bbox](#erreur-48--clic-pcb-map-ne-selectionne-pas-le-bon-composant-nearest-center-peu-fiable) |
@@ -1381,6 +1383,45 @@ Renommé les deux variables en `cornerTL`/`cornerTR` dans `autoAlignBoard()`.
 
 ### Leçon
 Ne jamais nommer une variable locale `tr` (ou tout identifiant Qt courant comme `tr`/`qDebug`/etc.) dans une méthode `QObject`, même si elle semble hors de portée du prochain appel `tr(...)` — un refactor ultérieur peut facilement élargir la portée sans qu'on s'en rende compte. Préférer un nom descriptif (`cornerTL`, `topRight`, …) systématiquement.
+
+## ERREUR 52 — `updateDynamicScale` IBomPads : recherche du pad le plus éloigné boguée + scan par émission
+
+**Date :** 2026-07-01
+**Composant :** `src/app/Application.cpp` — `updateDynamicScale()` (branche `ScaleMethod::IBomPads`)
+**Statut :** 🔴 OUVERT (constaté par revue de code pendant l'analyse live tracking — pas encore corrigé)
+
+### Symptôme
+Avec `scaleMethod = IBomPads`, l'échelle px/mm peut être instable ou fausse : elle est calculée entre `padA` (premier pad du premier composant) et un `padB` qui n'est **pas** le pad le plus éloigné de la carte.
+
+### Cause
+Dans la boucle de recherche (`Application.cpp:3728-3740`), `double bestDist = 0;` est déclaré **à l'intérieur** de la boucle sur les composants → remis à zéro à chaque composant, et `padB` écrasé à chaque itération. Résultat : `padB` = pad le plus éloigné de `padA` **dans le dernier composant qui a des pads**, qui peut être voisin de `padA` (« too close, unreliable » n'attrape que < 1 mm). Par ailleurs `updateDynamicScale()` est appelé **à chaque émission d'homographie** (`Application.cpp:1603`, jusqu'à ~30 Hz avec l'optical flow) et cette branche re-scanne tous les pads de la carte à chaque appel.
+
+### Solution proposée (non appliquée)
+1. Sortir `bestDist`/`padB` de la boucle (vrai max global), ou mieux : calculer la paire de référence **une fois** au chargement de l'iBOM et la mettre en cache.
+2. Throttler `updateDynamicScale()` (~5 Hz suffisent pour un affichage d'échelle).
+
+La méthode par défaut (`Homography`) n'est pas affectée par le bug de recherche, seulement par l'absence de throttle. Analyse complète : [LIVE_TRACKING_ANALYSE_2026-07.md](LIVE_TRACKING_ANALYSE_2026-07.md) (finding **F7**).
+
+### Leçon
+Déclarer les accumulateurs de recherche (`best…`) **hors** de la boucle qu'ils accumulent. Toute fonction branchée sur `homographyUpdated` doit être considérée comme appelée à cadence caméra (30 Hz), pas « de temps en temps ».
+
+## ERREUR 51 — Masque board figé après perte : pas de fallback plein cadre
+
+**Date :** 2026-07-01
+**Composant :** `src/overlay/TrackingWorker.cpp` — `buildBoardMask()` / `processReference()`
+**Statut :** 🔴 OUVERT (constaté par revue de code pendant l'analyse live tracking — pas encore corrigé)
+
+### Symptôme
+En live tracking (mode référence), si la carte se déplace vite/loin entre deux ticks ORB (main qui bouge la carte, bump de la caméra, FOV changé), le suivi peut se perdre **définitivement** : l'overlay reste figé et ne ré-accroche jamais, jusqu'à un re-anchor manuel (Auto-Align) ou périodique.
+
+### Cause
+Le masque de détection ORB (`buildBoardMask`, `TrackingWorker.cpp:137-171` — introduit par l'ERREUR #35 pour empêcher le verrouillage sur le fond) projette le polygone carte via `m_lastHomography`, qui n'est mise à jour **que sur estimation réussie** (`:459`, `:681`, `:789`). Si la carte sort de la zone masquée (marge ×1.6 seulement), l'ORB ne détecte plus que du fond dans un masque périmé → aucun match → aucune mise à jour de `m_lastHomography` → **le masque reste faux pour toujours** (boucle morte silencieuse). Le chemin référence n'a **aucun compteur d'échecs** (`m_lostFrames` ne sert qu'au mode incrémental) : `processReference` sort par des `return` muets (`:662`, `:667`), sans même passer l'état à `Lost`.
+
+### Solution proposée (non appliquée)
+Compter les échecs consécutifs du chemin référence ; après N échecs (ex. 5), détecter **sans masque** (plein cadre) pour ré-acquérir la carte, avec éventuellement un premier palier à marge élargie (×2.5). Reset du compteur au premier succès. Le risque historique du plein cadre (lock sur le fond, ERREUR #35) reste borné : dès qu'une estimation réussit, le masque se réactive. Analyse complète : [LIVE_TRACKING_ANALYSE_2026-07.md](LIVE_TRACKING_ANALYSE_2026-07.md) (finding **F2**).
+
+### Leçon
+Tout mécanisme qui **conditionne la perception à la dernière estimation** (masque, ROI, fenêtre de recherche) doit avoir un chemin de dégradation vers « chercher partout » après N échecs, sinon une seule sortie du domaine de validité devient irréversible.
 
 ## ERREUR 50 — `test_tracking_worker` ne linke pas : modules OpenCV manquants
 
