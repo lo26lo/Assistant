@@ -75,12 +75,12 @@ Verdict par étape :
 *Proposition* : compter les échecs consécutifs du chemin référence ; après N échecs (ex. 5), repasser en **détection plein cadre** (masque vide) jusqu'à ré-acquisition ; optionnellement élargir la marge 1.6× → 2.5× au premier palier. ~15 lignes localisées.
 *Effort* : S. *Risque* : faible.
 
-**F3 — Le set de landmarks optical-flow garde les outliers RANSAC.**
+**F3 — Le set de landmarks optical-flow garde les outliers RANSAC.** ✅ *Implémenté (suite 110) : `estimateModel` expose le masque d'inliers, pruning du set à chaque frame + re-seed anticipé si le set < 2×minMatch.*
 `runOpticalFlow` (`TrackingWorker.cpp:452-455`) conserve pour la frame suivante **tous** les points survivants du LK (`keptPcb/keptImg`), y compris ceux que `estimateModel` vient de classer outliers — le commentaire (« the fit already rejected fliers ») confond *rejeté du fit* et *retiré du set*. Un point qui a glissé sur une feature voisine reste donc dans le set **jusqu'à 30 frames** (prochain re-seed) et vote contre le bon modèle à chaque frame.
 *Proposition* : faire retourner le masque d'inliers par `estimateModel` (param de sortie optionnel) et pruner le set à chaque frame ; re-seed anticipé si le set tombe sous ~2×`minMatchCount`.
 *Effort* : S. *Risque* : faible.
 
-**F4 — Aucune garde anti-saut sur l'homographie émise.**
+**F4 — Aucune garde anti-saut sur l'homographie émise.** ✅ *Implémenté (suite 110) : gate reproj (> seuil RANSAC = HELD), sanité géométrique (coins finis, aire non effondrée, pas de miroir vs pose de référence), gate de saut (> 15 % de la diagonale ⇒ confirmation par 2 estimées concordantes, tolérance 7,5 %) + snap des filtres 1€ sur saut confirmé. Test de régression ajouté.*
 `emitHomography` (`TrackingWorker.cpp:314-346`) gate sur `inliers < minMatchCount` et sur la scène statique, mais **pas sur l'amplitude du changement ni sur la santé géométrique de H**. Une estimée dégénérée à 8 inliers (configuration quasi-colinéaire, reflet) passe le gate, le 1€ filter **suit le saut** (sa coupure s'ouvre avec la vitesse — c'est sa fonction) → overlay qui « explose » une frame puis revient. `reprojErr` n'est d'ailleurs pas gaté du tout.
 *Proposition* : (a) rejeter si `reprojErr > ransacThreshold` ; (b) si `cornerDisp(raw, m_lastEmittedH)` dépasse un seuil (ex. 15 % de la diagonale image), exiger **2 estimées consécutives concordantes** avant d'accepter (vrai mouvement brusque = confirmé dès la frame suivante ; estimée folle = isolée) ; (c) sanity : `det(H) > 0`, termes perspectifs bornés.
 *Effort* : S. *Risque* : faible (le cas nominal ne change pas).
@@ -107,7 +107,7 @@ Verdict par étape :
 *Proposition* : piloter le re-seed par l'**attrition du set** (re-seed quand < 2×minMatch survivants) plutôt qu'un compteur fixe ; et lors d'un re-seed sur suivi sain, re-seeder les landmarks **sans émettre** l'estimée ORB (le flow ré-émet dès la frame suivante, continuité préservée). Garder un re-seed forcé long (ex. 120 frames) comme filet anti-dérive.
 *Effort* : M. *Risque* : moyen (à valider au Jetson avec les logs `[track]`).
 
-**F9 — LK sans contrôle forward-backward.**
+**F9 — LK sans contrôle forward-backward.** ✅ *Implémenté (suite 110) : re-track retour + rejet si aller-retour > 0,5 px (MedianFlow).*
 `runOpticalFlow:437-442` filtre sur `status` et `err > 20` (lâche — c'est une différence d'intensité de patch, pas une erreur géométrique). Le mode de défaillance classique du LK — glissement sub-pixel progressif vers une feature voisine — n'est détecté par rien.
 *Proposition* : tracker aussi le chemin retour (`fullGray → m_prevGray`) et rejeter si ‖aller-retour − départ‖ > 0,5 px (critère MedianFlow standard). Double le coût LK (~qq ms sur ≤200 pts, budget OK sur Orin) pour une pureté de set nettement meilleure — synergique avec F3.
 *Effort* : S. *Risque* : faible.
@@ -152,7 +152,7 @@ Par lots compilables/validables en une session Jetson chacun, du meilleur ROI au
 | Lot | Contenu | Effet attendu |
 |-----|---------|---------------|
 | **A (quick wins)** ✅ fait (suite 109) | F1 défauts + F5 badge + F2 masque fallback + F7 fix scale | Le comportement « bon » devient celui par défaut ; plus de perte définitive ; badge fiable |
-| **B (robustesse flow)** | F3 prune outliers + F9 FB-check + F4 anti-saut | Suivi flow durablement propre ; plus d'« explosions » d'overlay |
+| **B (robustesse flow)** ✅ fait (suite 110) | F3 prune outliers + F9 FB-check + F4 anti-saut | Suivi flow durablement propre ; plus d'« explosions » d'overlay |
 | **C (perf affichage)** | F13 transform inline, puis F11 warp overlay (si la re-capture post-suite-100 montre encore un coût overlay significatif) | GUI thread libéré, AA réactivable, cap 40 ms supprimé |
 | **D (fin de polish)** | F8 re-seed piloté attrition + F10 delta similarité + F6 backpressure | Micro-saut 1 Hz éliminé ; dérive microscope ralentie ; latence bornée |
 | **E (fondation)** | F12 timestamps capture (+ 1€ sur dt réels, prédiction optionnelle) | Overlay synchronisé/prédit — dernier verrou du « ça suit mal » |

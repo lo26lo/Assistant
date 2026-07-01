@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace ibom::overlay {
 
@@ -184,6 +185,7 @@ void TrackingWorker::resetReference()
     m_lastEmittedH       = cv::Mat();
     m_staticFrames       = 0;
     m_lowQualityFrames   = 0;
+    m_pendingJumpH       = cv::Mat();
     m_cornerFilters.clear();
     m_prevGray           = cv::Mat();
     m_flowImg.clear();
@@ -194,23 +196,23 @@ void TrackingWorker::resetReference()
 
 cv::Mat TrackingWorker::estimateModel(const std::vector<cv::Point2f>& src,
                                       const std::vector<cv::Point2f>& dst,
-                                      int& inliers, double& reprojErr)
+                                      int& inliers, double& reprojErr,
+                                      cv::Mat* inlierMask)
 {
     inliers = 0;
     reprojErr = 1e9;
+    if (inlierMask) *inlierMask = cv::Mat();
     if (src.size() < 4 || src.size() != dst.size())
         return {};
 
-    auto fitHomog = [&](int& inl, double& er) -> cv::Mat {
-        cv::Mat mask;
+    auto fitHomog = [&](int& inl, double& er, cv::Mat& mask) -> cv::Mat {
         cv::Mat H = cv::findHomography(src, dst, cv::USAC_MAGSAC,
                                        m_ransacThreshold, mask);
         if (H.empty() || H.rows != 3 || H.cols != 3) { inl = 0; er = 1e9; return {}; }
         er = medianReprojError(src, dst, H, mask, inl);
         return H;
     };
-    auto fitAffine = [&](bool partial, int& inl, double& er) -> cv::Mat {
-        cv::Mat mask;
+    auto fitAffine = [&](bool partial, int& inl, double& er, cv::Mat& mask) -> cv::Mat {
         cv::Mat A = partial
             ? cv::estimateAffinePartial2D(src, dst, mask, cv::RANSAC, m_ransacThreshold)
             : cv::estimateAffine2D(src, dst, mask, cv::RANSAC, m_ransacThreshold);
@@ -221,22 +223,42 @@ cv::Mat TrackingWorker::estimateModel(const std::vector<cv::Point2f>& src,
         er = medianReprojError(src, dst, H, mask, inl);
         return H;
     };
+    auto deliver = [&](const cv::Mat& H, int inl, double er, cv::Mat& mask) -> cv::Mat {
+        inliers = inl;
+        reprojErr = er;
+        if (inlierMask) *inlierMask = std::move(mask);
+        return H;
+    };
 
+    cv::Mat mask;
     switch (m_model) {
-    case Model::Homography: return fitHomog(inliers, reprojErr);
-    case Model::Affine:     return fitAffine(false, inliers, reprojErr);
-    case Model::Similarity: return fitAffine(true,  inliers, reprojErr);
+    case Model::Homography: {
+        int inl = 0; double er = 1e9;
+        cv::Mat H = fitHomog(inl, er, mask);
+        return deliver(H, inl, er, mask);
+    }
+    case Model::Affine: {
+        int inl = 0; double er = 1e9;
+        cv::Mat A = fitAffine(false, inl, er, mask);
+        return deliver(A, inl, er, mask);
+    }
+    case Model::Similarity: {
+        int inl = 0; double er = 1e9;
+        cv::Mat S = fitAffine(true, inl, er, mask);
+        return deliver(S, inl, er, mask);
+    }
     case Model::Auto:
     default: {
         int si = 0, hi = 0; double se = 1e9, he = 1e9;
-        cv::Mat S = fitAffine(true, si, se);
-        cv::Mat H = fitHomog(hi, he);
+        cv::Mat sMask, hMask;
+        cv::Mat S = fitAffine(true, si, se, sMask);
+        cv::Mat H = fitHomog(hi, he, hMask);
         // Keep the simpler (steadier) similarity unless the homography is
         // clearly better — notably lower error and at least as many inliers.
         const bool homogBetter = !H.empty() && he < se * 0.7 && hi >= si;
-        if (!S.empty() && !homogBetter) { inliers = si; reprojErr = se; return S; }
-        if (!H.empty())                 { inliers = hi; reprojErr = he; return H; }
-        inliers = si; reprojErr = se; return S;
+        if (!S.empty() && !homogBetter) return deliver(S, si, se, sMask);
+        if (!H.empty())                 return deliver(H, hi, he, hMask);
+        return deliver(S, si, se, sMask);
     }
     }
 }
@@ -311,18 +333,62 @@ double TrackingWorker::cornerDisp(const cv::Mat& a, const cv::Mat& b) const
     return maxDisp;
 }
 
+double TrackingWorker::projectedArea2(const cv::Mat& H) const
+{
+    if (H.empty() || m_pcbPolygon.size() < 3)
+        return std::numeric_limits<double>::quiet_NaN();
+    std::vector<cv::Point2f> pts;
+    try {
+        cv::perspectiveTransform(m_pcbPolygon, pts, H);
+    } catch (const cv::Exception&) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    double area2 = 0.0;
+    for (size_t i = 0; i < pts.size(); ++i) {
+        const cv::Point2f& a = pts[i];
+        const cv::Point2f& b = pts[(i + 1) % pts.size()];
+        if (!std::isfinite(a.x) || !std::isfinite(a.y))
+            return std::numeric_limits<double>::quiet_NaN();
+        area2 += static_cast<double>(a.x) * b.y - static_cast<double>(b.x) * a.y;
+    }
+    return area2;
+}
+
 bool TrackingWorker::emitHomography(const cv::Mat& rawH, int inliers, double reprojErr)
 {
-    // Quality gate: too few inliers ⇒ don't trust this fit, hold the last good
+    // Quality gate: too few inliers, or a median inlier error looser than the
+    // RANSAC threshold (mushy fit), ⇒ don't trust this fit; hold the last good
     // pose rather than letting the overlay jump. A short hysteresis avoids
     // flickering the state on a single bad frame.
-    if (inliers < m_minMatchCount) {
+    if (inliers < m_minMatchCount || reprojErr > m_ransacThreshold) {
         if (++m_lowQualityFrames >= 3) setState(State::Lost);
         spdlog::debug("[track] HELD low-quality: inliers={}/{} reproj={:.2f}px lowQ={}",
                       inliers, m_minMatchCount, reprojErr, m_lowQualityFrames);
         return false;
     }
     m_lowQualityFrames = 0;
+
+    // Geometric sanity gate: the projected board corners must be finite and
+    // span a non-collapsed area with the same orientation as the reference
+    // pose — a tracking update can never mirror the board. A degenerate fit
+    // (quasi-collinear inlier set, glare) can pass the inlier gate yet project
+    // to NaN/flipped corners, and NaN in particular slips through both the
+    // static and jump gates below (every NaN comparison is false).
+    if (m_pcbPolygon.size() >= 4) {
+        const double newArea2 = projectedArea2(rawH);
+        if (!std::isfinite(newArea2) || std::abs(newArea2) < 1.0) {
+            spdlog::debug("[track] HELD insane pose: non-finite or collapsed corners");
+            return false;
+        }
+        const cv::Mat& refPose = !m_lastEmittedH.empty() ? m_lastEmittedH
+                                                         : m_baseHomography;
+        const double refArea2 = projectedArea2(refPose);
+        if (std::isfinite(refArea2) && refArea2 != 0.0 &&
+            (newArea2 > 0.0) != (refArea2 > 0.0)) {
+            spdlog::debug("[track] HELD insane pose: orientation flip");
+            return false;
+        }
+    }
 
     // Static-scene gate: if the new estimate barely differs from the last one
     // we emitted, the scene isn't really moving — emit nothing so the overlay
@@ -336,6 +402,29 @@ bool TrackingWorker::emitHomography(const cv::Mat& rawH, int inliers, double rep
         return false;
     }
     m_staticFrames = 0;
+
+    // Jump gate: a single-step displacement of a large fraction of the frame
+    // is more often a degenerate fit than real motion (real motion at camera
+    // rate moves a few dozen px per step). Require two consecutive concordant
+    // estimates: genuine motion keeps producing nearby poses so it confirms on
+    // the very next estimate; a one-off wild fit never gets confirmed.
+    const double jumpThresh = 0.15 * m_frameDiag;
+    if (jumpThresh > 0.0 && disp > jumpThresh) {
+        const double agree = cornerDisp(rawH, m_pendingJumpH);
+        if (agree < 0.0 || agree > jumpThresh * 0.5) {
+            m_pendingJumpH = rawH.clone();
+            spdlog::debug("[track] HELD jump: cornerDisp={:.0f}px > {:.0f}px, awaiting confirmation",
+                          disp, jumpThresh);
+            return false;
+        }
+        // Confirmed: clear the corner filters so the overlay snaps to the new
+        // pose instead of trailing across the jump.
+        m_pendingJumpH = cv::Mat();
+        m_cornerFilters.clear();
+        spdlog::debug("[track] jump confirmed: cornerDisp={:.0f}px", disp);
+    } else if (!m_pendingJumpH.empty()) {
+        m_pendingJumpH = cv::Mat();
+    }
 
     const cv::Mat smoothed = smoothHomography(rawH);
     m_lastEmittedH = smoothed.clone();
@@ -417,18 +506,27 @@ bool TrackingWorker::runOpticalFlow(const cv::Mat& fullGray)
         m_prevGray.empty() || m_prevGray.size() != fullGray.size())
         return false;
 
-    std::vector<cv::Point2f> next;
-    std::vector<uchar> status;
-    std::vector<float> err;
+    const cv::Size lkWin(21, 21);
+    const cv::TermCriteria lkCrit(
+        cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 20, 0.03);
+
+    std::vector<cv::Point2f> next, back;
+    std::vector<uchar> status, statusB;
+    std::vector<float> err, errB;
     try {
-        cv::calcOpticalFlowPyrLK(
-            m_prevGray, fullGray, m_flowImg, next, status, err,
-            cv::Size(21, 21), 3,
-            cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER, 20, 0.03));
+        cv::calcOpticalFlowPyrLK(m_prevGray, fullGray, m_flowImg, next,
+                                 status, err, lkWin, 3, lkCrit);
+        // Forward-backward consistency (MedianFlow-style): re-track the moved
+        // points back into the previous frame. A landmark that silently slid
+        // onto a neighboring feature — LK's classic failure mode, invisible to
+        // the status/err outputs — won't land back on its start point.
+        cv::calcOpticalFlowPyrLK(fullGray, m_prevGray, next, back,
+                                 statusB, errB, lkWin, 3, lkCrit);
     } catch (const cv::Exception&) {
         return false;
     }
 
+    constexpr float kMaxFbErrPx = 0.5f;  // round-trip tolerance (px)
     std::vector<cv::Point2f> keptPcb, keptImg;
     keptPcb.reserve(next.size());
     keptImg.reserve(next.size());
@@ -437,6 +535,11 @@ bool TrackingWorker::runOpticalFlow(const cv::Mat& fullGray)
     for (size_t i = 0; i < next.size(); ++i) {
         if (!status[i] || err[i] > 20.0f) continue;
         if (next[i].x < 0 || next[i].y < 0 || next[i].x >= w || next[i].y >= h) continue;
+        if (i < statusB.size()) {
+            if (!statusB[i]) continue;
+            const cv::Point2f rt = back[i] - m_flowImg[i];
+            if (rt.x * rt.x + rt.y * rt.y > kMaxFbErrPx * kMaxFbErrPx) continue;
+        }
         keptPcb.push_back(m_flowPcb[i]);
         keptImg.push_back(next[i]);
     }
@@ -445,16 +548,40 @@ bool TrackingWorker::runOpticalFlow(const cv::Mat& fullGray)
 
     int inliers = 0;
     double reprojErr = 0.0;
-    cv::Mat H = estimateModel(keptPcb, keptImg, inliers, reprojErr);
+    cv::Mat inlierMask;
+    cv::Mat H = estimateModel(keptPcb, keptImg, inliers, reprojErr, &inlierMask);
     if (H.empty() || inliers < m_minMatchCount)
         return false;
 
-    // Keep only the inlier-consistent landmarks alive (the fit already
-    // rejected fliers; we keep the tracked set for the next frame).
+    // Prune the RANSAC outliers from the landmark set. They used to be kept
+    // ("the fit already rejected fliers") — but rejected-from-the-fit is not
+    // removed-from-the-set: a drifted landmark survived until the next ORB
+    // re-seed (up to m_flowRedetectInterval frames) and voted against the
+    // right model on every one of them.
+    if (inlierMask.rows == static_cast<int>(keptImg.size())) {
+        std::vector<cv::Point2f> inPcb, inImg;
+        inPcb.reserve(static_cast<size_t>(inliers));
+        inImg.reserve(static_cast<size_t>(inliers));
+        for (size_t i = 0; i < keptImg.size(); ++i) {
+            if (inlierMask.at<uchar>(static_cast<int>(i))) {
+                inPcb.push_back(keptPcb[i]);
+                inImg.push_back(keptImg[i]);
+            }
+        }
+        keptPcb = std::move(inPcb);
+        keptImg = std::move(inImg);
+    }
+
     m_flowPcb = std::move(keptPcb);
     m_flowImg = std::move(keptImg);
     m_prevGray = fullGray.clone();
     m_flowFramesSinceDetect++;
+
+    // Attrition-triggered early re-seed: when FB-check + pruning have thinned
+    // the set, route the next frame to ORB now instead of riding out the fixed
+    // re-detect interval on a starving landmark set.
+    if (m_flowImg.size() < static_cast<size_t>(2 * m_minMatchCount))
+        m_flowFramesSinceDetect = m_flowRedetectInterval;
 
     m_lastHomography = H.clone();
     m_lostFrames = 0;  // healthy fit — reset the mask-fallback miss streak
@@ -579,6 +706,10 @@ void TrackingWorker::processFrame(ibom::camera::FrameRef frame)
             cv::cvtColor(*frame, gray, cv::COLOR_BGR2GRAY);
         else
             gray = *frame;
+
+        // Frame diagonal feeds the jump gate's threshold (fraction of frame).
+        m_frameDiag = std::hypot(static_cast<double>(gray.cols),
+                                 static_cast<double>(gray.rows));
 
         // CLAHE photometric equalization → steadier keypoints under glare /
         // uneven lighting (D405). Applied on full-res gray so optical flow and

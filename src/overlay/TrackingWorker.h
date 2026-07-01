@@ -219,10 +219,20 @@ private:
     /// motion model and return it as a 3×3 matrix. Fills inliers + median
     /// reprojection error. `Auto` fits a similarity and a homography and keeps
     /// the similarity unless the homography is clearly better. Returns an empty
-    /// Mat on failure.
+    /// Mat on failure. When `inlierMask` is non-null it receives the chosen
+    /// fit's Nx1 uchar inlier mask (empty on failure) — used by the optical-flow
+    /// path to prune outlier landmarks from its tracked set.
     cv::Mat estimateModel(const std::vector<cv::Point2f>& src,
                           const std::vector<cv::Point2f>& dst,
-                          int& inliers, double& reprojErr);
+                          int& inliers, double& reprojErr,
+                          cv::Mat* inlierMask = nullptr);
+
+    /// Signed double-area (shoelace ×2, px²) of the board polygon projected
+    /// through H. NaN when it can't be computed or any corner is non-finite.
+    /// Feeds the geometric sanity gate in emitHomography(): a degenerate fit
+    /// can pass the inlier-count gate yet project the board to NaN/collapsed/
+    /// mirrored corners — and NaN slips through every numeric comparison.
+    double projectedArea2(const cv::Mat& H) const;
 
     /// Spatially distribute keypoints: keep the strongest per grid cell so the
     /// fit is well-conditioned across the whole board instead of dominated by a
@@ -256,6 +266,11 @@ private:
     int     m_staticFrames     = 0;    // consecutive frames judged "not moving"
     int     m_lowQualityFrames = 0;    // consecutive frames below the inlier gate
     double  m_staticThreshPx   = 0.8;  // corner motion below this ⇒ scene static
+    // Anti-jump gate (lot B, F4): a pose displaced by a large fraction of the
+    // frame in one step is held here until a second, concordant estimate
+    // confirms it — one-off degenerate fits never get confirmed.
+    cv::Mat m_pendingJumpH;
+    double  m_frameDiag = 0.0;         // diagonal (px) of the last processed frame
 
     // Phase-2 stabilization (docs/LIVE_TRACKING_PLAN.md).
     Model   m_model            = Model::Homography;  // safe default = legacy
