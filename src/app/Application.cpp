@@ -1269,9 +1269,44 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
         spdlog::info("Auto-Align succeeded via {} (score {:.2f})", result.method, result.score);
     });
 
-    watcher->setFuture(QtConcurrent::run([colorCopy, depthCopy, project, expectedPixelsPerMm]() {
-        return overlay::BoardLocator::locate(colorCopy, depthCopy, *project, expectedPixelsPerMm,
-                                              ibom::Layer::Front);
+    ai::ComponentDetector* detector = componentDetector();
+    watcher->setFuture(QtConcurrent::run([colorCopy, depthCopy, project,
+                                          expectedPixelsPerMm, detector]() {
+        // Detection-first (docs/AUTO_ALIGN_V2_PLAN.md): with a component
+        // detector loaded, register the detected-component constellation
+        // against the iBOM layout — needs no visible board outline, so it
+        // works exactly where the geometric path structurally fails (board
+        // filling the frame, cluttered/glossy background). BoardLocator stays
+        // as the model-free fallback.
+        if (detector) {
+            const std::vector<ai::Detection> detections = detector->detect(colorCopy);
+            const auto boot = overlay::ComponentReanchor::bootstrap(
+                detections, *project, ibom::Layer::Front, expectedPixelsPerMm);
+            if (boot.found) {
+                overlay::BoardLocateResult blr;
+                blr.found  = true;
+                blr.method = "components";
+                // Map inliers onto the shared [0,1] score consumed by the
+                // trust (0.45) and reanchor (0.5) gates: 8 inliers → 0.67,
+                // saturates at 18+. Component consensus is far more specific
+                // than edge agreement, hence the generous floor.
+                blr.score   = std::min(1.0, 0.4 + boot.inliers / 30.0);
+                blr.message = boot.message;
+                const auto& bb = project->boardInfo.boardBBox;
+                const std::vector<cv::Point2f> pcb = {
+                    {static_cast<float>(bb.minX), static_cast<float>(bb.minY)},
+                    {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)},
+                    {static_cast<float>(bb.maxX), static_cast<float>(bb.maxY)},
+                    {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
+                };
+                cv::perspectiveTransform(pcb, blr.imageCorners, boot.homography);
+                return blr;
+            }
+            spdlog::info("Auto-Align: component bootstrap didn't lock ({}), "
+                         "falling back to board outline", boot.message);
+        }
+        return overlay::BoardLocator::locate(colorCopy, depthCopy, *project,
+                                             expectedPixelsPerMm, ibom::Layer::Front);
     }));
 }
 
@@ -1320,10 +1355,13 @@ void Application::componentReanchor(bool silent)
             m_mainWindow->updateStatusMessage(tr("Component re-anchor: no camera frame yet"));
         return;
     }
-    if (!m_ibomProject || !m_homography || !m_homography->isValid()) {
+    // NOTE: no valid-pose requirement anymore. With a pose, the prior-based
+    // estimate() corrects it; without one (or with a stale one after the board
+    // was moved/picked up), bootstrap() registers the detection constellation
+    // against the layout globally. The detector alone is enough to align.
+    if (!m_ibomProject) {
         if (!silent)
-            m_mainWindow->updateStatusMessage(
-                tr("Component re-anchor: align the board once first (need a current pose)"));
+            m_mainWindow->updateStatusMessage(tr("Component re-anchor: load an iBOM first"));
         return;
     }
 
@@ -1334,9 +1372,24 @@ void Application::componentReanchor(bool silent)
     const cv::Mat colorCopy = m_lastColorFrame->clone();
     const std::shared_ptr<const IBomProject> project = m_ibomProject;
     // Snapshot the current pose so the worker thread reads a stable matrix even
-    // if live tracking updates m_homography meanwhile.
+    // if live tracking updates m_homography meanwhile. May be invalid (empty
+    // matrix) — the worker then goes straight to bootstrap().
     overlay::Homography priorPose;
-    priorPose.setMatrix(m_homography->matrix().clone());
+    if (m_homography && m_homography->isValid())
+        priorPose.setMatrix(m_homography->matrix().clone());
+    // Physical scale prior for bootstrap: D405 pinhole (fx / distance) when
+    // available, else the current px/mm estimate; 0 = unknown (still works,
+    // just a wider hypothesis space). Mirrors autoAlignBoard().
+    double scalePrior = 0.0;
+#ifdef IBOM_HAVE_REALSENSE
+    if (auto* rs = dynamic_cast<camera::RealSenseCapture*>(m_camera.get())) {
+        const double fx = rs->colorFx();
+        if (fx > 0.0 && m_lastDepthDistanceMm > 0.0)
+            scalePrior = fx / m_lastDepthDistanceMm;
+    }
+#endif
+    if (scalePrior <= 0.0)
+        scalePrior = m_currentPixelsPerMm > 0.0 ? m_currentPixelsPerMm : m_basePixelsPerMm;
     const uint64_t dispatchEpoch = ++m_alignmentEpoch;
 
     auto* watcher = new QFutureWatcher<overlay::ComponentReanchorResult>(this);
@@ -1422,10 +1475,19 @@ void Application::componentReanchor(bool silent)
         spdlog::info("Component re-anchor succeeded ({})", result.message);
     });
 
-    watcher->setFuture(QtConcurrent::run([detector, colorCopy, project, priorPose]() {
+    watcher->setFuture(QtConcurrent::run([detector, colorCopy, project, priorPose,
+                                          scalePrior]() {
         const std::vector<ai::Detection> detections = detector->detect(colorCopy);
-        return overlay::ComponentReanchor::estimate(
+        // Prior-based correction first (cheap, precise when the pose is only
+        // drifting); global bootstrap when there is no usable prior — no pose
+        // yet, or a pose so stale (board moved/picked up) that nothing falls
+        // inside the matching radius anymore.
+        auto res = overlay::ComponentReanchor::estimate(
             detections, *project, priorPose, ibom::Layer::Front);
+        if (!res.found)
+            res = overlay::ComponentReanchor::bootstrap(
+                detections, *project, ibom::Layer::Front, scalePrior);
+        return res;
     }));
 }
 

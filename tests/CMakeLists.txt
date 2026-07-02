@@ -38,6 +38,18 @@ add_ibom_test(test_inference
             onnxruntime::onnxruntime spdlog::spdlog
 )
 
+# Component re-anchor test — prior-free bootstrap registration (pure
+# geometry, synthetic detections). ComponentReanchor.h pulls ai::Detection
+# from InferenceEngine.h, which includes the onnxruntime headers → link it
+# like test_inference does. Homography.cpp provides the prior/refine path.
+add_ibom_test(test_component_reanchor
+    SOURCES test_component_reanchor.cpp
+            ${CMAKE_SOURCE_DIR}/src/overlay/ComponentReanchor.cpp
+            ${CMAKE_SOURCE_DIR}/src/overlay/Homography.cpp
+    LIBS    opencv_core opencv_imgproc opencv_calib3d
+            onnxruntime::onnxruntime spdlog::spdlog
+)
+
 # Component matching test — needs ComponentMap.cpp (no extra libs)
 add_ibom_test(test_component_matching
     SOURCES test_component_matching.cpp

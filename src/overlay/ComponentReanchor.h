@@ -60,6 +60,14 @@ public:
         /// equals the detection's classId (requires classOfComponent to be
         /// populated). Leave false for a presence-only model.
         bool useClassPrior = false;
+
+        // ── bootstrap() (prior-free registration) knobs ──
+        /// RANSAC pair→pair hypotheses tried before giving up.
+        int    bootstrapIterations = 3000;
+        /// Consensus match tolerance in PCB millimetres (converted to px via
+        /// the hypothesis scale) — physical tolerance, so it stays meaningful
+        /// from wide D405 views to high microscope magnification.
+        double bootstrapTolMm      = 1.2;
     };
 
     /// @param detections   AI detections in image space (bbox in px).
@@ -94,6 +102,48 @@ public:
         const Homography& currentPose,
         ibom::Layer activeLayer,
         const std::vector<int>& classOfComponent = {});
+
+    /// Bootstrap a pose from detections alone — NO current-pose prior.
+    ///
+    /// estimate() can only *correct* an existing pose (it gates matches around
+    /// positions predicted by the prior); with no pose, or a stale one after
+    /// the board was moved/picked up, it is useless. bootstrap() solves the
+    /// global problem instead: register the detected-component constellation
+    /// against the iBOM component layout under an unknown similarity
+    /// transform, by RANSAC over pair→pair hypotheses — each (detection pair,
+    /// component pair) correspondence fully determines scale+rotation+
+    /// translation; consensus is the number of components landing on a
+    /// detection within a physical tolerance. The winning similarity is then
+    /// handed to estimate() as prior for the precise homography fit and its
+    /// existing inlier/reprojection validation.
+    ///
+    /// Needs no visible board outline — works where BoardLocator structurally
+    /// fails (board filling the frame), and turns Auto-Align into "put the
+    /// board under the camera and it aligns itself" once a detector model is
+    /// loaded. Deterministic (fixed internal RNG seed).
+    ///
+    /// Caveat: a presence-only model on a highly repetitive layout (regular
+    /// grid of identical passives) can alias to a symmetric pose; the
+    /// estimate() validation bounds the damage, and a class-aware model
+    /// (Piste A) removes the ambiguity.
+    ///
+    /// @param scalePriorPxPerMm  When > 0 (e.g. D405 pinhole fx/distance, or
+    ///        the current px/mm), hypotheses outside ~[0.55, 1.8]× of it are
+    ///        rejected early — fewer iterations wasted, fewer aliases.
+    static ComponentReanchorResult bootstrap(
+        const std::vector<ai::Detection>& detections,
+        const ibom::IBomProject& project,
+        ibom::Layer activeLayer,
+        double scalePriorPxPerMm,
+        const Params& params);
+
+    /// Convenience overload (default Params) — defined in the .cpp for the
+    /// same nested-aggregate reason as the estimate() overload above.
+    static ComponentReanchorResult bootstrap(
+        const std::vector<ai::Detection>& detections,
+        const ibom::IBomProject& project,
+        ibom::Layer activeLayer,
+        double scalePriorPxPerMm = 0.0);
 };
 
 } // namespace ibom::overlay
