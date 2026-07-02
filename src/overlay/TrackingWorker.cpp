@@ -203,6 +203,7 @@ void TrackingWorker::resetReference()
     m_flowPcb.clear();
     m_flowFramesSinceDetect = 0;
     m_flowHealthy           = false;
+    m_lastHealthyPoseMs     = 0;
     setState(State::Lost);
 }
 
@@ -402,13 +403,19 @@ bool TrackingWorker::emitHomography(const cv::Mat& rawH, int inliers, double rep
         }
     }
 
+    const qint64 nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
     // Static-scene gate: if the new estimate barely differs from the last one
     // we emitted, the scene isn't really moving — emit nothing so the overlay
     // freezes instead of shimmering on keypoint noise. cornerDisp() returns -1
     // when it can't measure (no polygon yet) → fall through and emit.
+    // A static hold is still a HEALTHY pose decision: refresh the recovery
+    // clock so long static viewing keeps the jump gate fully armed.
     const double disp = cornerDisp(rawH, m_lastEmittedH);
     if (disp >= 0.0 && disp < m_staticThreshPx) {
         ++m_staticFrames;
+        m_lastHealthyPoseMs = nowMs;
         spdlog::debug("[track] HELD static-scene: cornerDisp={:.2f}px < {:.2f} (staticFrames={})",
                       disp, m_staticThreshPx, m_staticFrames);
         return false;
@@ -420,26 +427,42 @@ bool TrackingWorker::emitHomography(const cv::Mat& rawH, int inliers, double rep
     // rate moves a few dozen px per step). Require two consecutive concordant
     // estimates: genuine motion keeps producing nearby poses so it confirms on
     // the very next estimate; a one-off wild fit never gets confirmed.
+    // Recovery bypass: after a long spell without any healthy pose (board
+    // picked up / blur / occlusion), the last emitted pose is no longer a
+    // meaningful prior — demanding continuity with it would keep holding
+    // every sane fit forever once the board is put back down. Accept the
+    // first sane fit directly and snap.
     const double jumpThresh = 0.15 * m_frameDiag;
     if (jumpThresh > 0.0 && disp > jumpThresh) {
-        const double agree = cornerDisp(rawH, m_pendingJumpH);
-        if (agree < 0.0 || agree > jumpThresh * 0.5) {
-            m_pendingJumpH = rawH.clone();
-            spdlog::debug("[track] HELD jump: cornerDisp={:.0f}px > {:.0f}px, awaiting confirmation",
-                          disp, jumpThresh);
-            return false;
+        constexpr qint64 kRecoveryDroughtMs = 2000;
+        const bool recovering = m_lastHealthyPoseMs > 0 &&
+                                (nowMs - m_lastHealthyPoseMs) > kRecoveryDroughtMs;
+        if (recovering) {
+            m_pendingJumpH = cv::Mat();
+            m_cornerFilters.clear();
+            spdlog::info("[track] jump accepted (recovery after {} ms without a healthy pose)",
+                         nowMs - m_lastHealthyPoseMs);
+        } else {
+            const double agree = cornerDisp(rawH, m_pendingJumpH);
+            if (agree < 0.0 || agree > jumpThresh * 0.5) {
+                m_pendingJumpH = rawH.clone();
+                spdlog::debug("[track] HELD jump: cornerDisp={:.0f}px > {:.0f}px, awaiting confirmation",
+                              disp, jumpThresh);
+                return false;
+            }
+            // Confirmed: clear the corner filters so the overlay snaps to the
+            // new pose instead of trailing across the jump.
+            m_pendingJumpH = cv::Mat();
+            m_cornerFilters.clear();
+            spdlog::debug("[track] jump confirmed: cornerDisp={:.0f}px", disp);
         }
-        // Confirmed: clear the corner filters so the overlay snaps to the new
-        // pose instead of trailing across the jump.
-        m_pendingJumpH = cv::Mat();
-        m_cornerFilters.clear();
-        spdlog::debug("[track] jump confirmed: cornerDisp={:.0f}px", disp);
     } else if (!m_pendingJumpH.empty()) {
         m_pendingJumpH = cv::Mat();
     }
 
     const cv::Mat smoothed = smoothHomography(rawH);
     m_lastEmittedH = smoothed.clone();
+    m_lastHealthyPoseMs = nowMs;
     emit homographyUpdated(smoothed, inliers, reprojErr);
     spdlog::debug("[track] EMIT: inliers={} reproj={:.2f}px cornerDisp={:.2f}px",
                   inliers, reprojErr, disp);

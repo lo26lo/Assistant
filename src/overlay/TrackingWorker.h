@@ -287,6 +287,13 @@ private:
     // confirms it — one-off degenerate fits never get confirmed.
     cv::Mat m_pendingJumpH;
     double  m_frameDiag = 0.0;         // diagonal (px) of the last processed frame
+    // Steady-clock ms of the last HEALTHY pose decision (an actual EMIT or a
+    // static-scene hold — both mean a sane fit consistent with the last pose).
+    // When this goes stale (> ~2 s: board picked up, blur, occlusion), the
+    // jump gate's 2-estimate confirmation is bypassed: the "previous pose" is
+    // too old to be a meaningful prior, and demanding continuity with it is
+    // exactly what kept tracking dead after the board was put back down.
+    qint64  m_lastHealthyPoseMs = 0;
     // Capture time (seconds, steady_clock) of the frame being processed —
     // feeds the 1€ corner filters with the REAL inter-frame dt instead of the
     // worker's processing time, whose scheduling jitter used to leak into the

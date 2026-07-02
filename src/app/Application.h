@@ -143,7 +143,30 @@ private:
     ///                if it is confident (score ≥ reanchorMinScore) AND disagrees
     ///                enough with the current pose to be worth correcting drift,
     ///                so healthy live tracking is left undisturbed.
-    void autoAlignBoard(bool silent = false);
+    /// @param isRetry Internal: this call is an automatic retry of a failed
+    ///                interactive attempt — don't re-arm the retry budget.
+    ///                Interactive not-found results retry up to 2 more times on
+    ///                fresh frames (~300 ms apart) before reporting failure, so
+    ///                one badly-timed frame (blur, glare, hand) doesn't fail
+    ///                the whole click.
+    void autoAlignBoard(bool silent = false, bool isRetry = false);
+
+    /// Flip the ControlPanel's Live Tracking checkbox on after a successful
+    /// alignment (any path: 4-corner, 2-comp, multi-comp, anchor, Auto-Align,
+    /// component re-anchor) so alignment flows straight into tracking. Goes
+    /// through the checkbox → liveModeChanged → the normal enable handler, so
+    /// UI and state stay in sync. No-op when already live (the alignment
+    /// paths rebase the running tracker themselves) or when the homography
+    /// isn't valid.
+    void autoStartLiveTracking();
+
+    /// Self-re-arming recovery poll started when live tracking reports LOST:
+    /// as long as the state stays Lost (and live mode is on), periodically
+    /// re-locate the board outright — component re-anchor when a detector is
+    /// loaded, geometric BoardLocator otherwise — independent of the
+    /// reanchor_enabled periodic-correction setting (this is loss RECOVERY,
+    /// not drift correction). Stops as soon as tracking recovers.
+    void attemptLostRecovery();
     /// Component-level re-anchor (docs/AI_MODEL_DATASETS_PLAN.md, "Piste B"):
     /// runs the AI component detector on the current frame, matches detections
     /// to expected iBOM positions (current pose as prior) and re-fits the
@@ -240,6 +263,14 @@ private:
     QTimer* m_reanchorTimer = nullptr;
     int     m_reanchorFailStreak = 0;   // consecutive BoardLocator misses → back off
     int     m_reanchorTickCount  = 0;   // for skipping ticks while backing off
+
+    // Interactive Auto-Align retry budget (see autoAlignBoard's isRetry doc).
+    int  m_autoAlignRetriesLeft = 0;
+    // Loss-recovery poll state (see attemptLostRecovery): last state reported
+    // by trackingStateChanged, and whether a recovery chain is already armed
+    // (Lost can be signalled repeatedly — only one poll chain must run).
+    int  m_lastTrackingState  = -1;
+    bool m_lostRecoveryArmed  = false;
 
     // Focus assist — last time the sharpness metric was computed (throttle).
     qint64 m_lastSharpnessMs = 0;

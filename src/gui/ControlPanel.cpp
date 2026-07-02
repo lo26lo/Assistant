@@ -343,6 +343,15 @@ bool ControlPanel::hybridMode() const
     return m_hybridMode && m_hybridMode->isChecked();
 }
 
+void ControlPanel::setLiveMode(bool enabled)
+{
+    // Deliberately NOT signal-blocked (unlike setHybridMode): the point is to
+    // drive the real enable/disable path in Application through
+    // liveModeChanged, exactly as if the user had clicked the checkbox.
+    if (!m_liveMode || m_liveMode->isChecked() == enabled) return;
+    m_liveMode->setChecked(enabled);
+}
+
 void ControlPanel::setCameraBackendUI(bool isRealSense)
 {
     if (!m_btnCalibrate) return;  // group not built yet

@@ -1047,6 +1047,7 @@ void Application::applyMultiAlignment()
     }
     if (m_trackingWorker)
         QMetaObject::invokeMethod(m_trackingWorker, "resetReference", Qt::QueuedConnection);
+    autoStartLiveTracking();
 
     const char* model = (n >= 4) ? "homography" : (n == 3) ? "affine" : "similarity";
     reportAlignmentResult(
@@ -1056,7 +1057,7 @@ void Application::applyMultiAlignment()
                  n, model, m_currentPixelsPerMm);
 }
 
-void Application::autoAlignBoard(bool silent)
+void Application::autoAlignBoard(bool silent, bool isRetry)
 {
     if (m_autoAligning) return;  // already running, ignore re-clicks
     if (!m_lastColorFrame || m_lastColorFrame->empty()) {
@@ -1064,6 +1065,12 @@ void Application::autoAlignBoard(bool silent)
             m_mainWindow->updateStatusMessage(tr("Auto-Align: no camera frame available yet"));
         return;
     }
+
+    // Fresh interactive attempt: arm the auto-retry budget (a single
+    // badly-timed frame — blur, glare, a hand in view — shouldn't fail the
+    // whole click; the completion handler retries on fresh frames).
+    if (!silent && !isRetry)
+        m_autoAlignRetriesLeft = 2;
 
     // Cancel any other interactive picking mode.
     m_alignOnComponents = false;
@@ -1119,10 +1126,24 @@ void Application::autoAlignBoard(bool silent)
                 m_reanchorFailStreak = std::min(m_reanchorFailStreak + 1, 20);
                 spdlog::debug("Periodic re-anchor: board not found ({}), streak {}",
                               result.message, m_reanchorFailStreak);
+            } else if (m_autoAlignRetriesLeft > 0) {
+                // One frame is a lottery ticket (blur/glare/hand); retry on a
+                // fresh frame before reporting failure to the user.
+                const int attempt = 3 - m_autoAlignRetriesLeft;
+                --m_autoAlignRetriesLeft;
+                m_mainWindow->updateStatusMessage(
+                    tr("Auto-Align: board not found — retrying on a fresh frame (%1/3)…")
+                        .arg(attempt + 1));
+                spdlog::info("Auto-Align: not found ({}), retry {} of 2 in 300 ms",
+                             result.message, attempt);
+                QTimer::singleShot(300, this, [this]() {
+                    autoAlignBoard(/*silent=*/false, /*isRetry=*/true);
+                });
             } else {
                 m_mainWindow->updateStatusMessage(
-                    tr("Auto-Align failed: %1").arg(QString::fromStdString(result.message)));
-                spdlog::warn("Auto-Align failed: {}", result.message);
+                    tr("Auto-Align failed after 3 attempts: %1")
+                        .arg(QString::fromStdString(result.message)));
+                spdlog::warn("Auto-Align failed (3 attempts): {}", result.message);
             }
             return;
         }
@@ -1203,6 +1224,7 @@ void Application::autoAlignBoard(bool silent)
 
         if (m_trackingWorker)
             QMetaObject::invokeMethod(m_trackingWorker, "resetReference", Qt::QueuedConnection);
+        autoStartLiveTracking();
 
         if (silent) {
             // Periodic re-anchor: applied silently (already score- and
@@ -1251,6 +1273,36 @@ void Application::autoAlignBoard(bool silent)
         return overlay::BoardLocator::locate(colorCopy, depthCopy, *project, expectedPixelsPerMm,
                                               ibom::Layer::Front);
     }));
+}
+
+void Application::autoStartLiveTracking()
+{
+    if (m_liveMode) return;  // already tracking — alignment paths rebase it themselves
+    if (!m_homography || !m_homography->isValid()) return;
+    if (auto* cp = m_mainWindow ? m_mainWindow->controlPanel() : nullptr) {
+        spdlog::info("Alignment applied — enabling live tracking automatically");
+        cp->setLiveMode(true);
+    }
+}
+
+void Application::attemptLostRecovery()
+{
+    using S = overlay::TrackingWorker::State;
+    if (!m_liveMode || !m_ibomProject ||
+        m_lastTrackingState != static_cast<int>(S::Lost)) {
+        m_lostRecoveryArmed = false;  // recovered (or live mode ended) — chain stops
+        return;
+    }
+    if (!m_autoAligning) {
+        const bool viaDetector = componentDetector() != nullptr;
+        spdlog::info("Tracking LOST — automatic re-anchor attempt via {}",
+                     viaDetector ? "component detector" : "board outline");
+        if (viaDetector) componentReanchor(/*silent=*/true);
+        else             autoAlignBoard(/*silent=*/true);
+    }
+    // State-change signals only fire on transitions; a persistent loss needs
+    // polling until tracking recovers or live mode ends.
+    QTimer::singleShot(3000, this, &Application::attemptLostRecovery);
 }
 
 void Application::componentReanchor(bool silent)
@@ -1359,6 +1411,7 @@ void Application::componentReanchor(bool silent)
 
         if (m_trackingWorker)
             QMetaObject::invokeMethod(m_trackingWorker, "resetReference", Qt::QueuedConnection);
+        autoStartLiveTracking();
 
         if (silent) {
             spdlog::info("Component re-anchor applied ({})", result.message);
@@ -1623,6 +1676,7 @@ void Application::connectSignals()
         // ── Incremental tracking state → re-anchor badge (§4) ───────
         connect(m_trackingWorker, &overlay::TrackingWorker::trackingStateChanged,
                 this, [this](int state) {
+            m_lastTrackingState = state;  // read by the loss-recovery poll
             if (!m_liveMode) return;
             using S = overlay::TrackingWorker::State;
             switch (static_cast<S>(state)) {
@@ -1635,7 +1689,14 @@ void Application::connectSignals()
                     break;
                 case S::Lost:
                     m_mainWindow->updateStatusMessage(
-                        tr("Tracking: LOST — re-anchor (A) or click the PCB map"));
+                        tr("Tracking: LOST — re-anchoring automatically…"));
+                    // Give the worker a moment to re-acquire on its own (mask
+                    // fallback + jump-recovery usually do), then re-locate the
+                    // board outright. One chain only, however often Lost fires.
+                    if (!m_lostRecoveryArmed && m_ibomProject) {
+                        m_lostRecoveryArmed = true;
+                        QTimer::singleShot(800, this, &Application::attemptLostRecovery);
+                    }
                     break;
             }
         }, Qt::QueuedConnection);
@@ -2698,6 +2759,7 @@ void Application::connectControlSignals()
                         .arg(scale, 0, 'f', 1));
                 spdlog::info("Anchored on {}: scale={:.2f} px/mm rot={:.1f}°",
                              m_anchorRef, scale, m_config->microscopeAnchorRotationDeg());
+                autoStartLiveTracking();
             } else {
                 m_mainWindow->updateStatusMessage(tr("Anchor failed"));
                 spdlog::error("Anchor: homography compute failed");
@@ -2788,6 +2850,7 @@ void Application::connectControlSignals()
                         .arg(QString::fromStdString(m_alignRef1))
                         .arg(QString::fromStdString(m_alignRef2))
                         .arg(scale, 0, 'f', 1));
+                    autoStartLiveTracking();
                 } else {
                     spdlog::error("2-comp alignment: homography compute failed");
                     m_mainWindow->updateStatusMessage(tr("Alignment failed"));
@@ -2854,6 +2917,7 @@ void Application::connectControlSignals()
                 if (m_trackingWorker)
                     QMetaObject::invokeMethod(m_trackingWorker, "resetReference",
                                               Qt::QueuedConnection);
+                autoStartLiveTracking();
             } else {
                 spdlog::error("Manual homography computation failed");
                 m_mainWindow->updateStatusMessage(tr("Alignment failed — try again"));
@@ -2874,6 +2938,11 @@ void Application::connectControlSignals()
                 QMessageBox::information(m_mainWindow.get(), tr("Live Mode"),
                     tr("Set alignment points or load an iBOM file first."));
                 m_liveMode = false;
+                // Keep the checkbox truthful (it stayed checked while
+                // m_liveMode was silently reset). Re-enters this handler with
+                // enabled=false — the disable path below is a benign no-op.
+                if (auto* cp = m_mainWindow->controlPanel())
+                    cp->setLiveMode(false);
                 return;
             }
             m_baseHomography = m_homography->matrix().clone();
@@ -3129,6 +3198,7 @@ void Application::connectControlSignals()
             updateDynamicScale();
             m_mainWindow->updateStatusMessage(tr("Minimap anchor applied"));
             spdlog::info("Minimap anchor: PCB ({:.2f}, {:.2f}) → image center", pcbPt.x, pcbPt.y);
+            autoStartLiveTracking();
         }
     });
 

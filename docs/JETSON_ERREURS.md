@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 54 | 2026-07-02 | TrackingWorker / Application — terrain | 🟡 CONTOURNÉ | [PCB soulevé puis reposé → live tracking « perd le nord » et ne récupère jamais — le gate anti-saut exige la continuité avec une pose devenue obsolète ; mitigations : bypass après 2 s sans pose saine + re-anchor automatique sur état Lost](#erreur-54--pcb-souleve-puis-repose--tracking-jamais-recupere) |
 | 53 | 2026-07-02 | ComponentReanchor.h — 1er build Jetson de PR #21 | ✅ RÉSOLU | [Build échoue : `const Params& params = {}` ne compile pas — bug GCC (nested aggregate + DMI utilisée comme argument par défaut d'une méthode sœur, PR GCC 88857)](#erreur-53--componentreanchor-params--bug-gcc-aggregat-imbrique--argument-par-defaut) |
 | 52 | 2026-07-01 | Application.cpp — updateDynamicScale | ✅ RÉSOLU | [Méthode d'échelle `IBomPads` : `bestDist` remis à zéro par composant → `padB` = pad le plus loin du *dernier* composant, pas globalement ; + scan de tous les pads à chaque émission d'homographie (jusqu'à ~30 Hz)](#erreur-52--updatedynamicscale-ibompads-recherche-du-pad-le-plus-eloigne-boguee--scan-par-emission) |
 | 51 | 2026-07-01 | TrackingWorker — buildBoardMask | ✅ RÉSOLU | [Masque de détection board sans récupération : si la carte sort de la zone masquée, `m_lastHomography` ne se met plus jamais à jour → tracking perdu définitivement (mode référence, aucun compteur d'échec)](#erreur-51--masque-board-fige-apres-perte--pas-de-fallback-plein-cadre) |
@@ -1384,6 +1385,28 @@ Renommé les deux variables en `cornerTL`/`cornerTR` dans `autoAlignBoard()`.
 
 ### Leçon
 Ne jamais nommer une variable locale `tr` (ou tout identifiant Qt courant comme `tr`/`qDebug`/etc.) dans une méthode `QObject`, même si elle semble hors de portée du prochain appel `tr(...)` — un refactor ultérieur peut facilement élargir la portée sans qu'on s'en rende compte. Préférer un nom descriptif (`cornerTL`, `topRight`, …) systématiquement.
+
+## ERREUR 54 — PCB soulevé puis reposé : tracking jamais récupéré
+
+**Date :** 2026-07-02
+**Composant :** `src/overlay/TrackingWorker.cpp` (gate anti-saut lot B) + `src/app/Application.cpp` — rapport terrain (Jetson + D405, build PR #21)
+**Statut :** 🟡 CONTOURNÉ (mitigations posées ; cause racine exacte non confirmée faute de log verbose — à capturer si récidive)
+
+### Symptôme
+Live tracking actif et fonctionnel (« ça va mieux » vs avant les lots). L'utilisateur **soulève le PCB** : le tracking « perd le nord » — puis, la carte **reposée**, **plus rien ne bouge, définitivement**. Aucune récupération automatique.
+
+### Cause (analyse statique — la plus probable)
+Le gate anti-saut (lot B, F4) exige **2 estimées consécutives concordantes** avant d'accepter une pose déplacée de > 15 % de la diagonale — la référence de comparaison étant `m_lastEmittedH`, la **dernière pose émise**. Pendant la manipulation (carte en l'air, floue, occultée par la main), soit aucune pose saine n'est produite, soit les poses saines sont retenues en attente de confirmation qui n'arrive jamais (mouvement continu → deux ticks consécutifs diffèrent de plus que la tolérance). Une fois la carte reposée, chaque fit sain est comparé à une `m_lastEmittedH` **obsolète** (la pose d'avant/pendant le soulèvement) : la logique de continuité peut rester coincée selon la séquence exacte (alternance flow/ORB, re-seeds, poses aberrantes émises pendant la manip). D'autres facteurs possibles non exclus : référence ORB ne matchant plus (éclairage/aspect changé après manipulation), interaction avec le re-seed seamless (lot D). **Sans log verbose de l'épisode, la chaîne exacte n'est pas tranchée** — les deux mitigations ci-dessous couvrent toute la classe de problème.
+
+### Mitigations appliquées 🟡 (suite 117)
+1. **Worker — bypass de récupération du gate anti-saut** : nouvel horodatage `m_lastHealthyPoseMs` rafraîchi à chaque décision de pose saine (EMIT **ou** hold scène-statique — les deux attestent d'un fit cohérent). Si **> 2 s** se sont écoulées sans pose saine au moment où un fit sain à grand déplacement arrive, la confirmation à 2 estimées est **bypassée** : la pose est acceptée immédiatement avec snap des filtres 1€ (log `[track] jump accepted (recovery after N ms...)`). Rationale : après une longue sécheresse, « la pose précédente » n'a plus de valeur de prior — exiger la continuité avec elle est précisément ce qui tue la reprise. Les holds statiques rafraîchissant l'horodatage, le gate reste **pleinement armé** pendant la visualisation statique normale (un fit dégénéré isolé y reste bloqué comme avant).
+2. **Application — re-anchor automatique sur perte** : à la transition vers l'état **Lost** (live mode + iBOM chargé), une chaîne de récupération s'arme (une seule à la fois, `m_lostRecoveryArmed`) : après 800 ms (le temps que le worker se remette seul — masque plein-cadre + bypass ci-dessus), si toujours Lost → **re-localisation d'office** : `componentReanchor(silent)` si un détecteur IA est chargé, sinon `autoAlignBoard(silent)` — **indépendamment du réglage `reanchor_enabled`** (c'est de la récupération de perte, pas de la correction périodique de dérive). Re-tentative toutes les 3 s tant que Lost persiste ; la chaîne s'éteint dès que le tracking récupère ou que le live mode s'arrête. Message status : « Tracking: LOST — re-anchoring automatically… ».
+
+### Reste à faire pour clore
+Reproduire l'épisode (soulever/reposer la carte) avec **Dev → Verbose debug logging** actif et fournir le log : les entrées `[track] HELD jump` / `jump accepted (recovery...)` / `detect/match miss` / `seamless ORB re-seed` autour de l'épisode permettront de confirmer la chaîne exacte et de passer l'entrée en ✅.
+
+### Leçon
+Tout gate de continuité (comparaison à « la dernière bonne pose ») doit avoir une **péremption** : au-delà d'un certain âge, la référence de continuité n'est plus une information mais un piège. Même principe que l'ERREUR #51 (masque périmé → fallback plein cadre) : un mécanisme conditionné à l'état passé doit toujours avoir un chemin de dégradation quand cet état devient obsolète.
 
 ## ERREUR 53 — ComponentReanchor Params : DMI d'aggrégat imbriqué requis avant fin de la classe englobante
 
