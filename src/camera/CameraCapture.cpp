@@ -508,7 +508,11 @@ void CameraCapture::captureLoop()
         }
 
         // Notify listeners — Qt copies the shared_ptr (refcount bump only).
-        emit frameReady(shared);
+        // Stamped with monotonic capture time so consumers can measure and
+        // bound their own pipeline latency (F12).
+        const qint64 captureNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        emit frameReady(shared, captureNs);
     }
 
     cap.release();

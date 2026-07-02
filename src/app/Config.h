@@ -362,19 +362,27 @@ private:
     int  m_remoteViewPort  = 8080;
     bool m_verboseLogging  = false;
 
-    // Live Tracking
-    int    m_trackingIntervalMs = 200;
+    // Live Tracking. Defaults = the fast path validated on Jetson (suite 100:
+    // optical flow at camera rate, ORB only re-seeding, Auto model → similarity
+    // on a flat board). Pre-v2 configs are soft-migrated in load() — see
+    // m_trackingDefaultsV below and LIVE_TRACKING_ANALYSE_2026-07.md (F1).
+    int    m_trackingIntervalMs = 100;
     int    m_orbKeypoints       = 200;    // ORB is called every intervalMs; 200 is enough @ 0.5× downscale
     int    m_minMatchCount      = 8;
     double m_matchDistanceRatio = 0.75;   // Lowe's ratio (lower = stricter)
     double m_ransacThreshold    = 3.0;
     float  m_trackingDownscale  = 0.5f;   // 1.0 = full res, 0.5 = half (default)
-    int    m_trackingModel      = 3;      // 0 auto / 1 sim / 2 affine / 3 homography
+    int    m_trackingModel      = 0;      // 0 auto / 1 sim / 2 affine / 3 homography
     double m_oneEuroMinCutoff   = 1.0;    // Hz
     double m_oneEuroBeta        = 0.02;
     bool   m_trackingClahe       = false;
-    bool   m_trackingOpticalFlow = false;
+    bool   m_trackingOpticalFlow = true;
     int    m_trackingGpuMode     = 1;     // 0 off / 1 auto / 2 force
+    // Version of the tracking defaults this config was last aligned with.
+    // 2 = fast-path defaults (interval 100 ms, Auto model, optical flow on).
+    // Old files (no key → 1) get values still equal to the OLD defaults
+    // upgraded once in load(); deliberate custom values are left alone.
+    int    m_trackingDefaultsV   = 2;
 
     // Periodic geometric re-anchor (BoardLocator)
     bool   m_reanchorEnabled   = false;

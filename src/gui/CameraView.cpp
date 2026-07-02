@@ -38,6 +38,19 @@ void CameraView::setOverlayImage(const QImage& overlay)
     update();
 }
 
+void CameraView::setBoardOverlayImage(const QImage& boardImg)
+{
+    m_boardOverlay = boardImg.isNull() ? QPixmap() : QPixmap::fromImage(boardImg);
+    update();
+}
+
+void CameraView::setBoardOverlayTransform(const QTransform& bufferToImage)
+{
+    m_boardToImage = bufferToImage;
+    m_boardTransformValid = true;
+    update();
+}
+
 void CameraView::setOverlayOpacity(float opacity)
 {
     m_overlayOpacity = std::clamp(opacity, 0.0f, 1.0f);
@@ -138,14 +151,27 @@ QImage CameraView::captureView() const
     QImage capture(size(), QImage::Format_ARGB32);
     capture.fill(Qt::black);
     QPainter p(&capture);
+    p.setRenderHint(QPainter::SmoothPixmapTransform);
 
     std::lock_guard lock(m_frameMutex);
+    const QRectF target = m_imageRect.translated(m_panOffset);
     if (!m_frame.isNull()) {
-        p.drawImage(m_imageRect.translated(m_panOffset), m_frame);
+        p.drawImage(target, m_frame);
+    }
+    // Same board-overlay composition as paintEvent, so screenshots match.
+    if (!m_boardOverlay.isNull() && m_boardTransformValid) {
+        p.save();
+        p.setOpacity(m_overlayOpacity);
+        const QTransform imageToWidgetT =
+            QTransform::fromScale(m_scale, m_scale)
+            * QTransform::fromTranslate(target.x(), target.y());
+        p.setTransform(m_boardToImage * imageToWidgetT);
+        p.drawPixmap(QPointF(0, 0), m_boardOverlay);
+        p.restore();
     }
     if (!m_overlay.isNull()) {
         p.setOpacity(m_overlayOpacity);
-        p.drawImage(m_imageRect.translated(m_panOffset), m_overlay);
+        p.drawImage(target, m_overlay);
         p.setOpacity(1.0);
     }
     return capture;
@@ -200,7 +226,24 @@ void CameraView::paintEvent(QPaintEvent* /*event*/)
     QRectF target = m_imageRect.translated(m_panOffset);
     painter.drawImage(target, m_frame);
 
-    // Draw overlay
+    // Board-space iBOM overlay, warped through the current homography as a
+    // projective QTransform (supported by both the GL and raster paint
+    // engines). Composed with the same image→widget mapping as the frame, so
+    // the overlay stays locked to the image under zoom/pan — and it always
+    // uses the freshest pose at paint time, at a per-frame cost independent
+    // of the component count (LIVE_TRACKING_ANALYSE_2026-07.md, F11).
+    if (!m_boardOverlay.isNull() && m_boardTransformValid) {
+        painter.save();
+        painter.setOpacity(m_overlayOpacity);
+        const QTransform imageToWidgetT =
+            QTransform::fromScale(m_scale, m_scale)
+            * QTransform::fromTranslate(target.x(), target.y());
+        painter.setTransform(m_boardToImage * imageToWidgetT);
+        painter.drawPixmap(QPointF(0, 0), m_boardOverlay);
+        painter.restore();
+    }
+
+    // Draw the full-frame overlay channel (alignment-picking feedback)
     if (!m_overlay.isNull()) {
         painter.setOpacity(m_overlayOpacity);
         painter.drawImage(target, m_overlay);

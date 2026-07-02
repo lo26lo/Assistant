@@ -43,6 +43,12 @@ public:
     /// Reflect the persisted hybrid drift-correction flag in the checkbox.
     void setHybridMode(bool enabled);
     bool hybridMode() const;
+
+    /// Programmatically toggle the Live Tracking checkbox. Goes through
+    /// setChecked() so liveModeChanged fires and the normal enable/disable
+    /// handler runs — UI and Application state stay in sync (used by the
+    /// auto-start-after-alignment flow). No-op if already in that state.
+    void setLiveMode(bool enabled);
     /// Switch UI between USB-microscope and RealSense mode.
     /// Disables/relabels the calibration button when RealSense is active
     /// (factory intrinsics are embedded in the SDK — no checkerboard needed).

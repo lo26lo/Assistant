@@ -59,8 +59,19 @@ public:
     double reprojectionError() const { return m_reprojError; }
 
 private:
+    /// Refresh the flat coefficient caches after any matrix change. The
+    /// point transforms apply them inline: the cv::perspectiveTransform path
+    /// wrapped every single point in two std::vectors and a Mat — and the
+    /// overlay/minimap/scale code calls these thousands of times per frame.
+    void cacheCoefficients();
+    /// Row-major 3×3 projective apply. Returns `p` unchanged on a degenerate
+    /// ray (w ≈ 0), where cv::perspectiveTransform would return ±inf.
+    static cv::Point2f applyCached(const double m[9], cv::Point2f p);
+
     cv::Mat m_homography;  // 3x3 PCB -> Image
     cv::Mat m_inverse;     // 3x3 Image -> PCB
+    double  m_h[9]    = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // row-major m_homography
+    double  m_hInv[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // row-major m_inverse
     bool    m_valid = false;
     double  m_reprojError = 0.0;
 };

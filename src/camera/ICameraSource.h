@@ -28,8 +28,11 @@ using DepthFrameRef = std::shared_ptr<const cv::Mat>;
  * to whether frames come from a V4L2/UVC microscope or an Intel RealSense.
  *
  * Implementations run capture on their own thread and publish each frame as a
- * FrameRef via frameReady(). The signal signatures match the historical
- * CameraCapture API so existing connections keep working unchanged.
+ * FrameRef via frameReady(), stamped with a monotonic capture timestamp
+ * (steady_clock ns) taken on the capture thread. The timestamp is the
+ * foundation for latency accounting downstream (stale-frame dropping in the
+ * tracking worker, real capture-dt for the 1€ filter — F12 of
+ * docs/LIVE_TRACKING_ANALYSE_2026-07.md).
  */
 class ICameraSource : public QObject {
     Q_OBJECT
@@ -70,7 +73,11 @@ public:
 signals:
     /// Emitted when a new frame is ready. The FrameRef is shared — consumers
     /// may hold it but MUST NOT mutate the underlying cv::Mat.
-    void frameReady(ibom::camera::FrameRef frame);
+    /// @param captureNs Monotonic capture time (std::chrono::steady_clock,
+    ///        nanoseconds since epoch), stamped on the capture thread right
+    ///        after the frame was grabbed. Same clock as the consumers use, so
+    ///        `now - captureNs` measures end-to-end pipeline latency.
+    void frameReady(ibom::camera::FrameRef frame, qint64 captureNs);
 
     /// Emitted on a capture error (device gone, open failed, …).
     void captureError(const QString& message);

@@ -204,6 +204,22 @@ bool Config::load(const std::string& path)
                              m_matchDistanceRatio);
                 m_matchDistanceRatio = 0.75;
             }
+
+            // Migration v2: move pre-existing configs onto the fast-path
+            // tracking defaults (optical flow at camera rate, Auto model,
+            // 100 ms ORB re-seed) validated on Jetson. Only values still equal
+            // to the OLD defaults are upgraded, so deliberate custom settings
+            // survive; runs until a save() persists defaults_v (idempotent).
+            const int defaultsV = trk.value("defaults_v", 1);
+            if (defaultsV < 2) {
+                if (trk.value("interval_ms", 200) == 200)  m_trackingIntervalMs  = 100;
+                if (trk.value("model", 3) == 3)            m_trackingModel       = 0;
+                if (!trk.value("optical_flow", false))     m_trackingOpticalFlow = true;
+                spdlog::info("Migrating tracking defaults v{}→2: interval={}ms model={} opticalFlow={}",
+                             defaultsV, m_trackingIntervalMs, m_trackingModel,
+                             m_trackingOpticalFlow);
+            }
+            m_trackingDefaultsV = 2;
         }
 
         // Calibration
@@ -351,6 +367,7 @@ bool Config::save(const std::string& path) const
 
         // Tracking
         j["tracking"] = {
+            {"defaults_v",           m_trackingDefaultsV},
             {"interval_ms",          m_trackingIntervalMs},
             {"orb_keypoints",        m_orbKeypoints},
             {"min_matches",          m_minMatchCount},

@@ -15,6 +15,10 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 54 | 2026-07-02 | TrackingWorker / Application — terrain | 🟡 CONTOURNÉ | [PCB soulevé puis reposé → live tracking « perd le nord » et ne récupère jamais — le gate anti-saut exige la continuité avec une pose devenue obsolète ; mitigations : bypass après 2 s sans pose saine + re-anchor automatique sur état Lost](#erreur-54--pcb-souleve-puis-repose--tracking-jamais-recupere) |
+| 53 | 2026-07-02 | ComponentReanchor.h — 1er build Jetson de PR #21 | ✅ RÉSOLU | [Build échoue : `const Params& params = {}` ne compile pas — bug GCC (nested aggregate + DMI utilisée comme argument par défaut d'une méthode sœur, PR GCC 88857)](#erreur-53--componentreanchor-params--bug-gcc-aggregat-imbrique--argument-par-defaut) |
+| 52 | 2026-07-01 | Application.cpp — updateDynamicScale | ✅ RÉSOLU | [Méthode d'échelle `IBomPads` : `bestDist` remis à zéro par composant → `padB` = pad le plus loin du *dernier* composant, pas globalement ; + scan de tous les pads à chaque émission d'homographie (jusqu'à ~30 Hz)](#erreur-52--updatedynamicscale-ibompads-recherche-du-pad-le-plus-eloigne-boguee--scan-par-emission) |
+| 51 | 2026-07-01 | TrackingWorker — buildBoardMask | ✅ RÉSOLU | [Masque de détection board sans récupération : si la carte sort de la zone masquée, `m_lastHomography` ne se met plus jamais à jour → tracking perdu définitivement (mode référence, aucun compteur d'échec)](#erreur-51--masque-board-fige-apres-perte--pas-de-fallback-plein-cadre) |
 | 50 | 2026-06-20 | tests/CMakeLists.txt — link PR #20 | ✅ RÉSOLU | [`test_tracking_worker` ne linke pas : `cv::calcOpticalFlowPyrLK` (opencv_video) + `cv::cuda::ORB::create` (opencv_cudafeatures2d) non résolus — le test linkait un sous-ensemble OpenCV figé](#erreur-50--test_tracking_worker-ne-linke-pas-modules-opencv-manquants) |
 | 49 | 2026-06-20 | TrackingWorker.h — build PR #20 | ✅ RÉSOLU | [Build Jetson de PR #20 échoue : `processIncremental` déclaré deux fois dans `TrackingWorker.h` (artefact du refactor Phases 1-3)](#erreur-49--processincremental-declare-deux-fois-build-pr-20) |
 | 48 | 2026-06-19 | Application.cpp — sélection PCB Map | ✅ RÉSOLU | [Clic sur la PCB Map ne sélectionne pas le composant visé : recherche par centre le plus proche (`c.position`) peu fiable sur carte dense → hit-test bbox](#erreur-48--clic-pcb-map-ne-selectionne-pas-le-bon-composant-nearest-center-peu-fiable) |
@@ -1381,6 +1385,96 @@ Renommé les deux variables en `cornerTL`/`cornerTR` dans `autoAlignBoard()`.
 
 ### Leçon
 Ne jamais nommer une variable locale `tr` (ou tout identifiant Qt courant comme `tr`/`qDebug`/etc.) dans une méthode `QObject`, même si elle semble hors de portée du prochain appel `tr(...)` — un refactor ultérieur peut facilement élargir la portée sans qu'on s'en rende compte. Préférer un nom descriptif (`cornerTL`, `topRight`, …) systématiquement.
+
+## ERREUR 54 — PCB soulevé puis reposé : tracking jamais récupéré
+
+**Date :** 2026-07-02
+**Composant :** `src/overlay/TrackingWorker.cpp` (gate anti-saut lot B) + `src/app/Application.cpp` — rapport terrain (Jetson + D405, build PR #21)
+**Statut :** 🟡 CONTOURNÉ (mitigations posées ; cause racine exacte non confirmée faute de log verbose — à capturer si récidive)
+
+### Symptôme
+Live tracking actif et fonctionnel (« ça va mieux » vs avant les lots). L'utilisateur **soulève le PCB** : le tracking « perd le nord » — puis, la carte **reposée**, **plus rien ne bouge, définitivement**. Aucune récupération automatique.
+
+### Cause (analyse statique — la plus probable)
+Le gate anti-saut (lot B, F4) exige **2 estimées consécutives concordantes** avant d'accepter une pose déplacée de > 15 % de la diagonale — la référence de comparaison étant `m_lastEmittedH`, la **dernière pose émise**. Pendant la manipulation (carte en l'air, floue, occultée par la main), soit aucune pose saine n'est produite, soit les poses saines sont retenues en attente de confirmation qui n'arrive jamais (mouvement continu → deux ticks consécutifs diffèrent de plus que la tolérance). Une fois la carte reposée, chaque fit sain est comparé à une `m_lastEmittedH` **obsolète** (la pose d'avant/pendant le soulèvement) : la logique de continuité peut rester coincée selon la séquence exacte (alternance flow/ORB, re-seeds, poses aberrantes émises pendant la manip). D'autres facteurs possibles non exclus : référence ORB ne matchant plus (éclairage/aspect changé après manipulation), interaction avec le re-seed seamless (lot D). **Sans log verbose de l'épisode, la chaîne exacte n'est pas tranchée** — les deux mitigations ci-dessous couvrent toute la classe de problème.
+
+### Mitigations appliquées 🟡 (suite 117)
+1. **Worker — bypass de récupération du gate anti-saut** : nouvel horodatage `m_lastHealthyPoseMs` rafraîchi à chaque décision de pose saine (EMIT **ou** hold scène-statique — les deux attestent d'un fit cohérent). Si **> 2 s** se sont écoulées sans pose saine au moment où un fit sain à grand déplacement arrive, la confirmation à 2 estimées est **bypassée** : la pose est acceptée immédiatement avec snap des filtres 1€ (log `[track] jump accepted (recovery after N ms...)`). Rationale : après une longue sécheresse, « la pose précédente » n'a plus de valeur de prior — exiger la continuité avec elle est précisément ce qui tue la reprise. Les holds statiques rafraîchissant l'horodatage, le gate reste **pleinement armé** pendant la visualisation statique normale (un fit dégénéré isolé y reste bloqué comme avant).
+2. **Application — re-anchor automatique sur perte** : à la transition vers l'état **Lost** (live mode + iBOM chargé), une chaîne de récupération s'arme (une seule à la fois, `m_lostRecoveryArmed`) : après 800 ms (le temps que le worker se remette seul — masque plein-cadre + bypass ci-dessus), si toujours Lost → **re-localisation d'office** : `componentReanchor(silent)` si un détecteur IA est chargé, sinon `autoAlignBoard(silent)` — **indépendamment du réglage `reanchor_enabled`** (c'est de la récupération de perte, pas de la correction périodique de dérive). Re-tentative toutes les 3 s tant que Lost persiste ; la chaîne s'éteint dès que le tracking récupère ou que le live mode s'arrête. Message status : « Tracking: LOST — re-anchoring automatically… ».
+
+### Reste à faire pour clore
+Reproduire l'épisode (soulever/reposer la carte) avec **Dev → Verbose debug logging** actif et fournir le log : les entrées `[track] HELD jump` / `jump accepted (recovery...)` / `detect/match miss` / `seamless ORB re-seed` autour de l'épisode permettront de confirmer la chaîne exacte et de passer l'entrée en ✅.
+
+### Leçon
+Tout gate de continuité (comparaison à « la dernière bonne pose ») doit avoir une **péremption** : au-delà d'un certain âge, la référence de continuité n'est plus une information mais un piège. Même principe que l'ERREUR #51 (masque périmé → fallback plein cadre) : un mécanisme conditionné à l'état passé doit toujours avoir un chemin de dégradation quand cet état devient obsolète.
+
+## ERREUR 53 — ComponentReanchor Params : DMI d'aggrégat imbriqué requis avant fin de la classe englobante
+
+**Date :** 2026-07-02
+**Composant :** `src/overlay/ComponentReanchor.{h,cpp}` — build Jetson de PR #21 (empilée sur PR #20)
+**Statut :** ✅ RÉSOLU (2 itérations — la 1ère tentative a introduit une 2e erreur, voir « Fausse piste » ci-dessous)
+
+### Symptôme (1ère itération)
+Premier build Jetson tenté sur `claude/live-tracking-analysis-tr2h3j` : échec dès `[19/36]` sur `ComponentReanchor.cpp` **et** `Application.cpp` (qui inclut le header) :
+```
+ComponentReanchor.h:80:33: error: could not convert ‘<brace-enclosed initializer list>()’ from
+  ‘<brace-enclosed initializer list>’ to ‘const ibom::overlay::ComponentReanchor::Params&’
+        const Params& params = {});
+```
+`Params` est une struct **imbriquée** dans `ComponentReanchor`, pur aggrégat (uniquement des initialiseurs de membre par défaut — DMI —, aucun constructeur déclaré). `estimate()`, méthode **statique sœur** de `Params` dans la même classe englobante, la prend en paramètre par défaut : `const Params& params = {}`.
+
+### Fausse piste (corrigée en 2e itération)
+Le diagnostic initial pointait vers un bug front-end GCC ([PR 88857](https://gcc.gnu.org/bugzilla/show_bug.cgi?id=88857)) et proposait comme fix un constructeur par défaut explicite `Params() = default;`. **Ce fix a fait régresser le build** avec une 2e erreur, cette fois sans ambiguïté sur sa nature :
+```
+ComponentReanchor.h:89:33: error: default member initializer for
+  ‘ibom::overlay::ComponentReanchor::Params::maxMatchDistPx’ required before the end of its enclosing class
+```
+En ajoutant un constructeur déclaré (même `= default`) à `Params`, sa construction par défaut cesse d'être une aggregate-init mécanique et devient un vrai appel de constructeur — dont la définition implicite a besoin des DMI. Or c'est une **règle du standard C++** (pas un bug compilateur) : un DMI ne peut pas être requis pour synthétiser un constructeur **avant que la classe englobante (`ComponentReanchor`, pas seulement `Params`) ne soit complète** — et ici le besoin surgit dès `estimate()` (ligne 89), donc *avant* l'accolade fermante de `ComponentReanchor`. Rétrospectivement, l'erreur de la 1ère itération était probablement déjà une manifestation de cette même règle standard (via le chemin d'aggregate-init plutôt que constructeur), pas un bug GCC isolé.
+
+### Solution appliquée ✅
+`Params` redevient un pur aggrégat (retrait du constructeur explicite). `estimate()` est scindée en **deux surcharges** : la forme complète (6 arguments, **aucun défaut**, `classOfComponent` et `params` tous deux requis) et une **surcharge de commodité** (5 arguments, seul `classOfComponent = {}` par défaut — `std::vector`, un type sans lien avec `ComponentReanchor`, donc hors du problème). La surcharge à 5 arguments est **définie dans le `.cpp`**, où elle construit `Params{}` avant de déléguer à la forme complète — à cet endroit, `ComponentReanchor` (et son membre `Params`) est un type **déjà complet**, donc l'aggregate-init des DMI n'est plus requise avant la fin de sa classe englobante. Seul appelant existant (`Application.cpp:1374`, 4 arguments explicites) : résout sans ambiguïté vers la surcharge à 5 arguments. Le code n'avait **jamais été compilé** avant ce build (suite 103 : « ⚠️ Non compilé ici » à chaque mention) — c'est le premier build Jetson qui touche réellement `ComponentReanchor.{h,cpp}`.
+
+### Leçon
+Une struct **imbriquée** utilisée comme valeur par défaut `= {}` d'un paramètre d'une méthode **de la même classe englobante** viole une règle standard dès que sa construction implique la moindre "instanciation" (DMI requis pour un constructeur) déclenchée avant que l'englobant ne soit complet — que le type soit un aggrégat pur (le chemin échoue silencieusement avec un message de conversion confus) ou qu'on lui ajoute un constructeur explicite (le chemin échoue avec un message explicite mais toujours à cause de la même contrainte). **Le vrai fix n'est jamais côté `Params`** : c'est de sortir la construction de la valeur par défaut du corps de la classe — via une surcharge sans ce paramètre, définie hors-ligne (`.cpp` ou après l'accolade fermante de la classe), là où l'englobant est garanti complet. Rappel plus large (déjà noté en 1ère itération, confirmé ici) : tout code marqué « ⚠️ Non compilé ici » doit être traité comme **non validé même syntaxiquement** jusqu'au premier build réel ; et un fix non compilable localement doit être vérifié avec un soin particulier avant d'être proposé comme définitif — la 1ère itération de ce fix, plausible en lecture, s'est révélée fausse dès le build suivant.
+
+## ERREUR 52 — `updateDynamicScale` IBomPads : recherche du pad le plus éloigné boguée + scan par émission
+
+**Date :** 2026-07-01
+**Composant :** `src/app/Application.cpp` — `updateDynamicScale()` (branche `ScaleMethod::IBomPads`)
+**Statut :** ✅ RÉSOLU (fix appliqué en suite 109 — à valider au prochain build Jetson)
+
+### Symptôme
+Avec `scaleMethod = IBomPads`, l'échelle px/mm peut être instable ou fausse : elle est calculée entre `padA` (premier pad du premier composant) et un `padB` qui n'est **pas** le pad le plus éloigné de la carte.
+
+### Cause
+Dans la boucle de recherche (`Application.cpp:3728-3740`), `double bestDist = 0;` est déclaré **à l'intérieur** de la boucle sur les composants → remis à zéro à chaque composant, et `padB` écrasé à chaque itération. Résultat : `padB` = pad le plus éloigné de `padA` **dans le dernier composant qui a des pads**, qui peut être voisin de `padA` (« too close, unreliable » n'attrape que < 1 mm). Par ailleurs `updateDynamicScale()` est appelé **à chaque émission d'homographie** (`Application.cpp:1603`, jusqu'à ~30 Hz avec l'optical flow) et cette branche re-scanne tous les pads de la carte à chaque appel.
+
+### Solution appliquée ✅ (suite 109)
+1. La paire de pads de référence est désormais **cachée par projet** (`m_scaleRefProject` comme tag d'identité + positions copiées par valeur) et recalculée en un seul passage O(n) : extrêmes le long des deux diagonales (x+y et x−y), on garde la paire la plus éloignée des deux candidates — pas le diamètre exact, mais ≥ diagonale/√2, largement suffisant comme base d'échelle.
+2. L'appel depuis le handler `homographyUpdated` (live tracking) est **throttlé à ~5 Hz** (`m_lastScaleUpdateMs`, 200 ms). Les appels événementiels (alignement, re-anchor) restent directs et non throttlés.
+
+La méthode par défaut (`Homography`) n'était pas affectée par le bug de recherche, seulement par l'absence de throttle. Analyse complète : [LIVE_TRACKING_ANALYSE_2026-07.md](LIVE_TRACKING_ANALYSE_2026-07.md) (finding **F7**).
+
+### Leçon
+Déclarer les accumulateurs de recherche (`best…`) **hors** de la boucle qu'ils accumulent. Toute fonction branchée sur `homographyUpdated` doit être considérée comme appelée à cadence caméra (30 Hz), pas « de temps en temps ».
+
+## ERREUR 51 — Masque board figé après perte : pas de fallback plein cadre
+
+**Date :** 2026-07-01
+**Composant :** `src/overlay/TrackingWorker.cpp` — `buildBoardMask()` / `processReference()`
+**Statut :** ✅ RÉSOLU (fix appliqué en suite 109 + test de régression — à valider au prochain build Jetson)
+
+### Symptôme
+En live tracking (mode référence), si la carte se déplace vite/loin entre deux ticks ORB (main qui bouge la carte, bump de la caméra, FOV changé), le suivi peut se perdre **définitivement** : l'overlay reste figé et ne ré-accroche jamais, jusqu'à un re-anchor manuel (Auto-Align) ou périodique.
+
+### Cause
+Le masque de détection ORB (`buildBoardMask`, `TrackingWorker.cpp:137-171` — introduit par l'ERREUR #35 pour empêcher le verrouillage sur le fond) projette le polygone carte via `m_lastHomography`, qui n'est mise à jour **que sur estimation réussie** (`:459`, `:681`, `:789`). Si la carte sort de la zone masquée (marge ×1.6 seulement), l'ORB ne détecte plus que du fond dans un masque périmé → aucun match → aucune mise à jour de `m_lastHomography` → **le masque reste faux pour toujours** (boucle morte silencieuse). Le chemin référence n'a **aucun compteur d'échecs** (`m_lostFrames` ne sert qu'au mode incrémental) : `processReference` sort par des `return` muets (`:662`, `:667`), sans même passer l'état à `Lost`.
+
+### Solution appliquée ✅ (suite 109)
+`m_lostFrames` (jusque-là réservé au mode incrémental) compte désormais les échecs consécutifs **dans les deux modes** via le helper `noteDetectMiss()` (qui passe aussi l'état à Lost après 4 échecs). Dans `processFrame`, le masque **escalade** avec ce compteur : marge normale ×1.6 (< 3 échecs) → marge élargie ×2.5 (3–5) → **masque abandonné** = détection plein cadre (≥ 6), jusqu'à ré-acquisition (reset du compteur à tout fit sain — référence, flow ou incrémental). Garde-fous : (a) l'escalade ne s'applique qu'une fois une référence capturée — la **capture** de référence reste toujours masquée, sinon des keypoints de fond contamineraient le set de référence (retour de l'ERREUR #35) ; (b) `m_lastHomography` (donc le masque) et le seed optical-flow ne sont plus mis à jour que par un fit **sain** (`inliers ≥ minMatchCount`) — une estimée dégénérée ne peut plus pointer le masque au mauvais endroit. Au passage : le chemin référence rapporte enfin `Locked` (le badge UI restait sur « LOST » en ORB pur — finding F5). **Test de régression ajouté** (`tests/test_tracking_worker.cpp` : « re-acquires after the board leaves the masked area » — carte translatée de 400 px hors masque → ré-acquisition ≤ 12 frames + pose correcte + badge Locked). Analyse complète : [LIVE_TRACKING_ANALYSE_2026-07.md](LIVE_TRACKING_ANALYSE_2026-07.md) (finding **F2**).
+
+### Leçon
+Tout mécanisme qui **conditionne la perception à la dernière estimation** (masque, ROI, fenêtre de recherche) doit avoir un chemin de dégradation vers « chercher partout » après N échecs, sinon une seule sortie du domaine de validité devient irréversible.
 
 ## ERREUR 50 — `test_tracking_worker` ne linke pas : modules OpenCV manquants
 

@@ -1,5 +1,9 @@
 # Prochaine session — MicroscopeIBOM (au 2026-06-11)
 
+> ⚠️ **DOCUMENT OBSOLÈTE (ère Windows / début de migration) — non tenu à jour.**
+> L'état courant du projet vit dans [docs/JETSON_SESSION_LOG.md](../docs/JETSON_SESSION_LOG.md)
+> (bloc « État actuel » en tête). Conservé pour l'historique uniquement.
+
 > **Lire ce fichier en premier** pour reprendre sans relire toute l'histoire.
 > Mis à jour après chaque session. Lire aussi l'entrée la plus récente de
 > [JETSON_SESSION_LOG.md](JETSON_SESSION_LOG.md) pour le détail technique.

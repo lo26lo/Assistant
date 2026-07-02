@@ -42,7 +42,7 @@ La version Windows reste fonctionnelle mais n'évolue plus. La doc de migration 
 | **Overlay PCB** | Pads, silkscreen, labels ref superposés sur le flux caméra via homographie |
 | **Alignement** | 4 chemins : 4 clics (coins PCB) · 2 composants de référence · ancrage microscope 1-point · **Auto-Align** (détection automatique du contour) |
 | **Auto-Align** | Détection automatique de la carte (plan de profondeur D405 ou contour 2D), désambiguïsation d'orientation, sans clic — voir [docs/AUTO_ALIGN_PLAN.md](docs/AUTO_ALIGN_PLAN.md) |
-| **Live Tracking** | ORB feature matching + RANSAC dans un thread dédié, masquage sur la zone carte, downscale configurable |
+| **Live Tracking** | Optical flow LK à cadence caméra (défaut) + re-seed ORB/MAGSAC périodique, thread dédié, masque carte auto-récupérant, gates anti-saut/sanité, lissage 1€ — voir [docs/LIVE_TRACKING_ANALYSE_2026-07.md](docs/LIVE_TRACKING_ANALYSE_2026-07.md) |
 | **Scale dynamique** | px/mm mis à jour automatiquement (homographie, pads iBOM, ou profondeur) |
 | **Bagues optiques** | Multiplicateur 0.5×–2× appliqué au scale px/mm |
 | **BOM Panel** | Tableau composants avec sélection → highlight sur l'overlay, filtres, checkboxes |
@@ -80,15 +80,15 @@ main.cpp
   └─ QApplication
   └─ Application (QObject)
        ├─ Config              JSON ($IBOM_DATA_DIR ou %APPDATA%)
-       ├─ CameraCapture       thread → frameReady(FrameRef) → CameraView   (V4L2/MSMF)
+       ├─ CameraCapture       thread → frameReady(FrameRef, captureNs) → CameraView (V4L2/MSMF)
        ├─ RealSenseCapture    thread → frameReady + depthFrameReady         (D405)
        ├─ CameraCalibration   YAML, undistort
        ├─ IBomParser          HTML → JSON → IBomProject
-       ├─ OverlayRenderer     pads + silkscreen + labels (QPainter)
+       ├─ OverlayRenderer     rendu espace carte (1×, AA) → warp projectif par CameraView
        ├─ Homography          pcbToImage, transformRect
        ├─ BoardLocator        Auto-Align : détection contour + désambiguïsation (Qt-free)
        ├─ HeatmapRenderer
-       ├─ TrackingWorker      thread dédié — ORB + RANSAC, masquage zone carte
+       ├─ TrackingWorker      thread dédié — flow LK + ORB/MAGSAC, masque auto-récupérant
        ├─ DatasetCreator      thread dédié — capture + auto-annotation YOLO
        └─ MainWindow
             ├─ CameraView      paintEvent, zoom/pan, fullscreen
@@ -108,8 +108,8 @@ main.cpp
 | Thread | Rôle |
 |---|---|
 | Main / GUI | Qt event loop, paintEvent, signals/slots UI |
-| CameraCapture / RealSenseCapture | `captureLoop()` — lit le flux, émet `frameReady(FrameRef)` (+ `depthFrameReady` pour la D405) |
-| TrackingWorker | ORB + RANSAC — reçoit `processFrame(FrameRef)`, émet `homographyUpdated(cv::Mat, inliers, reprojErr)` |
+| CameraCapture / RealSenseCapture | `captureLoop()` — lit le flux, émet `frameReady(FrameRef, qint64 captureNs)` (+ `depthFrameReady` pour la D405) |
+| TrackingWorker | flow LK + ORB/MAGSAC — reçoit `processFrame(FrameRef, captureNs)` (backpressure max 2 en vol), émet `homographyUpdated(cv::Mat, inliers, reprojErr)` |
 | DatasetCreator | Capture dataset — gates qualité, projection bboxes iBOM → labels YOLO |
 
 `FrameRef = std::shared_ptr<const cv::Mat>` — zero-copy entre les threads.

@@ -520,7 +520,11 @@ void RealSenseCapture::captureLoop()
             std::lock_guard<std::mutex> lock(m_frameMutex);
             m_latestFrame = shared;
         }
-        emit frameReady(shared);
+        // Monotonic arrival stamp (≈ capture time) — same clock as consumers,
+        // used downstream for latency accounting (F12).
+        const qint64 captureNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        emit frameReady(shared, captureNs);
         ++colorFrames;
 
         // Publish depth as CV_16UC1 in millimetres (aligned to color), after

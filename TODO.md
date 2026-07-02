@@ -1,5 +1,9 @@
 # TODO — MicroscopeIBOM
 
+> ⚠️ **DOCUMENT OBSOLÈTE (ère Windows / début de migration) — non tenu à jour.**
+> L'état courant du projet vit dans [docs/JETSON_SESSION_LOG.md](docs/JETSON_SESSION_LOG.md)
+> (bloc « État actuel » en tête). Conservé pour l'historique uniquement.
+
 > Dernière mise à jour : 2026-03-20
 
 ---

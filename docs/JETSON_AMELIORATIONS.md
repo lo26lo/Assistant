@@ -169,12 +169,16 @@ C'est la modification code la plus rentable avant de brancher la caméra et l'IA
 
 ### 3.4 🟡 TrackingWorker : CPU-only — c'est OK, mais deux pistes faciles
 
+> ✅ **Dépassé (PR #20 + PR #21, 2026-06/07)** : le tracker a depuis un chemin GPU (`cv::cuda::ORB`, mode auto/force/off), un fast-path optical flow LK à cadence caméra (défaut ON), et l'intervalle ORB par défaut est passé à 100 ms. Le constat « ORB n'existe pas en CUDA » était d'ailleurs erroné (module `cudafeatures2d`). Les deux pistes ci-dessous (cvtColor/resize CUDA, UnifiedAllocator) restent valables telles quelles.
+
 Le pipeline ORB+RANSAC CPU avec downscale 0.5× et throttle 200 ms est un choix pragmatique sain (ORB n'existe pas en CUDA, le gain GPU serait marginal). Deux améliorations à faible coût si le besoin apparaît :
 - `cv::cuda::cvtColor` + `cv::cuda::resize` pour le pré-traitement (OpenCV est déjà compilé avec CUDA dans l'image base) — surtout intéressant en mémoire unifiée (pas de copie H↔D sur Orin) ;
 - allouer les `cv::Mat` temporaires de `TrackingWorker` avec l'`UnifiedAllocator` (déjà utilisé par `CameraCapture`) pour préparer ce passage.
 À mesurer d'abord avec les timings spdlog déjà en place (`prep/detect/match/homog`) — ne pas optimiser à l'aveugle.
 
 ### 3.5 🟡 Tests : `TrackingWorker` non couvert
+
+> ✅ **Réalisé** : `tests/test_tracking_worker.cpp` existe (4 TEST_CASE : récupération d'homographie connue, pas d'émission sans base, ré-acquisition après sortie du masque, gate anti-saut) — exactement l'approche synthétique proposée ci-dessous.
 
 **Constat** : 5 suites de tests (allocator, parser, homography, inference, component matching) mais rien sur `TrackingWorker::processFrame()` alors que c'est le composant le plus sensible aux différences OpenCV 4.10 Linux vs 4.12 Windows (cf. erreurs #13, #15/#16 du CLAUDE.md).
 

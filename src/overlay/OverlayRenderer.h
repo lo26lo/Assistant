@@ -1,10 +1,9 @@
 #pragma once
 
-#include "Homography.h"
-
-#include <QImage>
-#include <QSize>
 #include <QColor>
+#include <QImage>
+#include <QTransform>
+#include <opencv2/core.hpp>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -18,36 +17,50 @@ namespace ibom::overlay {
 /**
  * @brief Self-contained snapshot of everything the overlay render needs.
  *
- * All members are value copies so the render can run on a worker thread
- * (QtConcurrent) without touching the Application / GUI objects: the
- * IBomProject is shared and immutable after load, and the Homography holds a
- * refcounted cv::Mat. Colors/toggles are resolved on the GUI thread (from
- * Config + Theme) and captured here.
+ * All members are value copies so the render never touches Application / GUI
+ * objects while running: the IBomProject is shared and immutable after load,
+ * colors/toggles are resolved on the GUI thread (Config + Theme) and captured
+ * here. The homography is deliberately absent — the overlay is rendered in
+ * board (PCB) space and re-projected at paint time by CameraView with the
+ * current pose, so pose changes never trigger a re-render.
  */
 struct OverlayInputs {
     std::shared_ptr<const IBomProject> project;
-    Homography                         homo;
-    QSize                              size;
     std::string                        selectedRef;
     std::unordered_set<std::string>    placedRefs;
     QColor cSelected, cPlaced, cNormal, labelNormal;
     float  placedAlphaMul = 1.0f;
-    float  selectedSilkW  = 1.0f;
+    float  selectedSilkW  = 1.0f;   // outline width in buffer px (scales with zoom)
     bool   drawPads = true;
     bool   drawSilk = true;
+};
+
+/// A board-space overlay buffer plus the PCB→buffer mapping it was drawn with.
+struct BoardOverlay {
+    QImage     image;        // ARGB32_Premultiplied, transparent background
+    QTransform pcbToBuffer;  // PCB coords (mm) → buffer px (translate + scale)
 };
 
 /**
  * @brief Stateless iBOM overlay renderer — the single overlay draw path.
  *
- * Pure pixel work: draws component pads, silkscreen and reference labels into a
- * transparent ARGB image, with frustum culling of off-frame components and the
- * label fonts built once per render. No widget / Application / QObject state, so
- * render() is safe to call from a worker thread.
+ * Renders the front layer's pads, silkscreen and labels ONCE into a
+ * board-space buffer (antialiased — this only reruns when the selection,
+ * placed set, toggles, colors or project change, never per frame). CameraView
+ * then warps the buffer through the current homography as a projective
+ * QTransform on every paint, so the overlay stays locked to the freshest pose
+ * at a fixed, component-count-independent per-frame cost. This replaces the
+ * previous full-frame vector re-render, which had to run per homography
+ * update with AA off under a 25 fps cap to fit the GUI-thread budget
+ * (suite 100 / LIVE_TRACKING_ANALYSE_2026-07.md F11).
  */
 class OverlayRenderer {
 public:
-    static QImage render(const OverlayInputs& in);
+    static BoardOverlay renderBoardSpace(const OverlayInputs& in);
+
+    /// cv 3×3 (column-vector convention: p' = H·p) → QTransform (row-vector
+    /// convention: p' = p·T), i.e. the transpose. Empty/ill-sized input → identity.
+    static QTransform toQTransform(const cv::Mat& h3x3);
 };
 
 } // namespace ibom::overlay

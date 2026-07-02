@@ -4,6 +4,7 @@
 #include <opencv2/imgproc.hpp>
 #include <spdlog/spdlog.h>
 #include <chrono>
+#include <cmath>
 
 namespace ibom::overlay {
 
@@ -28,6 +29,7 @@ bool Homography::compute(const std::vector<cv::Point2f>& pcbPoints,
 
     // Compute inverse
     m_inverse = m_homography.inv();
+    cacheCoefficients();
 
     // Count inliers
     int inliers = cv::countNonZero(inliersMask);
@@ -53,24 +55,40 @@ bool Homography::compute(const std::vector<cv::Point2f>& pcbPoints,
     return true;
 }
 
+cv::Point2f Homography::applyCached(const double m[9], cv::Point2f p)
+{
+    const double x = p.x, y = p.y;
+    const double w = m[6] * x + m[7] * y + m[8];
+    if (std::abs(w) < 1e-12)
+        return p;  // degenerate ray — keep the input point
+    const double iw = 1.0 / w;
+    return {static_cast<float>((m[0] * x + m[1] * y + m[2]) * iw),
+            static_cast<float>((m[3] * x + m[4] * y + m[5]) * iw)};
+}
+
+void Homography::cacheCoefficients()
+{
+    cv::Mat h64, i64;
+    m_homography.convertTo(h64, CV_64F);
+    m_inverse.convertTo(i64, CV_64F);
+    for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+            m_h[r * 3 + c]    = h64.at<double>(r, c);
+            m_hInv[r * 3 + c] = i64.at<double>(r, c);
+        }
+    }
+}
+
 cv::Point2f Homography::pcbToImage(cv::Point2f pcbPoint) const
 {
     if (!m_valid) return pcbPoint;
-
-    std::vector<cv::Point2f> in = {pcbPoint};
-    std::vector<cv::Point2f> out;
-    cv::perspectiveTransform(in, out, m_homography);
-    return out[0];
+    return applyCached(m_h, pcbPoint);
 }
 
 cv::Point2f Homography::imageToPcb(cv::Point2f imagePoint) const
 {
     if (!m_valid) return imagePoint;
-
-    std::vector<cv::Point2f> in = {imagePoint};
-    std::vector<cv::Point2f> out;
-    cv::perspectiveTransform(in, out, m_inverse);
-    return out[0];
+    return applyCached(m_hInv, imagePoint);
 }
 
 std::vector<cv::Point2f> Homography::pcbToImage(const std::vector<cv::Point2f>& pcbPoints) const
@@ -78,19 +96,20 @@ std::vector<cv::Point2f> Homography::pcbToImage(const std::vector<cv::Point2f>& 
     if (!m_valid) return pcbPoints;
 
     std::vector<cv::Point2f> out;
-    cv::perspectiveTransform(pcbPoints, out, m_homography);
+    out.reserve(pcbPoints.size());
+    for (const auto& p : pcbPoints)
+        out.push_back(applyCached(m_h, p));
     return out;
 }
 
 std::vector<cv::Point2f> Homography::transformRect(float x, float y, float w, float h) const
 {
-    std::vector<cv::Point2f> corners = {
+    return pcbToImage({
         {x,     y},
         {x + w, y},
         {x + w, y + h},
         {x,     y + h}
-    };
-    return pcbToImage(corners);
+    });
 }
 
 bool Homography::save(const std::string& path) const
@@ -119,6 +138,7 @@ bool Homography::load(const std::string& path)
 
     m_valid = !m_homography.empty() && !m_inverse.empty();
     if (m_valid) {
+        cacheCoefficients();
         spdlog::info("Homography loaded from '{}' (error: {:.3f})", path, m_reprojError);
     }
     return m_valid;
@@ -140,6 +160,7 @@ void Homography::setMatrix(const cv::Mat& matrix)
     }
     m_homography = matrix.clone();
     m_inverse = m_homography.inv();
+    cacheCoefficients();
     m_valid = true;
 }
 

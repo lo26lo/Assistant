@@ -1,5 +1,7 @@
 # Plan d'amélioration du Live Tracking
 
+> ⚠️ **Ce plan a été implémenté** (Phases 1–3, PR #20, buildé et validé sur Jetson — suites 86-98). Pour l'état des lieux **post-implémentation** et la nouvelle vague d'améliorations, voir [LIVE_TRACKING_ANALYSE_2026-07.md](LIVE_TRACKING_ANALYSE_2026-07.md).
+
 > **But** : réduire le tremblement ("jitter") de l'overlay en live tracking, améliorer la fluidité et la robustesse du suivi, et exploiter le GPU du Jetson AGX Orin.
 >
 > **Contexte** : suivi ORB + BFMatcher (Lowe) + `findHomography(RANSAC)` dans `src/overlay/TrackingWorker.{h,cpp}`, sur thread dédié. Lissage par blend des coins ajouté en suite 82 (ERREUR #47). Retour utilisateur : « c'est pas mal mais ça vibre si je ne bouge rien ».

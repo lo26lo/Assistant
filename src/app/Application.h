@@ -5,6 +5,7 @@
 #include <QThread>
 #include <QImage>
 #include <QSize>
+#include <QTransform>
 #include <QFutureWatcher>
 #include <opencv2/core.hpp>
 #include <cstddef>
@@ -142,7 +143,30 @@ private:
     ///                if it is confident (score ≥ reanchorMinScore) AND disagrees
     ///                enough with the current pose to be worth correcting drift,
     ///                so healthy live tracking is left undisturbed.
-    void autoAlignBoard(bool silent = false);
+    /// @param isRetry Internal: this call is an automatic retry of a failed
+    ///                interactive attempt — don't re-arm the retry budget.
+    ///                Interactive not-found results retry up to 2 more times on
+    ///                fresh frames (~300 ms apart) before reporting failure, so
+    ///                one badly-timed frame (blur, glare, hand) doesn't fail
+    ///                the whole click.
+    void autoAlignBoard(bool silent = false, bool isRetry = false);
+
+    /// Flip the ControlPanel's Live Tracking checkbox on after a successful
+    /// alignment (any path: 4-corner, 2-comp, multi-comp, anchor, Auto-Align,
+    /// component re-anchor) so alignment flows straight into tracking. Goes
+    /// through the checkbox → liveModeChanged → the normal enable handler, so
+    /// UI and state stay in sync. No-op when already live (the alignment
+    /// paths rebase the running tracker themselves) or when the homography
+    /// isn't valid.
+    void autoStartLiveTracking();
+
+    /// Self-re-arming recovery poll started when live tracking reports LOST:
+    /// as long as the state stays Lost (and live mode is on), periodically
+    /// re-locate the board outright — component re-anchor when a detector is
+    /// loaded, geometric BoardLocator otherwise — independent of the
+    /// reanchor_enabled periodic-correction setting (this is loss RECOVERY,
+    /// not drift correction). Stops as soon as tracking recovers.
+    void attemptLostRecovery();
     /// Component-level re-anchor (docs/AI_MODEL_DATASETS_PLAN.md, "Piste B"):
     /// runs the AI component detector on the current frame, matches detections
     /// to expected iBOM positions (current pose as prior) and re-fits the
@@ -204,9 +228,10 @@ private:
     std::unique_ptr<IBomParser>                m_ibomParser;
     std::shared_ptr<IBomProject>               m_ibomProject;
 
-    // Overlay rendering (the draw path is the stateless, change-gated
-    // overlay::OverlayRenderer::render() called from frameReady — there is no
-    // renderer instance to own).
+    // Overlay rendering (the draw path is the stateless
+    // overlay::OverlayRenderer::renderBoardSpace(), re-run from frameReady only
+    // when its inputs change; CameraView warps the buffer per paint — there is
+    // no renderer instance to own).
     std::unique_ptr<overlay::Homography>       m_homography;
     std::unique_ptr<overlay::HeatmapRenderer>  m_heatmapRenderer;
 
@@ -239,12 +264,16 @@ private:
     int     m_reanchorFailStreak = 0;   // consecutive BoardLocator misses → back off
     int     m_reanchorTickCount  = 0;   // for skipping ticks while backing off
 
+    // Interactive Auto-Align retry budget (see autoAlignBoard's isRetry doc).
+    int  m_autoAlignRetriesLeft = 0;
+    // Loss-recovery poll state (see attemptLostRecovery): last state reported
+    // by trackingStateChanged, and whether a recovery chain is already armed
+    // (Lost can be signalled repeatedly — only one poll chain must run).
+    int  m_lastTrackingState  = -1;
+    bool m_lostRecoveryArmed  = false;
+
     // Focus assist — last time the sharpness metric was computed (throttle).
     qint64 m_lastSharpnessMs = 0;
-    // Overlay re-render throttle — caps the (expensive, all-visible-board)
-    // overlay render rate so a fast tracker (optical flow at camera rate) can't
-    // saturate the GUI thread. The camera video still updates every frame.
-    qint64 m_lastOverlayRenderMs = 0;
     // Depth (RealSense) — last time distance/scale was computed (throttle).
     qint64 m_lastDepthMs = 0;
     // Live view mode: false = color image, true = colorized depth map.
@@ -382,25 +411,38 @@ private:
     features::DatasetCreator* m_datasetCreator = nullptr;  // lives on m_datasetThread
 
     // ── iBOM overlay render cache (change-gated) ───────────────────────────
-    // The overlay is rebuilt only when one of its inputs changes (homography,
-    // selection, placed set, toggles, colors, frame size, loaded project). It is
-    // rendered synchronously on the GUI thread and pushed with the frame so it
-    // stays locked to the camera image. The m_ovSig* fields are the signature of
-    // the inputs the cached overlay was last rendered from.
+    // The overlay is rendered in BOARD space (OverlayRenderer::renderBoardSpace)
+    // and only rebuilt when one of its content inputs changes: selection, placed
+    // set, toggles, colors, loaded project. The homography is NOT part of the
+    // signature anymore — pose changes just update the warp transform pushed to
+    // CameraView every frame. The m_ovSig* fields are the signature of the
+    // inputs the cached buffer was last rendered from.
     bool        m_overlayValid    = false;   // false until first render
-    cv::Mat     m_ovSigHomography;
     std::string m_ovSigSelected;
     std::size_t m_ovSigPlacedHash = 0;
-    QSize       m_ovSigSize;
-    bool        m_ovSigPads = false, m_ovSigSilk = false, m_ovSigFab = false;
+    bool        m_ovSigPads = false, m_ovSigSilk = false;
     std::string m_ovSigColorKey;
     float       m_ovSigPlacedOpacity = -1.0f;
     float       m_ovSigSelectedSilkW = -1.0f;
     const void* m_ovSigProject = nullptr;    // identity of the rendered IBomProject
+    // buffer→PCB mapping of the current board buffer (inverse of the renderer's
+    // pcbToBuffer), composed with the live homography into the per-frame warp.
+    QTransform  m_boardBufferToPcb;
+    // Whether the picking-feedback overlay is currently shown, so it can be
+    // cleared exactly once when picking ends (it owns the full-frame overlay
+    // channel now that the iBOM overlay lives in the board channel).
+    bool        m_pickOverlayShown = false;
 
     // Dynamic scale tracking
     double m_basePixelsPerMm = 0.0;  // pixelsPerMm at initial homography
     double m_currentPixelsPerMm = 0.0;
+    // IBomPads scale method: cached far-apart reference pad pair, recomputed
+    // only when the loaded project changes (ERREUR #52). Positions are copied
+    // by value; the project pointer is an identity tag, never dereferenced.
+    const void* m_scaleRefProject = nullptr;
+    cv::Point2f m_scaleRefA, m_scaleRefB;   // PCB coords (mm)
+    double      m_scaleRefDistMm = 0.0;
+    qint64      m_lastScaleUpdateMs = 0;    // throttle for the live-tracking path
 
     // Per-profile tracking state (saved/restored on profile switch)
     struct ProfileTrackingState {

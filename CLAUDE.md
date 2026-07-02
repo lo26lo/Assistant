@@ -138,10 +138,10 @@ main.cpp
   └─ QApplication
   └─ Application (QObject)
        ├─ Config (JSON, AppData)
-       ├─ CameraCapture (thread séparé → frameReady(FrameRef) → CameraView)
+       ├─ CameraCapture (thread séparé → frameReady(FrameRef, captureNs) → CameraView)
        ├─ CameraCalibration (YAML, undistort)
        ├─ IBomParser (HTML → JSON → IBomProject, supporte LZ-String)
-       ├─ OverlayRenderer (pads + silkscreen + labels sur QImage)
+       ├─ OverlayRenderer (rendu espace carte 1× → warpé par CameraView via QTransform projectif)
        ├─ Homography (pcbToImage, transformRect, setMatrix)
        ├─ HeatmapRenderer (heatmap défauts)
        ├─ TrackingWorker (QThread dédié ORB+RANSAC, downscale 0.5×)
@@ -162,8 +162,8 @@ main.cpp
 | Thread | Rôle |
 |--------|------|
 | Main/GUI | Qt event loop, paintEvent, signals/slots UI |
-| CameraCapture | `captureLoop()` — lit `cv::VideoCapture`, émet `frameReady(FrameRef)` en QueuedConnection |
-| TrackingWorker | ORB+RANSAC — reçoit `processFrame(FrameRef)` via QueuedConnection, émet `homographyUpdated(cv::Mat, int inliers, double reprojErrPx)` |
+| CameraCapture | `captureLoop()` — lit `cv::VideoCapture`, émet `frameReady(FrameRef, qint64 captureNs)` en QueuedConnection (timestamp steady_clock posé sur le thread capture) |
+| TrackingWorker | ORB+RANSAC — reçoit `processFrame(FrameRef, captureNs=0)` via QueuedConnection (backpressure `tryReserveFrameSlot()` max 2 en vol, drop si >150 ms), émet `homographyUpdated(cv::Mat, int inliers, double reprojErrPx)` |
 | DatasetCreator | Capture dataset — gates qualité, projection bboxes iBOM → labels YOLO, écriture JPEG/labels/manifest sous `$IBOM_DATA_DIR/dataset/` |
 
 Zero-copy : `FrameRef = std::shared_ptr<const cv::Mat>`. La frame allouée dans le thread capture est partagée sans clone jusqu'à CameraView. Le calibrateur fait un `.clone()` explicite pour stockage long-terme.
@@ -234,12 +234,14 @@ Defaults à connaître :
 | `showPads` | true | |
 | `showSilkscreen` | true | |
 | `showFabrication` | false | |
-| `trackingIntervalMs` | 200 | Throttle entre appels ORB |
+| `trackingIntervalMs` | 100 | Throttle des appels ORB seulement (le flow tourne à cadence caméra) |
 | `orbKeypoints` | 200 | Suffisant à 0.5× downscale |
 | `minMatchCount` | 8 | Matches minimaux pour RANSAC |
 | `matchDistanceRatio` | 0.75 | Lowe's ratio (0.5–0.95) |
 | `ransacThreshold` | 3.0 | pixels |
 | `trackingDownscale` | 0.5 | 0.1–1.0; 0.5 = ×4 moins de pixels |
+| `trackingModel` | 0 (Auto) | Similarité sur carte plane, homographie si perspective réelle |
+| `trackingOpticalFlow` | true | LK à cadence caméra entre re-seeds ORB. Anciens config.json : migration douce `tracking.defaults_v<2` dans `Config::load()` |
 | `calibBoardCols/Rows` | 7×5 | Inner corners checkerboard |
 | `calibSquareSize` | 5.0 mm | |
 | `scaleMethod` | Homography | Enum: None/Homography/IBomPads |
@@ -253,14 +255,14 @@ Defaults à connaître :
 - Caméra USB (MSMF/V4L2, 1920×1080@30fps), sélecteur de device
 - iBOM parsing (JSON direct + LZ-String compressé) → overlay pads/silkscreen/labels + BOM panel
 - Calibration caméra (checkerboard configurable, PDF patron intégré)
-- Homographie manuelle (4 points) + live tracking (ORB + RANSAC, thread dédié)
+- Homographie manuelle (4 points) + live tracking (flow LK à cadence caméra + re-seed ORB/MAGSAC, thread dédié)
 - Dynamic scale px/mm (depuis homographie ou pads iBOM) + adaptateur optique (0.5×–2×)
 - Settings dialog `Ctrl+,` (4 onglets, sauvegarde JSON)
 - Overlay toggles (Pads / Silkscreen / Fabrication), opacity slider
 - Camera fullscreen (double-clic → plein écran, Escape retour)
 - Dark/Light theme (`Theme.h` centralise toutes les couleurs — Catppuccin Mocha/Latte)
 - Help dialog (8 onglets), alignement 2 points
-- ORB tracking (TrackingWorker) : Lowe's ratio test, downscale configurable, timing spdlog::debug
+- Tracking (TrackingWorker) : flow LK par défaut (FB-check + pruning), ORB Lowe/MAGSAC en re-seed, masque escaladant, gates anti-saut/sanité, downscale configurable, logs verbose `[track]`
 
 ---
 
