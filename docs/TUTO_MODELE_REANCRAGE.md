@@ -1,5 +1,9 @@
 # Tuto pas-à-pas — créer le modèle de re-ancrage (pour débutant)
 
+> 📂 **Quel(s) dataset(s) utiliser ?** (réponse aux liens Roboflow/Kaggle +
+> comment en fusionner plusieurs) → **[TUTO_DATASETS.md](TUTO_DATASETS.md)**.
+> Ce document-ci suppose le dataset déjà choisi/téléchargé.
+>
 > **But** : produire un fichier `component_detector.onnx`, le poser sur le Jetson,
 > et activer le **re-ancrage automatique** de l'overlay (celui qui marche même
 > quand la carte remplit l'écran, contrairement à l'Auto-Align géométrique).
