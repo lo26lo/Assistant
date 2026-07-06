@@ -57,42 +57,54 @@ std::vector<ai::Detection> detectComponentBlobs(const cv::Mat& image,
     }
 
     // Filter by side length + aspect (drop silkscreen lines, traces, long
-    // connector slots read as one region).
-    std::vector<cv::Rect> kept;
+    // connector slots read as one region). Keep the pixel-mass centroid of
+    // each region, not the bbox center: the bbox is set by the region's
+    // extremal pixels (a shadow lobe, a glare streak, attached silk), so its
+    // center carries a per-component bias that changes with the matched
+    // subset frame to frame — a measured driver of the re-anchor pose jitter
+    // (docs/BLOB_REANCHOR_JITTER_ANALYSE.md, cause n°2).
+    struct Blob { cv::Rect box; cv::Point2f centroid; };
+    std::vector<Blob> kept;
     kept.reserve(boxes.size());
-    for (const auto& b : boxes) {
+    for (size_t i = 0; i < boxes.size(); ++i) {
+        const cv::Rect& b = boxes[i];
         const double w = b.width, h = b.height;
         if (w < minSide || h < minSide) continue;
         if (w > maxSide && h > maxSide) continue;
         const double aspect = std::max(w, h) / std::max(1.0, std::min(w, h));
         if (aspect > 8.0) continue;
-        kept.push_back(b);
+        double sx = 0.0, sy = 0.0;
+        for (const cv::Point& p : regions[i]) { sx += p.x; sy += p.y; }
+        const double n = std::max<size_t>(1, regions[i].size());
+        kept.push_back({ b, cv::Point2f(static_cast<float>(sx / n),
+                                        static_cast<float>(sy / n)) });
     }
 
-    // MSER nests regions → dedup by center proximity so one component yields
-    // one detection (min pitch ≈ the smallest accepted side).
+    // MSER nests regions → dedup by centroid proximity so one component
+    // yields one detection (min pitch ≈ the smallest accepted side). Largest
+    // area first, so each cluster keeps its most complete region — the whole
+    // component body rather than an inner sub-region.
+    std::sort(kept.begin(), kept.end(),
+              [](const Blob& a, const Blob& b) { return a.box.area() > b.box.area(); });
     const double mergeR  = minSide * 0.8;
     const double mergeR2 = mergeR * mergeR;
-    std::vector<cv::Rect> dedup;
+    std::vector<Blob> dedup;
     dedup.reserve(kept.size());
     for (const auto& b : kept) {
-        const cv::Point2f c(b.x + b.width * 0.5f, b.y + b.height * 0.5f);
         bool dup = false;
         for (const auto& d : dedup) {
-            const cv::Point2f dc(d.x + d.width * 0.5f, d.y + d.height * 0.5f);
-            const double dx = c.x - dc.x, dy = c.y - dc.y;
+            const double dx = b.centroid.x - d.centroid.x;
+            const double dy = b.centroid.y - d.centroid.y;
             if (dx * dx + dy * dy < mergeR2) { dup = true; break; }
         }
         if (!dup) dedup.push_back(b);
     }
 
     // Cap to the strongest (largest) N — bootstrap tolerates false positives
-    // but its consensus loop is O(nComp × nDet) per RANSAC iteration.
-    if (static_cast<int>(dedup.size()) > maxDetections) {
-        std::nth_element(dedup.begin(), dedup.begin() + maxDetections, dedup.end(),
-                         [](const cv::Rect& a, const cv::Rect& b) { return a.area() > b.area(); });
+    // but its consensus loop is O(nComp × nDet) per RANSAC iteration. Already
+    // sorted by area above.
+    if (static_cast<int>(dedup.size()) > maxDetections)
         dedup.resize(maxDetections);
-    }
 
     out.reserve(dedup.size());
     for (const auto& b : dedup) {
@@ -100,8 +112,13 @@ std::vector<ai::Detection> detectComponentBlobs(const cv::Mat& image,
         d.classId    = 0;
         d.className  = "component";
         d.confidence = 1.0f;
-        d.bbox       = cv::Rect2f(static_cast<float>(b.x), static_cast<float>(b.y),
-                                  static_cast<float>(b.width), static_cast<float>(b.height));
+        // ai::Detection only carries a bbox and consumers take its center
+        // (ComponentReanchor::detectionCenter) — re-center the box on the
+        // region centroid so that center IS the stable centroid.
+        d.bbox = cv::Rect2f(b.centroid.x - b.box.width * 0.5f,
+                            b.centroid.y - b.box.height * 0.5f,
+                            static_cast<float>(b.box.width),
+                            static_cast<float>(b.box.height));
         out.push_back(std::move(d));
     }
     spdlog::debug("[blob-detect] {} component-like blobs (scale={:.2f} px/mm)",

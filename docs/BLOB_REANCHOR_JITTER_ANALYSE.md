@@ -43,13 +43,15 @@ La déterminisation du RNG de `bootstrap()` (seed fixe, suite 118) n'y peut rien
 
 ## 3. Remèdes possibles, classés
 
-### A. Fit similarité pour les poses blob ← **recommandé, premier geste**
+> **Mise à jour 2026-07-06 (suite 126)** : **A et B sont implémentés**, et le re-anchor périodique par composants est **ré-activé sans modèle** (le contournement de la suite 123 — périodique → géométrique seul — est retiré, `geometricOnly` supprimé). Validé hors Jetson : les 5 cas de test (dont un **nouveau test de répétabilité** qui rejoue 6 frames bruitées et exige que les poses verrouillées consécutives restent sous le gate de 12 px aux coins) passent avec OpenCV 4.6 système. Sur la scène synthétique, similarité = 0,03-0,06 px de jitter aux coins vs 0,19-0,23 px en 8-DOF (~4×, conforme à la simulation ; la scène synthétique est trop propre pour reproduire l'amplitude terrain de 13-63 px — la validation finale reste le protocole §4 sur le Jetson). C et D restent disponibles si le terrain montre des ticks aberrants résiduels.
+
+### A. Fit similarité pour les poses blob ← **✅ implémenté (suite 126)**
 `ComponentReanchor::Params` gagne un flag (ex. `fitSimilarity`) ; `estimate()` utilise alors `cv::estimateAffinePartial2D` (RANSAC/MAGSAC, même seuil) plongé en 3×3 au lieu de `findHomography`. Activé quand la source = blobs (le chemin modèle peut garder le 8-DOF, ou suivre `trackingModel` comme le worker — dont le mode Auto choisit *déjà* la similarité sur carte plane, exactement pour cette raison).
 - **Gain** : jitter tick-à-tick 12 → 3 px (sous le gate) **et** précision one-shot aux coins 8 → 3 px — l'alignement initial blob devient visiblement meilleur, pas seulement le périodique.
 - **Coût** : ~20 lignes. **Risque** : si la caméra vise la carte avec un vrai angle, la similarité sous-fitte (résidu aux coins). Mitigation simple : fitter les deux et ne garder le 8-DOF que s'il réduit *significativement* la reprojection médiane.
 - Débloque potentiellement la **ré-activation du périodique sans modèle** (annulerait le contournement de la suite 123).
 
-### B. Centroïde de région MSER au lieu du centre de bbox
+### B. Centroïde de région MSER au lieu du centre de bbox ← **✅ implémenté (suite 126)**
 `cv::MSER::detectRegions` renvoie déjà les pixels des régions ; le centroïde de masse est bien plus stable que le centre d'une bbox (pilotée par les pixels extrêmes : ombre, reflet, silk accolé). S'attaque à la cause n°2. ~15 lignes dans `BlobComponentDetector.cpp` (attention : le dédup par proximité doit alors fusionner les centroïdes, p.ex. garder la région la plus grande).
 
 ### C. Confirmation à 2 ticks pour le périodique (ceinture)

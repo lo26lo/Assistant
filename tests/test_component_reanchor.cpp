@@ -113,6 +113,14 @@ TEST_CASE("bootstrap recovers a pose from detections without any prior", "[reanc
     SECTION("with a physical scale prior (D405 pinhole path)") {
         verify(ComponentReanchor::bootstrap(dets, project, ibom::Layer::Front, 8.0));
     }
+    SECTION("similarity fit (production blob path)") {
+        // The ground truth IS a similarity, so the 4-DOF fit must lock just as
+        // well — this exercises the estimateAffinePartial2D branch end to end
+        // (bootstrap propagates fitSimilarity into the estimate() refinement).
+        ComponentReanchor::Params p;
+        p.fitSimilarity = true;
+        verify(ComponentReanchor::bootstrap(dets, project, ibom::Layer::Front, 8.0, p));
+    }
 }
 
 TEST_CASE("bootstrap rejects an unrelated constellation", "[reanchor]")

@@ -455,29 +455,26 @@ void Application::createSubsystems()
     }
 
     // Periodic re-anchor timer (plan B): during live tracking, correct
-    // accumulated drift. Prefer the component path — it matches detections
+    // accumulated drift via the component path — it matches detections
     // (trained model OR model-free blobs) to iBOM positions and works when the
-    // board fills the frame. Fall back to the geometric outline only when
-    // component re-anchor can't run (no iBOM board bbox etc.). The timeout
-    // re-checks all conditions; updateReanchorTimer() starts/stops it.
+    // board fills the frame. The timeout re-checks all conditions;
+    // updateReanchorTimer() starts/stops it.
     m_reanchorTimer = new QTimer(this);
     m_reanchorTimer->setObjectName("ReanchorTimer");
     connect(m_reanchorTimer, &QTimer::timeout, this, [this]() {
         if (!m_config->reanchorEnabled() || !m_liveMode || !m_ibomProject || m_autoAligning)
             return;
-        // Periodic drift correction needs a STABLE absolute pose. A trained
-        // detector gives that; the model-free blob detector does NOT — its
-        // per-fit reproj is fine (~3px) but the pose wanders ~30px frame to
-        // frame (different blob subset each time), so re-applying it every few
-        // seconds yanks the overlay and resets the tracking reference instead
-        // of correcting drift (field log 2026-07-02). So: component re-anchor
-        // periodically only with a model; the geometric outline otherwise
-        // (harmless no-op when the board fills the frame). Blobs stay for
-        // one-shot Auto-Align and loss recovery, where a coarse pose is a win.
-        if (componentDetector())
-            componentReanchor(/*silent=*/true);
-        else
-            autoAlignBoard(/*silent=*/true, /*isRetry=*/false, /*geometricOnly=*/true);
+        // Periodic drift correction needs a repeatable absolute pose. The blob
+        // pose used to wander ~30 px tick to tick (13-63 px field log
+        // 2026-07-03) — not because of the detections, but because the 8-DOF
+        // findHomography fit noise-fitted its perspective terms, levering the
+        // board corners the drift gate measures. Blob poses are now fitted as
+        // a 4-DOF similarity on stable region centroids
+        // (docs/BLOB_REANCHOR_JITTER_ANALYSE.md): tick-to-tick corner jitter
+        // sits under the 12 px drift gate, so the periodic tick skips instead
+        // of yanking the overlay — the component path is safe again with or
+        // without a trained model.
+        componentReanchor(/*silent=*/true);
     });
     updateReanchorTimer();
 
@@ -1056,7 +1053,7 @@ void Application::applyMultiAlignment()
                  n, model, m_currentPixelsPerMm);
 }
 
-void Application::autoAlignBoard(bool silent, bool isRetry, bool geometricOnly)
+void Application::autoAlignBoard(bool silent, bool isRetry)
 {
     if (m_autoAligning) return;  // already running, ignore re-clicks
     if (!m_lastColorFrame || m_lastColorFrame->empty()) {
@@ -1270,7 +1267,7 @@ void Application::autoAlignBoard(bool silent, bool isRetry, bool geometricOnly)
 
     ai::ComponentDetector* detector = componentDetector();
     watcher->setFuture(QtConcurrent::run([colorCopy, depthCopy, project,
-                                          expectedPixelsPerMm, detector, geometricOnly]() {
+                                          expectedPixelsPerMm, detector]() {
         // Detection-first (docs/AUTO_ALIGN_V2_PLAN.md): register the detected-
         // component constellation against the iBOM layout — needs no visible
         // board outline, so it works exactly where the geometric path
@@ -1278,21 +1275,24 @@ void Application::autoAlignBoard(bool silent, bool isRetry, bool geometricOnly)
         // background). Detections come from the trained model when loaded,
         // else from the model-free blob detector (classic CV) — so component-
         // based alignment works even with an empty models/. BoardLocator stays
-        // as the last resort. geometricOnly skips this entirely (periodic
-        // drift correction without a model — blobs too jittery for that).
+        // as the last resort.
         std::vector<ai::Detection> detections;
         const char* detSrc = "model";
-        if (geometricOnly) {
-            // fall straight through to BoardLocator below
-        } else if (detector) {
+        if (detector) {
             detections = detector->detect(colorCopy);
         } else {
             detections = overlay::detectComponentBlobs(colorCopy, expectedPixelsPerMm);
             detSrc = "blobs";
         }
         if (!detections.empty()) {
+            // Blob centers are noisier than model detections: fit a 4-DOF
+            // similarity so the pose stays repeatable at the board corners
+            // (docs/BLOB_REANCHOR_JITTER_ANALYSE.md — a full homography
+            // noise-fits its perspective terms there).
+            overlay::ComponentReanchor::Params rp;
+            rp.fitSimilarity = (detector == nullptr);
             const auto boot = overlay::ComponentReanchor::bootstrap(
-                detections, *project, ibom::Layer::Front, expectedPixelsPerMm);
+                detections, *project, ibom::Layer::Front, expectedPixelsPerMm, rp);
             if (boot.found) {
                 overlay::BoardLocateResult blr;
                 blr.found  = true;
@@ -1511,15 +1511,22 @@ void Application::componentReanchor(bool silent)
         const std::vector<ai::Detection> detections =
             detector ? detector->detect(colorCopy)
                      : overlay::detectComponentBlobs(colorCopy, scalePrior);
+        // Blob centers are noisier than model detections: fit a 4-DOF
+        // similarity so the pose is repeatable at the board corners — the
+        // periodic drift gate measures there, and the 8-DOF fit's noise-fitted
+        // perspective terms are what shook the overlay 13-63 px per tick
+        // (docs/BLOB_REANCHOR_JITTER_ANALYSE.md).
+        overlay::ComponentReanchor::Params rp;
+        rp.fitSimilarity = (detector == nullptr);
         // Prior-based correction first (cheap, precise when the pose is only
         // drifting); global bootstrap when there is no usable prior — no pose
         // yet, or a pose so stale (board moved/picked up) that nothing falls
         // inside the matching radius anymore.
         auto res = overlay::ComponentReanchor::estimate(
-            detections, *project, priorPose, ibom::Layer::Front);
+            detections, *project, priorPose, ibom::Layer::Front, {}, rp);
         if (!res.found)
             res = overlay::ComponentReanchor::bootstrap(
-                detections, *project, ibom::Layer::Front, scalePrior);
+                detections, *project, ibom::Layer::Front, scalePrior, rp);
         return res;
     }));
 }

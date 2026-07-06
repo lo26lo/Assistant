@@ -138,11 +138,26 @@ ComponentReanchorResult ComponentReanchor::estimate(
     }
 
     cv::Mat mask;
-    cv::Mat H = cv::findHomography(pcbPts, imgPts, cv::RANSAC,
-                                   params.ransacThreshPx, mask);
-    if (H.empty()) {
-        r.message = "findHomography failed";
-        return r;
+    cv::Mat H;
+    if (params.fitSimilarity) {
+        // 4-DOF similarity: on a fronto-parallel scene with noisy centers the
+        // homography's perspective terms are noise-fit and wobble the board
+        // corners by tens of px (see Params::fitSimilarity).
+        const cv::Mat A = cv::estimateAffinePartial2D(
+            pcbPts, imgPts, mask, cv::RANSAC, params.ransacThreshPx);
+        if (A.empty()) {
+            r.message = "estimateAffinePartial2D failed";
+            return r;
+        }
+        H = cv::Mat::eye(3, 3, CV_64F);
+        A.copyTo(H(cv::Rect(0, 0, 3, 2)));
+    } else {
+        H = cv::findHomography(pcbPts, imgPts, cv::RANSAC,
+                               params.ransacThreshPx, mask);
+        if (H.empty()) {
+            r.message = "findHomography failed";
+            return r;
+        }
     }
 
     // Inlier count + median reprojection error among inliers.

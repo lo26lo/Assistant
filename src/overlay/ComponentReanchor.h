@@ -61,6 +61,18 @@ public:
         /// populated). Leave false for a presence-only model.
         bool useClassPrior = false;
 
+        /// Fit a 4-DOF similarity (estimateAffinePartial2D) instead of the
+        /// 8-DOF findHomography. With noisy detection centers (blob path) the
+        /// two perspective terms of a full homography are fit on pure noise on
+        /// a fronto-parallel scene; they barely move the interior reprojection
+        /// error but lever tens of px at the board corners — which is exactly
+        /// what the periodic drift gate measures, hence the 13-63 px jitter of
+        /// 2026-07-03. The similarity fit cuts that corner jitter ~4× at
+        /// identical detections (docs/BLOB_REANCHOR_JITTER_ANALYSE.md). Leave
+        /// false for trained-model detections (repeatable centers, and a real
+        /// camera tilt then benefits from the full model).
+        bool fitSimilarity = false;
+
         // ── bootstrap() (prior-free registration) knobs ──
         /// RANSAC pair→pair hypotheses tried before giving up.
         int    bootstrapIterations = 3000;

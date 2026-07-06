@@ -149,15 +149,7 @@ private:
     ///                fresh frames (~300 ms apart) before reporting failure, so
     ///                one badly-timed frame (blur, glare, hand) doesn't fail
     ///                the whole click.
-    /// @param geometricOnly Skip the component-detection (model/blob) bootstrap
-    ///                and use only the geometric BoardLocator. Used by the
-    ///                PERIODIC drift-correction timer without a trained model:
-    ///                the blob pose is one-shot-accurate but too jittery
-    ///                (~30 px frame to frame) for continuous correction, so
-    ///                periodic re-anchor must not use it (ERREUR #54 / field
-    ///                log). One-shot Auto-Align and loss recovery keep blobs.
-    void autoAlignBoard(bool silent = false, bool isRetry = false,
-                        bool geometricOnly = false);
+    void autoAlignBoard(bool silent = false, bool isRetry = false);
 
     /// Flip the ControlPanel's Live Tracking checkbox on after a successful
     /// alignment (any path: 4-corner, 2-comp, multi-comp, anchor, Auto-Align,
@@ -170,17 +162,20 @@ private:
 
     /// Self-re-arming recovery poll started when live tracking reports LOST:
     /// as long as the state stays Lost (and live mode is on), periodically
-    /// re-locate the board outright — component re-anchor when a detector is
-    /// loaded, geometric BoardLocator otherwise — independent of the
-    /// reanchor_enabled periodic-correction setting (this is loss RECOVERY,
-    /// not drift correction). Stops as soon as tracking recovers.
+    /// re-locate the board outright via component re-anchor (trained model or
+    /// model-free blobs) — independent of the reanchor_enabled
+    /// periodic-correction setting (this is loss RECOVERY, not drift
+    /// correction). Stops as soon as tracking recovers.
     void attemptLostRecovery();
     /// Component-level re-anchor (docs/AI_MODEL_DATASETS_PLAN.md, "Piste B"):
-    /// runs the AI component detector on the current frame, matches detections
-    /// to expected iBOM positions (current pose as prior) and re-fits the
-    /// homography via RANSAC. Works when the board fills the frame — exactly
-    /// where the geometric BoardLocator path (autoAlignBoard) fails. No-op
-    /// unless a detector is ready. @param silent as in autoAlignBoard().
+    /// detects components on the current frame (trained model when loaded,
+    /// else model-free blobs), matches detections to expected iBOM positions
+    /// (current pose as prior, global bootstrap otherwise) and re-fits the
+    /// pose via RANSAC — a similarity fit for blob detections, so the pose is
+    /// repeatable enough for the periodic drift gate
+    /// (docs/BLOB_REANCHOR_JITTER_ANALYSE.md). Works when the board fills the
+    /// frame — exactly where the geometric BoardLocator path (autoAlignBoard)
+    /// fails. @param silent as in autoAlignBoard().
     void componentReanchor(bool silent = false);
     /// Start/stop/retune the periodic geometric re-anchor timer from Config
     /// (features: reanchor_enabled / reanchor_interval_s).
@@ -264,10 +259,11 @@ private:
     QTimer* m_fpsTimer = nullptr;
     std::atomic<int> m_frameCount{0};
 
-    // Periodic geometric re-anchor (plan B): when enabled + live tracking, a
-    // timer runs BoardLocator (silent autoAlignBoard) to correct accumulated
-    // drift from the PCB outline. Off by default; needs the board edges visible
-    // (not the microscope zoomed-in case). See docs/JETSON_SESSION_LOG.md.
+    // Periodic re-anchor (plan B): when enabled + live tracking, a timer runs
+    // a silent componentReanchor() to correct accumulated drift (trained
+    // model or model-free blobs — blob poses use a similarity fit to stay
+    // under the drift gate, docs/BLOB_REANCHOR_JITTER_ANALYSE.md). Off by
+    // default. See docs/JETSON_SESSION_LOG.md.
     QTimer* m_reanchorTimer = nullptr;
     int     m_reanchorFailStreak = 0;   // consecutive BoardLocator misses → back off
     int     m_reanchorTickCount  = 0;   // for skipping ticks while backing off
