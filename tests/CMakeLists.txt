@@ -50,6 +50,17 @@ add_ibom_test(test_component_reanchor
             onnxruntime::onnxruntime spdlog::spdlog
 )
 
+# Blob component detector test — model-free detection + bootstrap end-to-end
+# (synthetic PCB image). Needs features2d (MSER) + the reanchor/homography src.
+add_ibom_test(test_blob_detector
+    SOURCES test_blob_detector.cpp
+            ${CMAKE_SOURCE_DIR}/src/overlay/BlobComponentDetector.cpp
+            ${CMAKE_SOURCE_DIR}/src/overlay/ComponentReanchor.cpp
+            ${CMAKE_SOURCE_DIR}/src/overlay/Homography.cpp
+    LIBS    opencv_core opencv_imgproc opencv_features2d opencv_calib3d
+            onnxruntime::onnxruntime spdlog::spdlog
+)
+
 # Component matching test — needs ComponentMap.cpp (no extra libs)
 add_ibom_test(test_component_matching
     SOURCES test_component_matching.cpp

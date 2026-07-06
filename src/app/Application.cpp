@@ -28,6 +28,7 @@
 #include "overlay/TrackingWorker.h"
 #include "overlay/BoardLocator.h"
 #include "overlay/ComponentReanchor.h"
+#include "overlay/BlobComponentDetector.h"
 #include "features/PickAndPlace.h"
 #include "features/Measurement.h"
 #include "features/SnapshotHistory.h"
@@ -454,31 +455,20 @@ void Application::createSubsystems()
     }
 
     // Periodic re-anchor timer (plan B): during live tracking, correct
-    // accumulated drift. Two strategies, the better one chosen at each tick:
-    //   • a component model is loaded  -> componentReanchor() (matches AI
-    //     detections to iBOM positions; works when the board fills the frame);
-    //   • otherwise                    -> autoAlignBoard() (geometric outline,
-    //     only works when the whole board outline is visible).
-    // The timeout re-checks all conditions; updateReanchorTimer() starts/stops
-    // it and sets the interval from Config.
+    // accumulated drift. Prefer the component path — it matches detections
+    // (trained model OR model-free blobs) to iBOM positions and works when the
+    // board fills the frame. Fall back to the geometric outline only when
+    // component re-anchor can't run (no iBOM board bbox etc.). The timeout
+    // re-checks all conditions; updateReanchorTimer() starts/stops it.
     m_reanchorTimer = new QTimer(this);
     m_reanchorTimer->setObjectName("ReanchorTimer");
     connect(m_reanchorTimer, &QTimer::timeout, this, [this]() {
         if (!m_config->reanchorEnabled() || !m_liveMode || !m_ibomProject || m_autoAligning)
             return;
-        // Back off when the geometric path keeps missing (e.g. the board fills
-        // the frame, so the outline can't be separated): skip ticks in
-        // proportion to the failure streak instead of running Canny +
-        // orientation scoring every interval forever. The component path does
-        // not have this limitation, so it ignores the back-off.
-        if (componentDetector()) {
-            componentReanchor(/*silent=*/true);
-            return;
-        }
-        if (m_reanchorFailStreak > 0
-            && (++m_reanchorTickCount % (m_reanchorFailStreak + 1)) != 0)
-            return;
-        autoAlignBoard(/*silent=*/true);
+        // Component re-anchor now works without a trained model (blob
+        // detector), so it's always the primary drift-correction path — it
+        // doesn't need the board outline visible.
+        componentReanchor(/*silent=*/true);
     });
     updateReanchorTimer();
 
@@ -1272,20 +1262,29 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
     ai::ComponentDetector* detector = componentDetector();
     watcher->setFuture(QtConcurrent::run([colorCopy, depthCopy, project,
                                           expectedPixelsPerMm, detector]() {
-        // Detection-first (docs/AUTO_ALIGN_V2_PLAN.md): with a component
-        // detector loaded, register the detected-component constellation
-        // against the iBOM layout — needs no visible board outline, so it
-        // works exactly where the geometric path structurally fails (board
-        // filling the frame, cluttered/glossy background). BoardLocator stays
-        // as the model-free fallback.
+        // Detection-first (docs/AUTO_ALIGN_V2_PLAN.md): register the detected-
+        // component constellation against the iBOM layout — needs no visible
+        // board outline, so it works exactly where the geometric path
+        // structurally fails (board filling the frame, cluttered/glossy
+        // background). Detections come from the trained model when loaded,
+        // else from the model-free blob detector (classic CV) — so component-
+        // based alignment works even with an empty models/. BoardLocator stays
+        // as the last resort.
+        std::vector<ai::Detection> detections;
+        const char* detSrc = "model";
         if (detector) {
-            const std::vector<ai::Detection> detections = detector->detect(colorCopy);
+            detections = detector->detect(colorCopy);
+        } else {
+            detections = overlay::detectComponentBlobs(colorCopy, expectedPixelsPerMm);
+            detSrc = "blobs";
+        }
+        if (!detections.empty()) {
             const auto boot = overlay::ComponentReanchor::bootstrap(
                 detections, *project, ibom::Layer::Front, expectedPixelsPerMm);
             if (boot.found) {
                 overlay::BoardLocateResult blr;
                 blr.found  = true;
-                blr.method = "components";
+                blr.method = std::string("components(") + detSrc + ")";
                 // Map inliers onto the shared [0,1] score consumed by the
                 // trust (0.45) and reanchor (0.5) gates: 8 inliers → 0.67,
                 // saturates at 18+. Component consensus is far more specific
@@ -1302,8 +1301,8 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
                 cv::perspectiveTransform(pcb, blr.imageCorners, boot.homography);
                 return blr;
             }
-            spdlog::info("Auto-Align: component bootstrap didn't lock ({}), "
-                         "falling back to board outline", boot.message);
+            spdlog::info("Auto-Align: component bootstrap ({}) didn't lock ({}), "
+                         "falling back to board outline", detSrc, boot.message);
         }
         return overlay::BoardLocator::locate(colorCopy, depthCopy, *project,
                                              expectedPixelsPerMm, ibom::Layer::Front);
@@ -1330,56 +1329,44 @@ void Application::attemptLostRecovery()
         return;
     }
 
-    const bool viaDetector = componentDetector() != nullptr;
     if (!m_autoAligning) {
         ++m_lostRecoveryAttempts;
-        if (viaDetector) {
-            // A detector can bootstrap a pose from the components alone —
-            // works even on the board-fills-the-frame / coplanar view. Worth
-            // retrying at full cadence.
-            spdlog::info("Tracking LOST — auto re-anchor attempt #{} via component detector",
-                         m_lostRecoveryAttempts);
-            componentReanchor(/*silent=*/true);
-        } else if (m_lostRecoveryAttempts <= 3) {
-            spdlog::info("Tracking LOST — auto re-anchor attempt #{} via board outline",
-                         m_lostRecoveryAttempts);
-            autoAlignBoard(/*silent=*/true);
-        } else {
-            // Geometric BoardLocator can't find an outline when the board
-            // fills the frame over a coplanar surface (ERREUR #41/#54), and
-            // there's no detector to fall back on. Stop spamming a hopeless
-            // attempt every 3 s: tell the user once what to do, then keep
-            // trying only occasionally (the view might change / board lifted).
-            if (m_lostRecoveryAttempts == 4) {
-                m_mainWindow->updateStatusMessage(tr(
-                    "Tracking lost — auto re-anchor can't recover on this view. "
-                    "Align manually (4-corner / Multi-Comp), lift the board off the "
-                    "surface, or load an AI model for component-based re-anchor."));
-                spdlog::warn("Tracking LOST — geometric re-anchor exhausted after 3 tries "
-                             "(no AI detector loaded); backing off to 15 s. Manual "
-                             "alignment or a component_detector model is needed.");
-            }
-            autoAlignBoard(/*silent=*/true);  // keep trying, spaced out below
+        // componentReanchor() registers a component constellation against the
+        // iBOM — from the trained model when loaded, else the model-free blob
+        // detector (classic CV). Either way it needs no visible board outline,
+        // so it can recover on the board-fills-the-frame / coplanar view where
+        // BoardLocator structurally can't (ERREUR #41/#54). It internally
+        // bootstraps (no current pose required).
+        const bool viaModel = componentDetector() != nullptr;
+        spdlog::info("Tracking LOST — auto re-anchor attempt #{} via {} component detection",
+                     m_lostRecoveryAttempts, viaModel ? "AI-model" : "blob");
+        componentReanchor(/*silent=*/true);
+
+        // If it keeps failing (hard scene: bare/sparse board, blobs can't lock),
+        // tell the user once and slow down so the log/CPU aren't hammered.
+        if (m_lostRecoveryAttempts == 6) {
+            m_mainWindow->updateStatusMessage(tr(
+                "Tracking still lost — component re-anchor can't lock on this view. "
+                "Align manually (4-corner / Multi-Comp)%1.")
+                .arg(viaModel ? QString() : tr(", or load an AI model for better detection")));
+            spdlog::warn("Tracking LOST — component re-anchor still failing after 6 tries; "
+                         "backing off to 15 s. Manual alignment recommended.");
         }
     }
 
     // State-change signals only fire on transitions; a persistent loss needs
-    // polling. Cadence backs off once geometric recovery has proven hopeless
-    // on this scene, so the log/CPU aren't hammered forever.
-    const int delayMs = (viaDetector || m_lostRecoveryAttempts <= 3) ? 3000 : 15000;
+    // polling. Cadence backs off after several failures so nothing is hammered.
+    const int delayMs = (m_lostRecoveryAttempts < 6) ? 3000 : 15000;
     QTimer::singleShot(delayMs, this, &Application::attemptLostRecovery);
 }
 
 void Application::componentReanchor(bool silent)
 {
     if (m_autoAligning) return;  // shares the alignment guard with autoAlignBoard
+    // No detector requirement anymore: without a trained model we detect
+    // component blobs with classic CV (BlobComponentDetector) and bootstrap
+    // on those. A model is better, but not mandatory.
     auto* detector = componentDetector();
-    if (!detector) {
-        if (!silent)
-            m_mainWindow->updateStatusMessage(
-                tr("Component re-anchor: no detector loaded (need a model in models/)"));
-        return;
-    }
     if (!m_lastColorFrame || m_lastColorFrame->empty()) {
         if (!silent)
             m_mainWindow->updateStatusMessage(tr("Component re-anchor: no camera frame yet"));
@@ -1507,7 +1494,11 @@ void Application::componentReanchor(bool silent)
 
     watcher->setFuture(QtConcurrent::run([detector, colorCopy, project, priorPose,
                                           scalePrior]() {
-        const std::vector<ai::Detection> detections = detector->detect(colorCopy);
+        // Detections from the trained model when loaded, else model-free blobs
+        // (classic CV) — component-based re-anchor works with an empty models/.
+        const std::vector<ai::Detection> detections =
+            detector ? detector->detect(colorCopy)
+                     : overlay::detectComponentBlobs(colorCopy, scalePrior);
         // Prior-based correction first (cheap, precise when the pose is only
         // drifting); global bootstrap when there is no usable prior — no pose
         // yet, or a pose so stale (board moved/picked up) that nothing falls

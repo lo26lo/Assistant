@@ -39,16 +39,43 @@ La carte porte des dizaines de composants dont on connaît **exactement** la pos
 
 | Usage | Chemin | État |
 |---|---|---|
-| **Alignement initial** (bouton Auto-Align) | détecteur → `bootstrap()` → raffinage ; **fallback BoardLocator** si pas de lock/modèle. Score mappé sur les gates existants (0.45/0.5). | ✅ suite 118 |
-| **Récupération de perte** (état LOST, chaîne suite 117) | `componentReanchor(silent)` : `estimate()` avec prior, **fallback `bootstrap()`** si le prior est mort — le scénario « PCB soulevé/reposé » se ré-aligne tout seul | ✅ suite 118 |
-| **Correction périodique de dérive** (timer Auto re-anchor) | `estimate()` avec prior (inchangé, suite 103) — bénéficie aussi du fallback bootstrap | ✅ |
+| **Alignement initial** (bouton Auto-Align) | détections (modèle **ou blobs**) → `bootstrap()` → raffinage ; **fallback BoardLocator** si pas de lock. Score mappé sur les gates existants (0.45/0.5). | ✅ 118 / model-free 121 |
+| **Récupération de perte** (état LOST, chaîne suite 117) | `componentReanchor(silent)` : `estimate()` avec prior, **fallback `bootstrap()`** — détections modèle **ou blobs** → marche même `models/` vide (scène du log utilisateur) | ✅ 118 / model-free 121 |
+| **Correction périodique de dérive** (timer Auto re-anchor) | `componentReanchor()` (modèle **ou blobs**) en primaire ; géométrique retiré du chemin | ✅ 121 |
 | **Tracking cadencé** (« feel yolov8 ») | détection à 1-2 Hz fusionnée comme correction absolue, flow LK entre deux — voir §4 | ⏳ après validation du modèle |
 
 L'activation auto du live tracking après tout alignement (suite 117) fait que le bootstrap réussi enchaîne directement sur le suivi.
 
-## 3. ⚠️ Le verrou n'est plus le code : c'est `models/component_detector.onnx`
+### Détecteur model-free (blobs) — le fallback sans `.onnx` (suite 121)
 
-Tout ce qui précède est **inerte tant que `models/` est vide**. Le pipeline d'entraînement est prêt depuis les suites 103-107 ; sur le serveur Ubuntu RTX 5070 Ti, c'est **une commande** :
+`bootstrap()` consomme des `ai::Detection` (centre + bbox). Rien n'oblige à ce
+qu'elles viennent d'un réseau : `overlay::detectComponentBlobs()`
+(`BlobComponentDetector.{h,cpp}`, vision classique) produit les mêmes détections
+à partir des **blobs de corps de composants** — MSER (régions stables, toutes
+polarités) + gating par taille physique (via le prior px/mm : ~0,4–22 mm) + dédup
++ cap. `bootstrap()` étant du consensus RANSAC tolérant beaucoup de faux positifs
+et de ratés (le test injecte 25 % de dropouts + 6 fantômes), un détecteur de
+blobs bruité suffit à verrouiller une pose sur une **carte peuplée**.
+
+Conséquence : **l'alignement basé composants marche même `models/` vide.** Dans
+`autoAlignBoard`, `componentReanchor` et le re-anchor périodique, la source de
+détections est : **modèle entraîné si présent, sinon blobs**, puis `bootstrap`,
+puis (dernier recours) BoardLocator géométrique. La récupération de perte (chaîne
+LOST) passe donc par le composant même sans modèle — exactement la scène du log
+utilisateur (carte plein cadre coplanaire) que le géométrique ne pouvait pas.
+
+Limites honnêtes du blob : rate les 0201 minuscules, peut tirer sur les joints de
+soudure / la sérigraphie, exige des **corps de composants visibles** (carte nue =
+échec). Un modèle entraîné reste **meilleur** (précision, robustesse, cartes
+peu peuplées) — le blob enlève juste la **dépendance dure** au modèle.
+
+## 3. Le modèle entraîné reste le meilleur chemin (mais n'est plus obligatoire)
+
+Le détecteur blob (§2) donne un chemin **model-free** qui fonctionne dès
+maintenant. Un `models/component_detector.onnx` reste supérieur (précision,
+cartes peu peuplées, moins de faux positifs). Le pipeline d'entraînement est prêt
+depuis les suites 103-107 ; sur le serveur Ubuntu RTX 5070 Ti, c'est **une
+commande** :
 
 ```bash
 # sur le serveur (clé API Roboflow à coller dans le script) :

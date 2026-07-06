@@ -161,6 +161,7 @@ set(SOURCES
     src/overlay/TrackingWorker.cpp
     src/overlay/BoardLocator.cpp
     src/overlay/ComponentReanchor.cpp
+    src/overlay/BlobComponentDetector.cpp
 
     # GUI
     src/gui/MainWindow.cpp
@@ -232,6 +233,7 @@ set(HEADERS
     src/overlay/OverlayRenderer.h
     src/overlay/Homography.h
     src/overlay/ComponentOverlay.h
+    src/overlay/BlobComponentDetector.h
     src/overlay/HeatmapRenderer.h
     src/overlay/TrackingWorker.h
     src/overlay/OneEuroFilter.h
