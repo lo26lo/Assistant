@@ -24,6 +24,20 @@ double medianOf(std::vector<double> v)
     return (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
 }
 
+/// Component reference point in PCB coords. Uses the bbox center — always
+/// populated by the parser — NOT Component::position, which is only filled
+/// when the iBOM footprint has a "center" field (many don't; it then stays
+/// (0,0), collapsing every component to the origin → "degenerate layout").
+cv::Point2f componentCenter(const ibom::Component& c)
+{
+    const double w = c.bbox.maxX - c.bbox.minX;
+    const double h = c.bbox.maxY - c.bbox.minY;
+    if (w > 1e-6 && h > 1e-6)
+        return { static_cast<float>(0.5 * (c.bbox.minX + c.bbox.maxX)),
+                 static_cast<float>(0.5 * (c.bbox.minY + c.bbox.maxY)) };
+    return { static_cast<float>(c.position.x), static_cast<float>(c.position.y) };
+}
+
 } // namespace
 
 ComponentReanchorResult ComponentReanchor::estimate(
@@ -76,8 +90,7 @@ ComponentReanchorResult ComponentReanchor::estimate(
     for (size_t i = 0; i < project.components.size(); ++i) {
         const auto& c = project.components[i];
         if (c.layer != activeLayer) continue;
-        const cv::Point2f pcb(static_cast<float>(c.position.x),
-                              static_cast<float>(c.position.y));
+        const cv::Point2f pcb = componentCenter(c);
         cands.push_back({ i, pcb, currentPose.pcbToImage(pcb),
                           useClass ? classOfComponent[i] : -1 });
     }
@@ -189,13 +202,13 @@ ComponentReanchorResult ComponentReanchor::bootstrap(
     comp.reserve(project.components.size());
     for (const auto& c : project.components) {
         if (c.layer != activeLayer) continue;
-        comp.push_back({ static_cast<float>(c.position.x),
-                         static_cast<float>(c.position.y) });
+        comp.push_back(componentCenter(c));
     }
     if (comp.size() < static_cast<size_t>(params.minMatches) ||
         detections.size() < static_cast<size_t>(params.minMatches)) {
         r.message = "bootstrap: too few components (" + std::to_string(comp.size()) +
                     ") or detections (" + std::to_string(detections.size()) + ")";
+        spdlog::info("[comp-reanchor] {}", r.message);
         return r;
     }
 
@@ -214,9 +227,14 @@ ComponentReanchorResult ComponentReanchor::bootstrap(
     }
     const double layoutDiag = std::hypot(cMaxX - cMinX, cMaxY - cMinY);
     if (layoutDiag < 1.0) {
-        r.message = "bootstrap: degenerate component layout";
+        r.message = "bootstrap: degenerate component layout (span " +
+                    std::to_string(layoutDiag) + " mm across " +
+                    std::to_string(comp.size()) + " components)";
+        spdlog::warn("[comp-reanchor] {}", r.message);
         return r;
     }
+    spdlog::debug("[comp-reanchor] bootstrap: {} components (diag {:.1f} mm), {} detections",
+                  comp.size(), layoutDiag, det.size());
     const double minCompSep = std::max(2.0, 0.15 * layoutDiag);  // mm
     const double minDetSep  = 30.0;                              // px
 
@@ -295,7 +313,9 @@ ComponentReanchorResult ComponentReanchor::bootstrap(
     if (bestScore < need) {
         r.matches = bestScore;
         r.message = "bootstrap: best consensus " + std::to_string(bestScore) +
-                    " < " + std::to_string(need) + " required";
+                    " < " + std::to_string(need) + " required (" +
+                    std::to_string(nComp) + " comps, " + std::to_string(nDet) + " dets)";
+        spdlog::info("[comp-reanchor] {}", r.message);
         return r;
     }
 

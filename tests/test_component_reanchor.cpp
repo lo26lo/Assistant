@@ -39,6 +39,10 @@ ibom::IBomProject makeProject(std::vector<cv::Point2f>& centersOut)
         c.reference = "R" + std::to_string(i);
         c.layer     = ibom::Layer::Front;
         c.position  = { ux(rng), uy(rng) };
+        // Small bbox around the center: ComponentReanchor uses the bbox center
+        // (position is often unpopulated in real iBOMs), so exercise that path.
+        c.bbox = { c.position.x - 1.0, c.position.y - 1.0,
+                   c.position.x + 1.0, c.position.y + 1.0 };
         centersOut.push_back({ static_cast<float>(c.position.x),
                                static_cast<float>(c.position.y) });
         p.components.push_back(std::move(c));

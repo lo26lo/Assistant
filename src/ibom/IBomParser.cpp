@@ -674,6 +674,20 @@ Component IBomParser::parseFootprint(const nlohmann::json& fp, Layer layer)
         }
     }
 
+    // Fall back to the bbox center when the footprint had no "center" field
+    // (common — many iBOMs only carry the bbox). Otherwise Component::position
+    // stays (0,0) for every part, which collapses any position-based geometry
+    // (component re-anchor: "degenerate layout"). The bbox is always computed
+    // above, so its center is a reliable component location.
+    if (!fp.contains("center")) {
+        const double w = comp.bbox.maxX - comp.bbox.minX;
+        const double h = comp.bbox.maxY - comp.bbox.minY;
+        if (w > 1e-6 && h > 1e-6) {
+            comp.position.x = 0.5 * (comp.bbox.minX + comp.bbox.maxX);
+            comp.position.y = 0.5 * (comp.bbox.minY + comp.bbox.maxY);
+        }
+    }
+
     // Pads
     if (fp.contains("pads")) {
         comp.pads = parsePads(fp["pads"]);

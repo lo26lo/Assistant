@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 56 | 2026-07-02 | ComponentReanchor / IBomParser — Component::position | ✅ RÉSOLU | [`bootstrap: degenerate component layout` — `Component::position` reste (0,0) quand l'iBOM n'a pas de champ `center` → tout le re-anchor composant (bootstrap ET estimate, modèle compris) cassé ; fix : utiliser le centre de la bbox](#erreur-56--componentposition-non-remplie--re-anchor-composant-degenere) |
 | 55 | 2026-07-02 | tests/test_component_reanchor.cpp — build | ✅ RÉSOLU | [`ai::Detection` ne résout pas à portée globale — `ai` est le namespace imbriqué `ibom::ai`, visible sans qualification seulement depuis `namespace ibom`](#erreur-55--aidetection-ne-resout-pas-a-portee-globale-dans-le-test) |
 | 54 | 2026-07-02 | TrackingWorker / Application — terrain | 🟡 CONTOURNÉ | [PCB soulevé puis reposé → live tracking « perd le nord » et ne récupère jamais — le gate anti-saut exige la continuité avec une pose devenue obsolète ; mitigations : bypass après 2 s sans pose saine + re-anchor automatique sur état Lost](#erreur-54--pcb-souleve-puis-repose--tracking-jamais-recupere) |
 | 53 | 2026-07-02 | ComponentReanchor.h — 1er build Jetson de PR #21 | ✅ RÉSOLU | [Build échoue : `const Params& params = {}` ne compile pas — bug GCC (nested aggregate + DMI utilisée comme argument par défaut d'une méthode sœur, PR GCC 88857)](#erreur-53--componentreanchor-params--bug-gcc-aggregat-imbrique--argument-par-defaut) |
@@ -1386,6 +1387,31 @@ Renommé les deux variables en `cornerTL`/`cornerTR` dans `autoAlignBoard()`.
 
 ### Leçon
 Ne jamais nommer une variable locale `tr` (ou tout identifiant Qt courant comme `tr`/`qDebug`/etc.) dans une méthode `QObject`, même si elle semble hors de portée du prochain appel `tr(...)` — un refactor ultérieur peut facilement élargir la portée sans qu'on s'en rende compte. Préférer un nom descriptif (`cornerTL`, `topRight`, …) systématiquement.
+
+## ERREUR 56 — `Component::position` non remplie → re-anchor composant dégénéré
+
+**Date :** 2026-07-02
+**Composant :** `src/overlay/ComponentReanchor.cpp` + `src/ibom/IBomParser.cpp`
+**Statut :** ✅ RÉSOLU
+
+### Symptôme
+Log terrain (D405, carte réelle, chemin blob model-free de la suite 121) :
+```
+Auto-Align: component bootstrap (blobs) didn't lock (bootstrap: degenerate component layout), falling back to board outline
+```
+à **chaque** tentative → l'Auto-Align composant ne démarre jamais, retombe sur le géométrique (qui échoue aussi, carte coplanaire).
+
+### Cause
+`ComponentReanchor::bootstrap()` et `estimate()` (suite 103/118) prenaient la position des composants dans **`Component::position`**. Or `IBomParser` ne remplit `position` que si le footprint iBOM contient un champ `"center"` (`if (fp.contains("center")) comp.position = readPoint(fp["center"]);`) — **beaucoup d'iBOM ne l'ont pas** (ils ne portent que la `bbox` avec `pos`/`relpos`/`angle`/`size`). Sur la carte de l'utilisateur, `center` est absent → `position` reste à son défaut **(0,0) pour TOUS les composants** → le nuage de composants est un point unique → `layoutDiag ≈ 0` → garde « degenerate component layout ». **Conséquence large** : tout le re-anchor composant était cassé sur ces iBOM, **modèle entraîné compris** (pas seulement les blobs) — jamais détecté avant car ce chemin n'avait jamais tourné en vrai (models/ vide, estimate() jamais atteint faute de pose valide au bon moment).
+
+### Solution appliquée ✅
+1. **`ComponentReanchor.cpp`** : nouveau helper `componentCenter(c)` = **centre de la bbox** (`(minX+maxX)/2, (minY+maxY)/2`), toujours calculée par le parser ; fallback sur `position` si la bbox est dégénérée. Utilisé dans `bootstrap()` et `estimate()` à la place de `c.position`.
+2. **`IBomParser.cpp`** : quand le footprint n'a pas de `"center"`, `comp.position` est désormais initialisée au **centre de la bbox** (après calcul de celle-ci) → `position` redevient significative pour tout autre consommateur.
+3. **Logs enrichis** dans `bootstrap()** : nombre de composants, diag du layout (mm), nombre de détections, et raison d'échec du consensus détaillée (`N comps, M dets`) — pour diagnostiquer la prochaine étape (est-ce le nombre de blobs ? le consensus ?).
+4. **Tests** : `test_component_reanchor` et `test_blob_detector` remplissent maintenant une bbox autour du centre (exercent le vrai chemin bbox au lieu du fallback).
+
+### Leçon
+Un champ « optionnel » d'un format externe (`center` iBOM) utilisé comme s'il était garanti = bombe à retardement. La `bbox` est la source **toujours disponible** de la position d'un composant (c'est déjà ce que l'overlay et la minimap utilisent — cf. ERREUR #33) ; tout code géométrique composant doit s'appuyer dessus, pas sur `position`. Vérifier systématiquement, pour un champ lu d'un JSON externe, ce qui se passe **quand il est absent**.
 
 ## ERREUR 55 — `ai::Detection` ne résout pas à portée globale dans le test
 

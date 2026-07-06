@@ -44,6 +44,7 @@ ibom::IBomProject makeProject(std::vector<cv::Point2f>& centersOut)
         comp.reference = "U" + std::to_string(pts.size());
         comp.layer     = ibom::Layer::Front;
         comp.position  = { c.x, c.y };
+        comp.bbox      = { c.x - 1.25, c.y - 1.25, c.x + 1.25, c.y + 1.25 };
         p.components.push_back(std::move(comp));
     }
     centersOut = pts;
