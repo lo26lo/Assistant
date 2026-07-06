@@ -61,6 +61,12 @@ add_ibom_test(test_blob_detector
             onnxruntime::onnxruntime spdlog::spdlog
 )
 
+# Letterbox test — pure geometry (header-only src/ai/Letterbox.h), no ONNX.
+add_ibom_test(test_letterbox
+    SOURCES test_letterbox.cpp
+    LIBS    opencv_core opencv_imgproc
+)
+
 # Component matching test — needs ComponentMap.cpp (no extra libs)
 add_ibom_test(test_component_matching
     SOURCES test_component_matching.cpp

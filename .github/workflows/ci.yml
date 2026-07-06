@@ -1,13 +1,14 @@
 name: CI
 
-# Filet de securite leger entre deux sessions Jetson. Un build C++ complet
-# n'est pas (encore) faisable sur un runner x86 stock : le projet depend d'ONNX
-# Runtime, absent en apt Ubuntu 22.04 ARM/x86 (cf JETSON_ERREURS.md #1), et
-# tests/CMakeLists.txt reference la cible MicroscopeIBOM. Ces jobs verifient
-# donc ce que la migration touche le plus souvent — scripts shell et stack
-# Docker/compose — la ou les regressions sont frequentes et rapides a attraper.
-# Suite possible (cf JETSON_AMELIORATIONS.md §4.2) : rendre ONNX Runtime
-# optionnel (-DIBOM_ENABLE_ONNX=OFF) pour debloquer un vrai build no-GPU.
+# Trois etages (cf docs/INVESTIGATION_360_2026-07.md §8.1) :
+#  1. shell + compose : filet historique, rapide.
+#  2. unit-tests : les 9 cibles de test C++ compilees et EXECUTEES avec les
+#     paquets apt d'ubuntu-24.04 + un stub ONNX d'une ligne (les tests ne
+#     consomment d'onnxruntime que le struct ai::Detection). Seul
+#     test_inference (vraie session ORT) reste Jetson-only. La decision
+#     "ONNX jamais optionnel" du build reel est intacte : le stub ne vit que
+#     dans scripts/ci_unit_tests.sh. Le build complet CUDA/TensorRT reste a
+#     valider sur le Jetson (runner self-hosted possible plus tard).
 
 on:
   push:
@@ -52,3 +53,22 @@ jobs:
 
       - name: Valider compose.yml + override local
         run: docker compose -f docker/compose.yml -f docker/compose.local.yml config --quiet
+
+  unit-tests:
+    # ubuntu-24.04 obligatoire : c'est la version qui fournit catch2 v3 en apt
+    # (22.04 n'a que la v2.13, incompatible avec l'API catch2/catch_*.hpp —
+    # meme piege que CLAUDE.md #27 sur Jammy).
+    name: C++ unit tests (apt toolchain + stub ONNX)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependances apt
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            g++ pkg-config libopencv-dev catch2 nlohmann-json3-dev \
+            libspdlog-dev libfmt-dev qt6-base-dev
+
+      - name: Build + run des cibles de test
+        run: bash scripts/ci_unit_tests.sh

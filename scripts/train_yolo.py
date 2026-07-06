@@ -40,8 +40,12 @@ def main() -> int:
                     help="Poids de départ (yolov8n/s/m.pt). Défaut : %(default)s")
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--imgsz", type=int, default=640,
-                    help="Doit rester 640 : l'app attend une entrée 640x640 "
-                         "(cf. InferenceEngine). Défaut : %(default)s")
+                    help="Taille d'entrée du modèle. L'app lit cette taille "
+                         "dans le .onnx (InferenceEngine::loadModel) et "
+                         "letterboxe en conséquence — 1280 marche donc tel "
+                         "quel et voit mieux les petits composants "
+                         "(0402/0201), au prix d'une inférence ~4x plus "
+                         "lente sur l'Orin. Défaut : %(default)s")
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--name", default="train",
                     help="Nom du run (runs/detect/<name>)")
@@ -59,9 +63,10 @@ def main() -> int:
         return 2
 
     if args.imgsz != 640:
-        print(f"AVERTISSEMENT : imgsz={args.imgsz} ≠ 640. L'app suppose une "
-              "entrée 640x640 ; un autre format demandera de modifier "
-              "InferenceEngine.", file=sys.stderr)
+        print(f"NOTE : imgsz={args.imgsz} ≠ 640. Supporté : l'app s'adapte à "
+              "la taille d'entrée du .onnx (letterbox inclus) — exporte "
+              "l'ONNX avec le même --imgsz. Compter une inférence plus "
+              "lente sur le Jetson.", file=sys.stderr)
 
     try:
         from ultralytics import YOLO

@@ -172,10 +172,12 @@ std::vector<Detection> InferenceEngine::detect(const cv::Mat& frame,
 
 std::vector<float> InferenceEngine::preprocess(const cv::Mat& frame)
 {
-    cv::Mat resized, blob;
-
-    // Resize to model input size with letterboxing
-    cv::resize(frame, resized, m_inputSize);
+    // Aspect-preserving letterbox (single scale + gray margins), matching how
+    // YOLO is trained. The mapping is kept for postprocess() to project the
+    // boxes back into original image coords. The previous plain cv::resize
+    // squeezed 16:9 frames 1:1 — a distortion the network never saw.
+    m_letterbox = letterboxInfo(frame.size(), m_inputSize);
+    cv::Mat resized = letterboxImage(frame, m_inputSize, m_letterbox);
 
     // Convert BGR -> RGB, normalize to [0, 1]
     resized.convertTo(resized, CV_32F, 1.0 / 255.0);
@@ -215,10 +217,6 @@ std::vector<Detection> InferenceEngine::postprocess(const std::vector<Ort::Value
     int rows = static_cast<int>(shape[1]);
     int cols = static_cast<int>(shape[2]);
 
-    // Scale factors
-    float scaleX = static_cast<float>(originalSize.width)  / m_inputSize.width;
-    float scaleY = static_cast<float>(originalSize.height) / m_inputSize.height;
-
     std::vector<cv::Rect2f> boxes;
     std::vector<float> confidences;
     std::vector<int> classIds;
@@ -243,9 +241,14 @@ std::vector<Detection> InferenceEngine::postprocess(const std::vector<Ort::Value
         }
 
         if (maxConf >= confThreshold) {
-            float x = (cx - w / 2.0f) * scaleX;
-            float y = (cy - h / 2.0f) * scaleY;
-            boxes.push_back(cv::Rect2f(x, y, w * scaleX, h * scaleY));
+            // Model space → original image space through the letterbox mapping
+            // recorded by preprocess(); clip because part of a raw box can sit
+            // in the gray padding, outside the real image.
+            const cv::Rect2f box = clipRect(
+                unletterboxRect({ cx - w / 2.0f, cy - h / 2.0f, w, h }, m_letterbox),
+                originalSize);
+            if (box.width <= 0.f || box.height <= 0.f) continue;
+            boxes.push_back(box);
             confidences.push_back(maxConf);
             classIds.push_back(maxIdx);
         }

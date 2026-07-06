@@ -6,6 +6,8 @@
 #include <memory>
 #include <onnxruntime_cxx_api.h>
 
+#include "Letterbox.h"
+
 namespace ibom::ai {
 
 class ModelManager;
@@ -78,6 +80,9 @@ private:
     std::vector<const char*> m_outputNamePtrs;
 
     cv::Size m_inputSize{640, 640}; // Default YOLO input size
+    // Letterbox mapping of the last preprocessed frame — written by
+    // preprocess(), read by postprocess() within the same detect() call.
+    Letterbox m_letterbox;
     int      m_numClasses = 0;
     bool     m_ready = false;
     float    m_lastInferenceMs = 0.0f;

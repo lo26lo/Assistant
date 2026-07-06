@@ -177,9 +177,9 @@ Le blocage historique était « ONNX Runtime absent d'apt » (bandeau de `ci.yml
 
 | Priorité | Item | § | Impact | Effort | Dépend de |
 |----------|------|---|--------|--------|-----------|
-| **P0** | CI C++ stub ONNX (8/9 cibles à chaque push) | 8.1 | Majeur (filet permanent) | ½s | rien |
+| **P0** | ✅ **Fait (suite 129)** — CI C++ stub ONNX (9/9 cibles à chaque push, `scripts/ci_unit_tests.sh`) | 8.1 | Majeur (filet permanent) | ½s | rien |
 | **P0** | Entraîner `component_detector.onnx` | 4.3 | Majeur (débloque détection, re-anchor stable, P&P assisté) | hors-code | tuto prêt |
-| **P1** | Letterbox + décision imgsz/tuilage | 4.1-4.2 | Fort | ½s | avant l'éval du modèle |
+| **P1** | ✅ **Fait (suite 129)** — Letterbox (`src/ai/Letterbox.h` + test) ; décision imgsz/tuilage reste ouverte (l'app s'adapte à l'imgsz du .onnx) | 4.1-4.2 | Fort | ½s | avant l'éval du modèle |
 | **P1** | Hot-path GUI (conversion hors GUI, suppression `copy()`) | 3.1 | Fort (CPU Orin) | ½-1s | mesurer d'abord |
 | **P1** | Face arrière (Back) bout en bout | 6.1 | Majeur produit | 1-2s | rien |
 | **P1** | Consolidation journal + bloc « à valider » | 10 | Fort (vélocité sessions) | ½s | rien |
