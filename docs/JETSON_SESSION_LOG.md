@@ -28,6 +28,13 @@
 
 ---
 
+## État actuel — au 2026-07-07 (Durcissement des tests parser iBOM — chemin d'extraction des composants couvert)
+
+> **2026-07-07 (suite 134)** : dernier volet de l'item P2 §8.2 (« continue ») — **tests du chemin d'extraction de composants d'`IBomParser`**, jusqu'ici non couvert (le vieux cas « extract JSON from script » ne fournissait **que** `pcbdata` sans `config` → `parseString` échouait ligne 39 et `result` était toujours vide, donc le `if (result)` ne testait rien).
+> - Découverte en lisant le parser : la structure réelle est `config` + `pcbdata` séparés ; les footprints ne portent pas value/footprint (c'est dans `bom.fields`, cross-référencé après coup). Fixtures construites fidèlement.
+> - Nouveaux cas (`tests/test_ibom_parser.cpp`, 48 assertions au total, +5 cas) : (1) `parseString` exige config **et** pcbdata (documente le prérequis) ; (2) **full parse** — 2 footprints (F/B), pads, bbox → 2 composants, layers corrects, **cross-référence BOM** value/footprint depuis `bom.fields` (et un `val` déjà présent sur le footprint n'est **pas** écrasé) ; (3) **régression #56** — footprint sans `center` → position = centre du bbox, pas (0,0) (le bug « degenerate layout » du re-anchor) ; (4) **bbox rotée** — pos/size/relpos/angle=90° sur une boîte 10×2 → bornes axis-aligned 2×10 (un naïf pos+size donnerait faux). **Exécuté ici : 48/48 assertions PASS, 13/13 cibles CI PASS.**
+> - Aucun code de prod touché (tests seuls). Fichiers : `tests/test_ibom_parser.cpp`, docs. Avec BoardLocator (suite 130), l'item P2 « Tests BoardLocator + fixtures parser » est bouclé.
+
 ## État actuel — au 2026-07-07 (Gates de re-anchor extraits en classe pure testée + fix build latent de la suite 131)
 
 > **2026-07-07 (suite 133)** : étape 1 de l'item P2 « AlignmentController » (« go ») — **extraction des gates du re-anchor silencieux en logique pure unit-testée**, l'approche « moins invasive » suggérée par l'investigation §7.1/§8.2 (la logique la plus délicate du repo vivait dans des lambdas intestables d'Application).

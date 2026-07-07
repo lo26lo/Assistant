@@ -186,7 +186,7 @@ Le blocage historique était « ONNX Runtime absent d'apt » (bandeau de `ci.yml
 | **P2** | 🟡 **Étape 1 faite (suite 133)** — gates du re-anchor silencieux extraits en `overlay::ReanchorGate` unit-testé (8 cas) ; l'extraction complète `AlignmentController` reste à faire | 7.1/8.2 | Fort (testabilité) | 1s/contrôleur | CI P0 en place |
 | **P2** | Reconnexion caméra à chaud | 2.2 | Moyen (confort atelier) | ½s | rien |
 | **P2** | RemoteView : overlay composité + token | 3.2 | Moyen | ½s | rien |
-| **P2** | Tests BoardLocator + fixtures parser | 8.2 | Moyen | 1s | CI P0 |
+| **P2** | ✅ **Fait (suites 130+134)** — Tests BoardLocator + fixtures parser (full-parse, cross-ref BOM, régressions #56 & bbox rotée) | 8.2 | Moyen | 1s | CI P0 |
 | **P2** | UMA ON + mesure | 2.3 | Moyen (perf) | ¼s + build | build Jetson |
 | **P3** | Seuils gates en mm ; décision Auto mémorisée ; timestamps driver | 1.1/1.3/2.1 | Faible-moyen | ¼s chacun | rien |
 | **P3** | BarcodeScanner (ZXing déjà payé) ; P&P auto-advance | 6.2/6.3 | Moyen (niche) | ½s | rien |

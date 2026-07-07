@@ -13,26 +13,123 @@ TEST_CASE("IBomParser — parse empty HTML", "[ibom][parser]")
     REQUIRE_FALSE(result.has_value());
 }
 
-TEST_CASE("IBomParser — extract JSON from script", "[ibom][parser]")
+TEST_CASE("IBomParser — parseString needs both config and pcbdata", "[ibom][parser]")
 {
-    // Simulate a minimal iBOM HTML with embedded data
-    std::string html = R"(
-        <html><head><script>
-        var pcbdata = {"edges_bbox":{"minx":0,"miny":0,"maxx":100,"maxy":80},
-                       "board_outline":{"F":[]},"footprints":[],"bom":{"F":[],"B":[],"both":[]},
-                       "nets":[]};
-        </script></head><body></body></html>
-    )";
+    IBomParser parser;
+
+    // pcbdata alone (no config var) → parse bails: this is exactly why the
+    // old smoke test never actually parsed anything.
+    const std::string noConfig =
+        R"(<script>var pcbdata = {"footprints":[],"bom":{"both":[]}};</script>)";
+    REQUIRE_FALSE(parser.parseString(noConfig).has_value());
+
+    // config + empty pcbdata → valid, zero components.
+    const std::string empty =
+        R"(<script>var config = {};
+           var pcbdata = {"edges_bbox":{"minx":0,"miny":0,"maxx":10,"maxy":10},
+                          "footprints":[],"bom":{"both":[]},"nets":{}};</script>)";
+    auto r = parser.parseString(empty);
+    REQUIRE(r.has_value());
+    CHECK(r->components.empty());
+    CHECK(r->boardInfo.boardBBox.width() == Catch::Approx(10.0));
+}
+
+TEST_CASE("IBomParser — full parse extracts components and cross-references BOM",
+          "[ibom][parser]")
+{
+    // A faithful minimal iBOM: config + pcbdata with two footprints (one per
+    // side), a bom.both group per part carrying value/footprint in bom.fields
+    // (footprint objects themselves don't — the parser must cross-reference).
+    const std::string html = R"HTML(<html><script>
+      var config = {"dark_mode":false,"fields":["Value","Footprint"]};
+      var pcbdata = {
+        "edges_bbox":{"minx":0,"miny":0,"maxx":100,"maxy":80},
+        "footprints":[
+          {"ref":"R1","layer":"F","center":[20,40],
+           "bbox":{"pos":[20,40],"size":[2,1],"relpos":[-1,-0.5],"angle":0},
+           "pads":[{"num":"1","net":"GND","pos":[19,40],"size":[0.6,0.6]}]},
+          {"ref":"C1","layer":"B","val":"100nF","center":[80,20],
+           "bbox":{"pos":[80,20],"size":[2,2],"relpos":[-1,-1],"angle":0}}
+        ],
+        "bom":{"both":[[["R1",0]],[["C1",1]]],
+               "fields":{"0":["10k","R_0402"],"1":["100nF","C_0402"]}},
+        "nets":{}
+      };
+    </script></html>)HTML";
 
     IBomParser parser;
-    auto result = parser.parseString(html);
+    auto r = parser.parseString(html);
+    REQUIRE(r.has_value());
+    REQUIRE(r->components.size() == 2);
 
-    // This depends on parser implementation robustness
-    // The parser should at least not crash on minimal input
-    // Full test requires a real iBOM file
-    if (result) {
-        CHECK(result->components.empty());
-    }
+    const auto& r1 = r->components[0];
+    CHECK(r1.reference == "R1");
+    CHECK(r1.layer == Layer::Front);
+    CHECK(r1.pads.size() == 1);
+    // val was absent on the footprint → filled from BOM fields.
+    CHECK(r1.value == "10k");
+    CHECK(r1.footprint == "R_0402");
+
+    const auto& c1 = r->components[1];
+    CHECK(c1.reference == "C1");
+    CHECK(c1.layer == Layer::Back);
+    // val was present on the footprint → cross-reference must NOT overwrite it.
+    CHECK(c1.value == "100nF");
+    CHECK(c1.footprint == "C_0402");
+}
+
+TEST_CASE("IBomParser — footprint without 'center' falls back to bbox center (ERREUR #56)",
+          "[ibom][parser]")
+{
+    // The degenerate-layout regression: with no "center" field, Component
+    // position must derive from the bbox, not stay (0,0) — otherwise every
+    // part collapses to the origin and component re-anchor sees a degenerate
+    // layout.
+    const std::string html = R"HTML(<script>
+      var config = {};
+      var pcbdata = {"edges_bbox":{"minx":0,"miny":0,"maxx":100,"maxy":80},
+        "footprints":[
+          {"ref":"U1","layer":"F",
+           "bbox":{"pos":[80,20],"size":[4,2],"relpos":[-2,-1],"angle":0}}
+        ],
+        "bom":{"both":[]},"nets":{}};
+    </script>)HTML";
+
+    IBomParser parser;
+    auto r = parser.parseString(html);
+    REQUIRE(r.has_value());
+    REQUIRE(r->components.size() == 1);
+    const auto& u1 = r->components[0];
+    CHECK(u1.position.x == Catch::Approx(80.0));
+    CHECK(u1.position.y == Catch::Approx(20.0));
+    CHECK(u1.position.x != Catch::Approx(0.0));  // the bug this guards against
+}
+
+TEST_CASE("IBomParser — rotated bbox reconstructs axis-aligned bounds",
+          "[ibom][parser]")
+{
+    // iBOM stores pos/size/relpos/angle, not min/max. A 10x2 box rotated 90°
+    // must yield 2x10 axis-aligned bounds — naive pos+size would be wrong.
+    const std::string html = R"HTML(<script>
+      var config = {};
+      var pcbdata = {"edges_bbox":{"minx":0,"miny":0,"maxx":100,"maxy":100},
+        "footprints":[
+          {"ref":"J1","layer":"F","center":[50,50],
+           "bbox":{"pos":[50,50],"size":[10,2],"relpos":[-5,-1],"angle":90}}
+        ],
+        "bom":{"both":[]},"nets":{}};
+    </script>)HTML";
+
+    IBomParser parser;
+    auto r = parser.parseString(html);
+    REQUIRE(r.has_value());
+    REQUIRE(r->components.size() == 1);
+    const auto& bb = r->components[0].bbox;
+    // width ~2 (was 10 before rotation), height ~10 (was 2).
+    CHECK(bb.width() == Catch::Approx(2.0).margin(0.01));
+    CHECK(bb.height() == Catch::Approx(10.0).margin(0.01));
+    CHECK(bb.center().x == Catch::Approx(50.0).margin(0.01));
+    CHECK(bb.center().y == Catch::Approx(50.0).margin(0.01));
 }
 
 TEST_CASE("IBomParser — LZString decompression terminates on corrupted input",
