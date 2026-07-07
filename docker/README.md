@@ -1,12 +1,15 @@
 # Docker — MicroscopeIBOM sur Jetson AGX Orin 32GB
 
-Stack Docker pour développer et déployer MicroscopeIBOM sur Jetson AGX Orin avec JetPack 6.2 (L4T R36.4).
+Stack Docker pour développer et déployer MicroscopeIBOM sur Jetson AGX Orin avec **JetPack 7.2** (L4T r39.2, Ubuntu 24.04, CUDA 13.2, TensorRT 10.16).
 
-Voir [../docs/JETSON_MIGRATION.md](../docs/JETSON_MIGRATION.md) pour le plan complet.
+Voir [../docs/JETSON_MIGRATION.md](../docs/JETSON_MIGRATION.md) pour le plan global et [../JETSON_MIGRATION_JP72.md](../JETSON_MIGRATION_JP72.md) pour la migration JP6.2 → 7.2.
+
+> Base conteneur = `nvcr.io/nvidia/tensorrt:26.05-py3` (arm64/SBSA) : `l4t-jetpack`
+> n'existe plus sur NGC en r39/JP7.
 
 ## ⚡ Setup en une commande (recommandé)
 
-Sur un Jetson vierge avec JetPack 6.2 installé :
+Sur un Jetson vierge avec JetPack 7.2 flashé (driver R595 minimum) :
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lo26lo/Assistant/main/scripts/bootstrap_jetson.sh | bash
@@ -25,7 +28,8 @@ Le script est **idempotent** (relançable sans casser l'existant). Log dans `/tm
 
 Override possibles :
 ```bash
-REPO_DIR=/data/Assistant-git L4T_VERSION=r36.4.3 bash bootstrap_jetson.sh
+REPO_DIR=/data/Assistant-git bash bootstrap_jetson.sh
+TEST_IMAGE=nvcr.io/nvidia/tensorrt:26.05-py3 bash bootstrap_jetson.sh  # image test runtime nvidia
 SKIP_BUILD=1 bash bootstrap_jetson.sh   # juste setup Docker, pas de build
 ```
 
@@ -35,7 +39,7 @@ SKIP_BUILD=1 bash bootstrap_jetson.sh   # juste setup Docker, pas de build
 # Mode performance maximum
 sudo nvpmodel -m 0 && sudo jetson_clocks
 
-# Docker + nvidia-container-toolkit (normalement présents en JP6.2)
+# Docker + nvidia-container-toolkit (normalement présents en JP7.2)
 sudo apt install docker.io docker-compose-v2 nvidia-container-toolkit
 sudo usermod -aG docker $USER
 sudo systemctl restart docker
@@ -46,7 +50,7 @@ newgrp docker
 
 Test que le runtime nvidia fonctionne :
 ```bash
-docker run --runtime nvidia --rm nvcr.io/nvidia/l4t-jetpack:r36.4.0 nvidia-smi
+docker run --runtime nvidia --rm nvcr.io/nvidia/tensorrt:26.05-py3 nvidia-smi
 ```
 
 ## Build des images
@@ -157,28 +161,30 @@ L'image runtime est minimale et autostart au boot si tu actives `restart: unless
    ```
 3. Tester : `docker compose ... exec dev rs-enumerate-devices` (utilitaire librealsense)
 
-## Migration JetPack 6.2 → 7.x (futur)
+## Migration JetPack 6.2 → 7.2
 
-Quand JP7 sera dispo sur Seeed reComputer :
+Plan détaillé (reflash, sauvegarde NAS, points de vigilance) : [../JETSON_MIGRATION_JP72.md](../JETSON_MIGRATION_JP72.md).
+Scripts à la racine : `jetson-backup.sh` (pré-reflash → NAS), `jetson-restore.sh` (post-reflash), `jetson-rebuild.sh` (remise en route).
+
+Résumé de la bascule côté Docker (déjà appliquée dans ces fichiers) :
 
 ```bash
-# 1. Backup données
-tar czf jetson-backup-$(date +%F).tar.gz config/ logs/ models/ tensorrt-cache/
+# 1. Sauvegarde vers le NAS puis reflash JP7.2 (SDK Manager, driver R595 min)
+bash jetson-backup.sh        # sur l'ancien systeme, avant flash
 
-# 2. Flash hôte L4T avec JP7 (SDK Manager NVIDIA)
+# 2. Restauration + re-install Docker/NVIDIA toolkit (cf. prérequis ci-dessus)
+bash jetson-restore.sh NAS
 
-# 3. Re-installer Docker + NVIDIA toolkit (cf. prérequis ci-dessus)
+# 3. Base conteneur = tensorrt:26.05-py3 (déjà dans compose.yml → args: BASE_IMAGE)
+#    (remplace l4t-jetpack:r36.4.0, retiré de NGC en r39)
 
-# 4. Modifier docker/compose.yml :
-#    args: L4T_VERSION: r38.x.x   (au lieu de r36.4.0)
-
-# 5. Rebuild
+# 4. Rebuild
 docker compose -f docker/compose.yml build --no-cache base dev
 
-# 6. Supprimer les engines TRT (incompatibles entre versions)
-rm -rf tensorrt-cache/*
+# 5. Vider le cache TRT (engines incompatibles entre versions de TensorRT)
+rm -rf data/tensorrt-cache/*
 
-# 7. Lancer (engines régénérés automatiquement au premier appel)
+# 6. Lancer (engines régénérés automatiquement au premier appel)
 docker compose -f docker/compose.yml up runtime
 ```
 

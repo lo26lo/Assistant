@@ -1,13 +1,14 @@
 # =============================================================================
 #  microscope-ibom:runtime
-#  Image runtime minimale — l4t-jetpack + libs runtime apt + .so compiles
+#  Image runtime — base tensorrt SBSA + libs runtime apt + .so compiles
 #  copies depuis microscope-ibom:base. PAS de toolchain (build-essential,
-#  cmake, git, headers -dev) contrairement a l'image base (~plusieurs Go de moins).
+#  cmake, git, headers -dev) contrairement a l'image base.
 #
 #  ⚠️ Image jamais buildee a ce jour : au premier build, valider que tous les
-#  noms de paquets runtime ci-dessous existent bien sur Jammy arm64 (si l'un
-#  manque, le retrouver via `apt-cache search <lib>` dans le container base,
-#  et logger l'ecart dans docs/JETSON_ERREURS.md).
+#  noms de paquets runtime ci-dessous existent bien sur Ubuntu 24.04 (noble)
+#  arm64 — transition t64 + sonames bumpes (si l'un manque, le retrouver via
+#  `apt-cache search <lib>` dans le container base, et logger l'ecart dans
+#  docs/JETSON_ERREURS.md).
 #
 #  Prerequis: avoir compile le binaire dans le container dev:
 #    docker compose -f docker/compose.yml exec dev bash scripts/build_jetson.sh
@@ -19,9 +20,11 @@
 #    docker compose -f docker/compose.yml up runtime
 # =============================================================================
 
-ARG L4T_VERSION=r36.4.0
+# Meme base que base.Dockerfile (l4t-jetpack retire de NGC en r39). Fournit
+# CUDA 13.2 + TensorRT 10.16 runtime. Override possible via --build-arg.
+ARG BASE_IMAGE=nvcr.io/nvidia/tensorrt:26.05-py3
 
-FROM nvcr.io/nvidia/l4t-jetpack:${L4T_VERSION}
+FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Europe/Paris
@@ -29,31 +32,34 @@ ENV TZ=Europe/Paris
 # -----------------------------------------------------------------------------
 #  Libs runtime uniquement (pendants non--dev des paquets de base.Dockerfile)
 # -----------------------------------------------------------------------------
+# ## CHECK Ubuntu 24.04 (noble) : transition t64 + sonames bumpes. Points
+# incertains a valider en priorite : libspdlog (1.12 sur noble ? -> libspdlog1.15
+# n'existe pas ; verifier `apt-cache search libspdlog`), libfmt8 -> libfmt9.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     locales tzdata \
     # OpenCV runtime deps
-    libgtk-3-0 \
-    libavcodec58 libavformat58 libswscale5 \
-    libjpeg-turbo8 libpng16-16 libtiff5 \
+    libgtk-3-0t64 \
+    libavcodec60 libavformat60 libswscale7 \
+    libjpeg-turbo8 libpng16-16t64 libtiff6 \
     libtbb12 libtbbmalloc2 \
     libdc1394-25 \
-    libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 \
+    libgstreamer1.0-0t64 libgstreamer-plugins-base1.0-0t64 \
     gstreamer1.0-plugins-good gstreamer1.0-libav \
-    libv4l-0 v4l-utils \
+    libv4l-0t64 v4l-utils \
     # USB (camera / RealSense)
-    libusb-1.0-0 \
-    libssl3 \
-    # OpenGL/EGL runtime (Qt rendering)
+    libusb-1.0-0t64 \
+    libssl3t64 \
+    # OpenGL/EGL runtime (Qt rendering) — libglvnd, pas de t64
     libgl1 libglx0 libopengl0 libegl1 libgles2 libglu1-mesa libvulkan1 \
-    # Qt6 runtime (xcb platform plugin: libqt6gui6 + qt6-qpa-plugins)
-    libqt6core6 libqt6gui6 libqt6widgets6 libqt6network6 \
-    libqt6opengl6 libqt6openglwidgets6 libqt6concurrent6 \
-    libqt6printsupport6 libqt6multimedia6 libqt6multimediawidgets6 \
-    libqt6websockets6 \
+    # Qt6 runtime (xcb platform plugin: libqt6gui6t64 + qt6-qpa-plugins)
+    libqt6core6t64 libqt6gui6t64 libqt6widgets6t64 libqt6network6t64 \
+    libqt6opengl6t64 libqt6openglwidgets6t64 libqt6concurrent6t64 \
+    libqt6printsupport6t64 libqt6multimedia6t64 libqt6multimediawidgets6t64 \
+    libqt6websockets6t64 \
     qt6-qpa-plugins \
-    # Logging / PDF
-    libspdlog1 libfmt8 \
+    # Logging / PDF (## CHECK sonames noble : libspdlog / libfmt9)
+    libspdlog1.12 libfmt9 \
     libhpdf-2.3.0 \
     && rm -rf /var/lib/apt/lists/*
 

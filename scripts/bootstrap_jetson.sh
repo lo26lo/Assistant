@@ -20,7 +20,8 @@
 #  Variables d'environnement (override possibles) :
 #    REPO_URL        URL du repo (default: https://github.com/lo26lo/Assistant.git)
 #    REPO_DIR        Chemin de clone (default: $HOME/Assistant-git)
-#    L4T_VERSION     Version L4T pour le tag dustynv (default: r36.4.0)
+#    TEST_IMAGE      Image de test du runtime nvidia (default: tensorrt:26.05-py3)
+#                    (l4t-jetpack a ete retire de NGC en r39/JP7)
 #    LOG_FILE        Fichier log (default: /tmp/microscope-ibom-bootstrap.log)
 #    SKIP_BUILD      1 = ne pas builder les images Docker (default: 0)
 #    SKIP_PERFMODE   1 = ne pas activer MAXN (default: 0)
@@ -45,7 +46,8 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 REPO_URL="${REPO_URL:-https://github.com/lo26lo/Assistant.git}"
 REPO_DIR="${REPO_DIR:-$HOME/Assistant-git}"
-L4T_VERSION="${L4T_VERSION:-r36.4.0}"
+# Image de test du runtime nvidia (JP7.2 : l4t-jetpack retire de NGC en r39).
+TEST_IMAGE="${TEST_IMAGE:-nvcr.io/nvidia/tensorrt:26.05-py3}"
 LOG_FILE="${LOG_FILE:-/tmp/microscope-ibom-bootstrap.log}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_PERFMODE="${SKIP_PERFMODE:-0}"
@@ -92,7 +94,7 @@ cat <<BANNER
 ${BOLD} MicroscopeIBOM — Bootstrap Jetson AGX Orin${NC}
  Repo:        $REPO_URL
  Destination: $REPO_DIR
- L4T Version: $L4T_VERSION
+ Test image:  $TEST_IMAGE
  Log:         $LOG_FILE
 ==============================================================================
 
@@ -198,11 +200,12 @@ fi
 
 # Test runtime nvidia
 log "Test runtime nvidia (peut declencher un pull d'image, ~quelques minutes)..."
-# --network host est obligatoire sur JP6.2 : Docker 29.x du paquet ubuntu jammy
-# essaie d'utiliser iptables -t raw qui n'a pas son module compile dans le kernel
-# Tegra (5.15.148-tegra) → bridge networking casse. Notre stack utilise deja
-# network_mode: host partout, c'est coherent. Voir JETSON_ERREURS.md erreur #3.
-if docker_cmd run --runtime nvidia --network host --rm "nvcr.io/nvidia/l4t-jetpack:${L4T_VERSION}" nvidia-smi >>"$LOG_FILE" 2>&1; then
+# --network host etait obligatoire sur JP6.2 (kernel Tegra 5.15 sans iptable_raw,
+# bridge networking de Docker 29.x cassait — JETSON_ERREURS.md #3). Le kernel 6.8
+# de JP7 devrait corriger, mais on conserve host (inoffensif + coherent avec la
+# stack qui tourne deja en network_mode: host partout).
+# Image de test = tensorrt SBSA (l4t-jetpack n'existe plus en r39/JP7).
+if docker_cmd run --runtime nvidia --network host --rm "${TEST_IMAGE}" nvidia-smi >>"$LOG_FILE" 2>&1; then
     ok "Runtime nvidia fonctionnel"
 else
     error "Test runtime nvidia echec — voir $LOG_FILE"

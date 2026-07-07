@@ -1,7 +1,11 @@
 # =============================================================================
 #  microscope-ibom:base
-#  Image de base avec Qt6 + OpenCV CUDA + TensorRT (de JetPack) + librealsense
-#  Cible: Jetson AGX Orin 32GB sur JetPack 6.2 (L4T R36.4)
+#  Image de base avec Qt6 + OpenCV CUDA + TensorRT (du conteneur) + librealsense
+#  Cible: Jetson AGX Orin 32GB sur JetPack 7.2 (L4T r39.2, Ubuntu 24.04)
+#
+#  Base = nvcr.io/nvidia/tensorrt:26.05-py3 (arm64/SBSA, Ubuntu 24.04) qui
+#  embarque CUDA 13.2.1 + cuDNN + TensorRT 10.16.1. Remplace l4t-jetpack qui
+#  N'EXISTE PLUS en r39/JP7 sur NGC (confirme NVIDIA). Voir JETSON_MIGRATION_JP72.md.
 # =============================================================================
 #
 #  Build:
@@ -14,16 +18,18 @@
 #
 # =============================================================================
 
-ARG L4T_VERSION=r36.4.0
-ARG OPENCV_VERSION=4.10.0
+# Base conteneur JP7.2 : TensorRT SBSA (CUDA 13.2.1 + cuDNN + TensorRT 10.16.1).
+# NE PAS repasser sur 26.06-py3 (CUDA 13.3, desaligne du driver R595 = CUDA 13.2).
+ARG BASE_IMAGE=nvcr.io/nvidia/tensorrt:26.05-py3
+ARG OPENCV_VERSION=4.13.0        # 4.12 casse avec CUDA 13
 ARG REALSENSE_VERSION=v2.55.1
-ARG ONNXRUNTIME_VERSION=v1.19.2
-ARG CUDA_ARCH_BIN=8.7
+ARG ONNXRUNTIME_VERSION=v1.23.0  # 1re version ORT avec CUDA 13 + TensorRT EP
+ARG CUDA_ARCH_BIN=8.7            # Orin = Ampere sm_87, inchange
 
 # =============================================================================
 #  STAGE 1 : OpenCV with CUDA (build from source)
 # =============================================================================
-FROM nvcr.io/nvidia/l4t-jetpack:${L4T_VERSION} AS opencv-builder
+FROM ${BASE_IMAGE} AS opencv-builder
 
 ARG OPENCV_VERSION
 ARG CUDA_ARCH_BIN
@@ -85,7 +91,7 @@ RUN cmake -G Ninja \
 # =============================================================================
 #  STAGE 2 : librealsense2 (build from source — paquet Intel non dispo ARM64)
 # =============================================================================
-FROM nvcr.io/nvidia/l4t-jetpack:${L4T_VERSION} AS realsense-builder
+FROM ${BASE_IMAGE} AS realsense-builder
 
 ARG REALSENSE_VERSION
 
@@ -116,12 +122,12 @@ RUN cmake -G Ninja \
 
 # =============================================================================
 #  STAGE 3 : ONNX Runtime avec CUDA + TensorRT EP (build from source ARM64)
-#  Pas de paquet apt libonnxruntime-dev sur Jammy ARM64, pas de wheel CMake
+#  Pas de paquet apt libonnxruntime-dev sur noble ARM64, pas de wheel CMake
 #  installable depuis pip. Build from source = seule voie propre pour avoir
 #  un onnxruntimeConfig.cmake compatible avec find_package(onnxruntime CONFIG).
 #  Long (~1-2h sur Jetson AGX Orin 32GB).
 # =============================================================================
-FROM nvcr.io/nvidia/l4t-jetpack:${L4T_VERSION} AS onnxruntime-builder
+FROM ${BASE_IMAGE} AS onnxruntime-builder
 
 ARG ONNXRUNTIME_VERSION
 
@@ -134,11 +140,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# ONNX Runtime v1.19.2 exige CMake >= 3.26 (Jammy ne fournit que 3.22.1).
-# MAIS on doit aussi rester < 4.x : CMake 4.0 a supprime le support des
-# cmake_minimum_required(VERSION <3.5), et certains deps tires en
-# FetchContent par ORT (google_nsync notamment) ont des headers <3.5 et
-# plantent avec CMake 4.x. La fenetre safe est [3.26, 4) = la serie 3.31.x.
+# ONNX Runtime v1.23.0 exige CMake >= 3.28. La base tensorrt:26.05 (Ubuntu 24.04)
+# fournit 3.28.x en apt, mais on epingle via pip pour rester deterministe ET
+# < 4.x : CMake 4.0 a supprime le support des cmake_minimum_required(VERSION <3.5),
+# et certains deps tires en FetchContent par ORT (google_nsync notamment) ont des
+# headers <3.5 et plantent avec CMake 4.x. Fenetre safe = [3.28, 4) = serie 3.31.x.
 RUN pip3 install --no-cache-dir "cmake>=3.28,<4" psutil \
     && cmake --version
 
@@ -166,15 +172,21 @@ WORKDIR /tmp/onnxruntime
 
 # Workaround upstream bug (microsoft/onnxruntime#26707) : GitLab regenere les
 # zip archives dynamiquement, donc le SHA1 hardcode pour Eigen devient
-# invalide cote serveur. Touche v1.17.1, v1.19.2, v1.20.1, v1.21.0, v1.22.0
-# (bumper ne resout pas). Le hash est dans cmake/deps.txt (format
-# "eigen;URL;SHA1") — PAS dans cmake/external/eigen.cmake comme on pourrait
-# le penser. On remplace par le hash que GitLab sert actuellement.
-# A re-patcher si GitLab change a nouveau le contenu (rare).
+# invalide cote serveur. Touche toutes les versions ORT actuelles (bumper ne
+# resout pas). Le hash est dans cmake/deps.txt (format "eigen;URL;SHA1") — PAS
+# dans cmake/external/eigen.cmake comme on pourrait le penser.
+#
+# ## CHECK JP7.2 : sur v1.23.0 le SHA1 source (be8be39...) et l'URL Eigen peuvent
+# differer de la v1.19.2. Si le build echoue sur "hash mismatch" pour eigen :
+#   1) dans le container, `grep '^eigen;' cmake/deps.txt` pour lire l'ancien SHA1
+#   2) telecharger l'URL servie, `sha1sum` du zip pour obtenir le nouveau
+#   3) mettre a jour le couple ci-dessous.
+# Le `|| true` evite de casser le build si l'ancien motif n'est plus present
+# (sed no-op) — la ligne echo/grep juste apres montre l'etat reel a valider.
 RUN sed -i 's|be8be39fdbc6e60e94fa7870b280707069b5b81a|32b145f525a8308d7ab1c09388b2e288312d8eba|g' \
-        cmake/deps.txt \
- && echo "=== eigen line apres patch ===" \
- && grep "^eigen;" cmake/deps.txt
+        cmake/deps.txt || true ; \
+    echo "=== eigen line (## CHECK hash sur v1.23.0) ===" ; \
+    grep "^eigen;" cmake/deps.txt
 
 RUN ./build.sh \
         --config Release \
@@ -184,9 +196,9 @@ RUN ./build.sh \
         --skip_submodule_sync \
         --allow_running_as_root \
         --use_cuda --cuda_home /usr/local/cuda \
-        --cudnn_home /usr/lib/aarch64-linux-gnu \
+        --cudnn_home /usr \
         --use_tensorrt --tensorrt_home /usr \
-        --cuda_version 12.6 \
+        --cuda_version 13.2 \
         --cmake_extra_defines CMAKE_CUDA_ARCHITECTURES=87 \
         --cmake_extra_defines onnxruntime_BUILD_UNIT_TESTS=OFF \
     && cd build/Linux/Release \
@@ -196,7 +208,7 @@ RUN ./build.sh \
 # =============================================================================
 #  STAGE 4 : Image finale
 # =============================================================================
-FROM nvcr.io/nvidia/l4t-jetpack:${L4T_VERSION}
+FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Europe/Paris
@@ -204,22 +216,27 @@ ENV TZ=Europe/Paris
 # -----------------------------------------------------------------------------
 #  Outils système + dépendances runtime
 # -----------------------------------------------------------------------------
+# ## CHECK Ubuntu 24.04 (noble) : sonames bumpes (FFmpeg 58->60, swscale 5->7,
+# tiff5->6) + transition t64 (libgtk-3-0t64, libpng16-16t64, libssl3t64,
+# libgstreamer1.0-0t64, libv4l-0t64, libusb-1.0-0t64). Si un nom manque au
+# build, le retrouver via `apt-cache search <lib>` dans le container et logger
+# l'ecart dans docs/JETSON_ERREURS.md (risque #1 de la migration).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential ninja-build cmake git \
     pkg-config \
     curl wget unzip \
-    libgtk-3-0 \
-    libavcodec58 libavformat58 libswscale5 \
-    libjpeg-turbo8 libpng16-16 libtiff5 \
+    libgtk-3-0t64 \
+    libavcodec60 libavformat60 libswscale7 \
+    libjpeg-turbo8 libpng16-16t64 libtiff6 \
     libtbb12 libtbbmalloc2 \
     libdc1394-25 \
     libeigen3-dev \
-    libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 \
+    libgstreamer1.0-0t64 libgstreamer-plugins-base1.0-0t64 \
     gstreamer1.0-plugins-good gstreamer1.0-libav \
-    libv4l-0 v4l-utils \
-    libusb-1.0-0 \
-    libssl3 \
+    libv4l-0t64 v4l-utils \
+    libusb-1.0-0t64 \
+    libssl3t64 \
     # OpenGL/EGL/GLX dev (requis par Qt6Gui/Qt6OpenGL — Qt6 echoue CMake sans)
     libgl-dev libglx-dev libegl-dev libgles-dev libopengl-dev libglu1-mesa-dev \
     libvulkan-dev \
@@ -231,7 +248,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN locale-gen en_US.UTF-8 fr_FR.UTF-8
 
 # -----------------------------------------------------------------------------
-#  Qt6 (Ubuntu 22.04 — Qt 6.2 LTS)
+#  Qt6 (Ubuntu 24.04 — Qt 6.4.2)
+#  ## CHECK t64 : les libs runtime Qt6 sont suffixees t64 sur noble
+#  (libqt6openglwidgets6t64, libqt6concurrent6t64, ...). Les paquets -dev NON.
 # -----------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     qt6-base-dev \
@@ -244,11 +263,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qt6-virtualkeyboard-plugin \
     qml6-module-qtquick-virtualkeyboard \
     libqt6opengl6-dev \
-    libqt6openglwidgets6 \
+    libqt6openglwidgets6t64 \
     libqt6websockets6-dev \
-    libqt6concurrent6 \
-    libqt6printsupport6 \
-    libqt6multimediawidgets6 \
+    libqt6concurrent6t64 \
+    libqt6printsupport6t64 \
+    libqt6multimediawidgets6t64 \
     qml6-module-qtmultimedia \
     qml6-module-qtquick \
     qml6-module-qtquick-controls \
@@ -266,7 +285,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
-#  Catch2 v3 from source — le paquet apt jammy fournit la v2.13 qui n'a plus
+#  Catch2 v3 from source — le paquet apt noble fournit encore la v2.13 qui n'a plus
 #  la meme API que la v3 utilisee dans les tests (tests/*.cpp incluent
 #  catch2/catch_test_macros.hpp qui est v3). Compile rapide ~3 min.
 # -----------------------------------------------------------------------------
@@ -286,7 +305,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
-#  ZXing-cpp — pas dans Ubuntu 22.04, build from source (rapide ~3 min)
+#  ZXing-cpp — pas dans Ubuntu 24.04, build from source (rapide ~3 min)
 # -----------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake build-essential git \
