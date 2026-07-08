@@ -28,6 +28,10 @@
 
 ---
 
+## État actuel — au 2026-07-08 (Doc d'architecture : alignement par composants)
+
+> **2026-07-08 (suite 135)** : documentation seule — nouveau `docs/COMPONENT_REANCHOR_ALIGNMENT.md` expliquant comment la pose PCB→image est calculée **à partir des composants** (et non du contour de carte), en réponse à une question de l'utilisateur. Couvre : le principe (constellation iBOM ↔ détections modèle/blobs, centre de bbox et non `Component::position`), les deux modes `estimate()` (correction d'une pose existante par gating + RANSAC) vs `bootstrap()` (enregistrement global paire→paire sans prior, RNG déterministe), les deux subtilités (repère vue miroité pour `Layer::Back` ; similarité 4-DOF vs homographie 8-DOF et le jitter de coin), et le rôle strictement décisionnel de `ReanchorGate` en aval. Cross-références vers `AUTO_ALIGN_V2_PLAN.md` et `BLOB_REANCHOR_JITTER_ANALYSE.md`. **Aucun code touché** ; refs fichier:ligne vérifiées contre `ComponentReanchor.{h,cpp}` et `Application.cpp` de la branche. Fichiers : `docs/COMPONENT_REANCHOR_ALIGNMENT.md` (nouveau), `docs/JETSON_SESSION_LOG.md`.
+
 ## État actuel — au 2026-07-07 (Durcissement des tests parser iBOM — chemin d'extraction des composants couvert)
 
 > **2026-07-07 (suite 134)** : dernier volet de l'item P2 §8.2 (« continue ») — **tests du chemin d'extraction de composants d'`IBomParser`**, jusqu'ici non couvert (le vieux cas « extract JSON from script » ne fournissait **que** `pcbdata` sans `config` → `parseString` échouait ligne 39 et `result` était toujours vide, donc le `if (result)` ne testait rien).
