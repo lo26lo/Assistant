@@ -2985,7 +2985,19 @@ void Application::connectControlSignals()
         m_anchorMode = false;
         setMultiAlignUIState(false);  // also clears the PCB Map click targets
 
+        // Drop the pose FIRST, then turn live tracking off. Order matters: the
+        // live-mode toggle's disable path restores m_baseHomography onto
+        // m_homography — releasing it here makes that a no-op so the reset
+        // isn't undone. Leaving live tracking ON after a reset meant the frame
+        // handler kept feeding the tracker and the periodic re-anchor kept
+        // firing on a board with no reference — exactly when a blob alias could
+        // silently re-apply a wrong pose.
         m_homography->reset();
+        m_baseHomography.release();  // stale — the pose it captured is gone
+        if (m_liveMode) {
+            if (auto* cp = m_mainWindow->controlPanel()) cp->setLiveMode(false);
+            spdlog::info("Live tracking mode disabled (alignment reset)");
+        }
         m_reanchorGate.reset();  // no pose left for a held candidate to correct
         ++m_alignmentEpoch;
         m_currentPixelsPerMm = 0.0;
@@ -2996,8 +3008,9 @@ void Application::connectControlSignals()
         m_config->save();
 
         m_mainWindow->updateStatusMessage(
-            tr("Alignment reset — the overlay is unaligned. Use one of the "
-               "Align buttons (or the Alignment Assistant) to set it up again."));
+            tr("Alignment reset — the overlay is unaligned and live tracking is "
+               "off. Use one of the Align buttons (or the Alignment Assistant) "
+               "to set it up again."));
         spdlog::info("Alignment reset by user");
     });
 
