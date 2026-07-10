@@ -1518,7 +1518,13 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
                                                        /*maxDetections=*/600);
             detSrc = "blobs";
         }
-        if (!detections.empty()) {
+        // Pads are detected REGARDLESS of the primary detector: a trained
+        // component model sees nothing on a bare board (hand assembly starts
+        // with one) — gating the pad constellation on !detector made loading
+        // a model WORSEN bare-board alignment.
+        std::vector<ai::Detection> padDets =
+            overlay::detectPadBlobs(colorCopy, expectedPixelsPerMm);
+        if (!detections.empty() || !padDets.empty()) {
             // Blob centers are noisier than model detections: fit a 4-DOF
             // similarity so the pose stays repeatable at the board corners
             // (docs/BLOB_REANCHOR_JITTER_ANALYSE.md — a full homography
@@ -1531,19 +1537,14 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
             if (!detector && compDets.size() > 300) compDets.resize(300);
             auto boot = overlay::ComponentReanchor::bootstrap(
                 compDets, *project, activeLayer, expectedPixelsPerMm, rp);
-            std::vector<ai::Detection> padDets;
-            if (detector == nullptr) {
-                // Model-free blobs on a bare/partially populated board are
-                // the shiny PADS, not component bodies — matching them against
-                // component centers is a constellation coincidence that
-                // aliases (ERREUR #57: 40/117 inliers applied as score 1.00).
-                // The pad attempt uses the DEDICATED pad detector (bright-on-
-                // mask top-hat, ERREUR #59) — MSER in a dim scene yields
-                // pad-sized noise blobs while the actual pads go undetected.
-                padDets = overlay::detectPadBlobs(colorCopy, expectedPixelsPerMm);
+            {
+                // Pad-constellation attempt (ERREUR #57/#59): bodies vs pads,
+                // keep the better-supported fit. Pad centroids are CV blobs
+                // whatever the primary detector is → similarity fit.
                 overlay::ComponentReanchor::Params rpPads = rp;
                 rpPads.constellation =
                     overlay::ComponentReanchor::Constellation::Pads;
+                rpPads.fitSimilarity = true;
                 const auto bootPads = overlay::ComponentReanchor::bootstrap(
                     padDets, *project, activeLayer, expectedPixelsPerMm, rpPads);
                 const auto ratio = [](const overlay::ComponentReanchorResult& r) {
@@ -1584,7 +1585,7 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
         }
         auto blr = overlay::BoardLocator::locate(colorCopy, depthCopy, *project,
                                                  expectedPixelsPerMm, activeLayer);
-        if (blr.found && !detector && blr.imageCorners.size() == 4) {
+        if (blr.found && blr.imageCorners.size() == 4) {
             // Contour + pads fusion (field insight, suite 142): the located
             // outline reliably fixes position, scale and the board SURFACE —
             // mask detections to it (+20 % margin ≈ 1-2 cm) — while the PADS
@@ -1858,15 +1859,17 @@ void Application::componentReanchor(bool silent)
             detector ? detector->detect(colorCopy)
                      : overlay::detectComponentBlobs(detImg, scalePrior,
                                                      /*maxDetections=*/600);
-        std::vector<ai::Detection> padDets;
-        if (!detector) {
-            // Pad attempt: DEDICATED bright-on-mask pad detector (ERREUR #59)
-            // — physically grounded, holds up in dim scenes where MSER yields
-            // pad-sized noise blobs while the actual pads go undetected.
-            padDets = overlay::detectPadBlobs(detImg, scalePrior);
-            offsetDetections(detections, roiOff);
-            offsetDetections(padDets, roiOff);
-        }
+        if (!detector) offsetDetections(detections, roiOff);
+        // Pad attempt: DEDICATED bright-on-mask pad detector (ERREUR #59) —
+        // physically grounded, holds up in dim scenes where MSER yields
+        // pad-sized noise blobs while the actual pads go undetected.
+        // Computed EVEN WITH a trained model: a component detector sees
+        // nothing on a bare board (hand assembly starts with one), so the pad
+        // constellation must stay available as the fallback — gating it on
+        // !detector made loading a model WORSEN bare-board alignment.
+        std::vector<ai::Detection> padDets =
+            overlay::detectPadBlobs(detImg, scalePrior);
+        offsetDetections(padDets, roiOff);
         std::vector<ai::Detection> compDets = detections;
         // Final polygon trim: the ROI is the axis-aligned box of a possibly
         // rotated quad, so its corners spill past the board — drop those.
@@ -1890,18 +1893,22 @@ void Application::componentReanchor(bool silent)
         rp.scalePxPerMm = scalePrior;
         overlay::ComponentReanchor::Params rpPads = rp;
         rpPads.constellation = overlay::ComponentReanchor::Constellation::Pads;
+        // Pad blob centroids are CV detections whatever the primary detector
+        // is — the pads attempt always fits a similarity (corner-jitter
+        // analysis, BLOB_REANCHOR_JITTER_ANALYSE.md).
+        rpPads.fitSimilarity = true;
         const auto ratio = [](const overlay::ComponentReanchorResult& r) {
             return r.matches > 0 ? static_cast<double>(r.inliers) / r.matches : 0.0;
         };
         // Prior-based correction first (cheap, precise when the pose is only
-        // drifting); with model-free blobs, try BOTH constellations — bodies
+        // drifting); try BOTH constellations — bodies (model or MSER blobs)
         // on a populated board, pads on a bare one (ERREUR #57) — and keep
         // the better-supported fit. Global bootstrap when there is no usable
         // prior — no pose yet, or a pose so stale (board moved/picked up)
         // that nothing falls inside the matching radius anymore.
         auto res = overlay::ComponentReanchor::estimate(
             compDets, *project, priorPose, activeLayer, {}, rp);
-        if (!detector) {
+        {
             const auto resPads = overlay::ComponentReanchor::estimate(
                 padDets, *project, priorPose, activeLayer, {}, rpPads);
             if (resPads.found && (!res.found || ratio(resPads) > ratio(res)))
@@ -1910,12 +1917,10 @@ void Application::componentReanchor(bool silent)
         if (!res.found) {
             res = overlay::ComponentReanchor::bootstrap(
                 compDets, *project, activeLayer, scalePrior, rp);
-            if (!detector) {
-                const auto bootPads = overlay::ComponentReanchor::bootstrap(
-                    padDets, *project, activeLayer, scalePrior, rpPads);
-                if (bootPads.found && (!res.found || ratio(bootPads) > ratio(res)))
-                    res = bootPads;
-            }
+            const auto bootPads = overlay::ComponentReanchor::bootstrap(
+                padDets, *project, activeLayer, scalePrior, rpPads);
+            if (bootPads.found && (!res.found || ratio(bootPads) > ratio(res)))
+                res = bootPads;
         }
         // Full detection sets on purpose: junk must be VISIBLE in the dump.
         dumpReanchorDebug(colorCopy, detections, padDets, *project,

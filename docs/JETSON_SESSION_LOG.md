@@ -29,6 +29,13 @@
 
 ---
 
+## État actuel — au 2026-07-10 (Modèle ONNX : diagnostic + fix « le modèle désactivait le chemin pads »)
+
+> **2026-07-10 (suite 148)** : l'utilisateur a déposé un modèle `.onnx` mais « n'a pas l'impression qu'il l'utilise » (log : toujours `components(blobs)`). Deux volets :
+> - **Diagnostic** (checklist transmise) : le scan a lieu **au démarrage** (`ModelManager` ctor) dans `modelsPath` = `models/` **relatif au CWD** = `/opt/microscope-ibom/models` en dev-shell = `~/Assistant-git/models` sur l'hôte ; extension `.onnx` obligatoire, pas de sous-dossier ; n'importe quel nom marche (fallback sur le premier trouvé si `ai.detector_model` absent) ; il faut **redémarrer** l'app ; le 1er lancement compile l'engine TensorRT (**minutes**) — blobs utilisés pendant ce temps (voulu). Lignes à chercher au démarrage : `Found N models in 'models'` → `AI pipeline: initializing in background` → `AI pipeline ready`. Après « ready » : `components(model)` et `via AI-model component detection` dans les logs.
+> - **🔴 Trou d'arbitrage découvert et corrigé** : les tentatives constellation-pads étaient gatées `if (!detector)` — donc **charger un modèle désactivait complètement le chemin pads**. Or un détecteur de *composants* ne voit rien sur une carte **nue** → le modèle aurait *dégradé* l'alignement carte nue. Fix (les 2 workers + le vote contour+pads) : `detectPadBlobs` et les tentatives pads tournent **toujours** (le meilleur ratio gagne, comme avant) ; `rpPads.fitSimilarity = true` explicite (les centroïdes de blobs restent du CV même si le primaire est un modèle) ; le vote contour+pads n'est plus réservé au cas sans modèle. Sur carte peuplée avec modèle, le modèle gagne au ratio ; sur carte nue, les pads reprennent la main au lieu de zéro détection.
+> - Validation terrain : avec le modèle chargé (« AI pipeline ready »), carte nue → le log doit toujours locker via pads ; carte peuplée → `components(model)`. Tests : 10/10 cibles PASS (Application hors CI). Fichiers : `src/app/Application.cpp`, docs.
+
 ## État actuel — au 2026-07-10 (AlignmentController étape 2 : la machine à états d'orchestration extraite)
 
 > **2026-07-10 (suite 147)** : « AlignmentController » (demande utilisateur, item P2 §7.1) — **étape 2** après ReanchorGate (suite 133), fidèle à la doctrine « extraction incrémentale, pas de big-bang » : la **machine à états d'orchestration** sort d'`Application` en classe pure ; la plomberie Qt (QTimer, watchers, messages) reste en place.
