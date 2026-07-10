@@ -15,6 +15,7 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 60 | 2026-07-10 | main.cpp — ordre de shutdown | ✅ RÉSOLU (à valider terrain) | [Segfault à **chaque** fermeture normale : `Logger::shutdown()` appelé avant la destruction d'`Application` → premier log des destructeurs (Config::save, caméra) sur le default logger détruit → SIGSEGV ; le crash handler loggait aussi via spdlog → re-faute → « Segmentation fault » nu sans backtrace](#erreur-60--segfault-a-la-fermeture--loggershutdown-avant-application) |
 | 59 | 2026-07-09 | BlobComponentDetector / Application — scène sombre | ✅ RÉSOLU (à valider terrain) | [2e retour terrain : pose fausse « cohérente » à 200/292 pads — en scène sombre les blobs MSER sont du **bruit taille-de-pad** et les vrais pads ratent la détection ; fix : détecteur de pads dédié (top-hat brillant-sur-masque) + dump de debug annoté](#erreur-59--scene-sombre--blobs-mser--bruit--detecteur-de-pads-dedie) |
 | 58 | 2026-07-08 | ComponentReanchor / ReanchorGate — alias de réseau | ✅ RÉSOLU (à valider terrain) | [Retour terrain du fix #57 : le réseau de pads répétitif **aliase** — locks pads à 44-65 % de ratio sur des poses décalées, et le « clack » (un alias **répétable** passe la confirmation 2-ticks et éjecte une pose parfaite de 185 px) ; fix : seeding déterministe par ancres + marge d'ambiguïté + cap de correction silencieuse + filtre 6 mm](#erreur-58--alias-de-reseau-de-pads--seeding-deterministe--cap-anti-clack) |
 | 57 | 2026-07-08 | ComponentReanchor / Application — Auto-Align blobs | ✅ RÉSOLU (à valider terrain) | [Auto-Align verrouille une pose fausse sur **carte nue** avec « score 1.00 » — les blobs sont des PADS, pas des corps de composants ; le score `0.4+inliers/30` sature à 1.00 et les gates absolus laissent passer 40/117 = 34 % d'inliers ; fix : constellation de pads + gate de ratio + score honnête + gate de matching en mm](#erreur-57--auto-align-carte-nue--pose-aliasee-acceptee-a-score-100) |
@@ -1390,6 +1391,30 @@ Renommé les deux variables en `cornerTL`/`cornerTR` dans `autoAlignBoard()`.
 
 ### Leçon
 Ne jamais nommer une variable locale `tr` (ou tout identifiant Qt courant comme `tr`/`qDebug`/etc.) dans une méthode `QObject`, même si elle semble hors de portée du prochain appel `tr(...)` — un refactor ultérieur peut facilement élargir la portée sans qu'on s'en rende compte. Préférer un nom descriptif (`cornerTL`, `topRight`, …) systématiquement.
+
+## ERREUR 60 — Segfault à la fermeture : Logger::shutdown() avant ~Application
+
+**Date :** 2026-07-10
+**Composant :** `src/main.cpp` (+ durcissement du crash handler)
+**Statut :** ✅ RÉSOLU (à valider terrain — un exit propre sans core dump)
+
+### Symptôme
+Log terrain (2026-07-09, à chaque fermeture de l'app) :
+```
+[11:30:39.684] [info] [:] Application exiting with code 0
+Segmentation fault (core dumped)
+```
+Exit code 0 puis segfault — **systématique**, et sans backtrace malgré le `posixCrashHandler` installé.
+
+### Cause
+Dans `main()`, l'ordre était : `qapp.exec()` → log « exiting » → **`Logger::shutdown()`** (= `spdlog::shutdown()`, qui détruit le default logger) → `return` → destruction de `app` **en fin de scope**. Or `~Application` et les destructeurs de ses membres loggent : `Config::save()` (`spdlog::debug("Config saved…")`), l'arrêt caméra (`stop()` logge), etc. Premier appel spdlog sur le default logger détruit (`default_logger_raw()` == nullptr) → SIGSEGV. **Aggravant** : `posixCrashHandler` appelait `spdlog::critical` + `default_logger()->flush()` en premier → re-faute *dans le handler* → `SIG_DFL` → « Segmentation fault » nu, zéro backtrace. Le bug masquait donc sa propre trace.
+
+### Solution appliquée ✅
+1. **`main.cpp`** : `app` mise dans un scope — `~Application` (et tous les destructeurs de membres) s'exécute **avant** `Logger::shutdown()`. Chemin d'échec d'init restructuré pareil (le premier jet du fix refaisait l'erreur sur ce chemin).
+2. **Crash handler durci** : `backtrace_symbols_fd` (async-signal-safe) écrit sur stderr **en premier** ; spdlog seulement si `default_logger_raw()` non nul. Un futur crash post-shutdown produira au moins sa backtrace.
+
+### Leçon
+Le logger doit être **le premier construit et le dernier détruit** — tout objet dont le destructeur logge doit mourir avant lui (scoper l'objet, pas réordonner les appels au petit bonheur). Et un crash handler ne doit dépendre **d'aucune** infrastructure qui peut être déjà morte au moment du crash : stderr d'abord, le confort ensuite. Un handler qui crashe masque précisément ce qu'il devait révéler.
 
 ## ERREUR 59 — Scène sombre : blobs MSER = bruit → détecteur de pads dédié
 

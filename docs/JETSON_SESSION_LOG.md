@@ -29,6 +29,14 @@
 
 ---
 
+## État actuel — au 2026-07-10 (PR #23 mergée dans main ; fix du segfault à la fermeture — ERREUR #60)
+
+> **2026-07-10 (suite 145)** : **PR #23 mergée dans `main`** (merge `d5de066`, CI 4/4 verte — les 13 commits des suites 133-144 : ReanchorGate, carte nue #57-#59, fusion contour+pads, vue de debug). Branche relancée depuis `main` (fast-forward, même nom). Nouveau chantier : le **segfault à chaque fermeture** vu dans le log terrain du 09/07 — voir [ERREUR #60](JETSON_ERREURS.md) : `Logger::shutdown()` avant `~Application` → destructeurs qui loggent sur le default logger détruit → SIGSEGV, et le crash handler (qui loggait aussi) re-fautait, d'où l'absence de backtrace.
+> - **`main.cpp`** : `app` scopée pour que `~Application` s'exécute avant `Logger::shutdown()` ; chemin d'échec d'init traité pareil. **Crash handler durci** : backtrace sur stderr en premier (async-signal-safe), spdlog seulement si le default logger est vivant.
+> - **Bonus** : `m_mainToolBar->setObjectName("MainToolBar")` — le warning Qt `'objectName' not set for QToolBar` du log terrain signifiait que la position de la toolbar n'était **jamais** persistée par `saveState()`.
+> - Validation terrain : fermer l'app → exit propre sans « Segmentation fault (core dumped) ». Tests : 9/9 cibles PASS (main.cpp/MainWindow hors CI stub). Fichiers : `src/main.cpp`, `src/gui/MainWindow.cpp`, docs.
+> - Prochain sur la liste (validé « on attaque la suite ») : seuils `ReanchorGate` en mm (§1.1 — 12 px = 2,7 mm en vue D405 mais 0,24 mm au microscope).
+
 ## État actuel — au 2026-07-09 (Recadrage carte AVANT détection — pas seulement filtrage après)
 
 > **2026-07-09 (suite 144)** : l'utilisateur voit dans la nouvelle vue de debug que la détection scanne **tout le cadre** (cercles rouges/magenta sur le bois et le reflet) alors qu'on avait convenu de ne scanner que la carte +2 cm. Vrai défaut, pas cosmétique : la suite 141 masquait les détections **après** coup (`filterToBoardRegion`) mais `detectPadBlobs` calcule son **Otsu sur toute l'image** → le reflet fait monter le seuil et **supprime de vrais pads**.

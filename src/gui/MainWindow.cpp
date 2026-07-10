@@ -426,6 +426,9 @@ void MainWindow::createMenuBar()
 void MainWindow::createToolBar()
 {
     m_mainToolBar = addToolBar(tr("Main"));
+    // Required for QMainWindow::saveState() — without it the toolbar position
+    // is silently never persisted (field warning: "'objectName' not set").
+    m_mainToolBar->setObjectName("MainToolBar");
     m_mainToolBar->setMovable(false);
     m_mainToolBar->setIconSize(QSize(theme::ToolbarIcon, theme::ToolbarIcon));
 
