@@ -29,6 +29,12 @@
 
 ---
 
+## État actuel — au 2026-07-10 (Plan Modèle V2 — le modèle générique est « inutile dans l'état »)
+
+> **2026-07-10 (suite 150)** : verdict terrain via le nouveau test Dev — le modèle **fonctionne** (`AI pipeline ready`, TensorRT, **85 ms/inférence**, warnings TRT cosmétiques) mais est **inutile dans l'état** (1 détection sur la carte nue) : c'est le détecteur Piste B du TUTO_MODELE_REANCRAGE — présence de composants génériques, dataset Roboflow étranger, mono-classe. Demande utilisateur : « comment faire mieux, fais un plan avant toute chose » → **[PLAN_MODELE_V2.md](PLAN_MODELE_V2.md)** (doc seul, pas de code).
+> - Colonne vertébrale du plan : le **DatasetCreator** (Phase A, déjà dans l'app) fabrique le dataset de SES cartes tout seul (labels YOLO auto depuis l'iBOM projeté) maintenant que l'alignement carte nue tient → fine-tune V2a (presence) puis **V2b multi-classes** (`footprint_classes.json`) → **brancher `useClassPrior`** (plomberie ComponentReanchor existante, jamais alimentée — `{}` aux 2 sites) = matching classe-à-classe qui tue l'alias 180°. Options : classe « pad » apprise (extension DatasetCreator), script d'éval précision/rappel contre la vérité iBOM.
+> - Phasage : Phase 0 éval 15 min (banc) → Phase 1 capture 2-3 sessions (banc, rodage Phase A) → Phase 2 entraînement (PC RTX) ; côté Claude en parallèle : 3a useClassPrior + 3c éval auto (+ 3b labels pads si retenu). Critère phare Phase 4 : carte tournée 180° → bonne orientation à chaque Auto-Align.
+
 ## État actuel — au 2026-07-10 (Dev → Test AI detection : « le modèle est-il utilisé ? » en un clic)
 
 > **2026-07-10 (suite 149)** : le screenshot utilisateur confirme un placement **correct** (`~/Assistant-git/models/component_detector.onnx`, 103 Mo, + `.txt` de classes) mais les logs restent `components(blobs)` — sans les lignes de démarrage on ne peut pas trancher entre « pas redémarré », « TensorRT compile encore » (103 Mo sur Orin = minutes au 1er lancement) et « chargement échoué ». Demande utilisateur : un module Dev pour la vision YOLO.
