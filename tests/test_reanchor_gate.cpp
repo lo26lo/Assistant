@@ -109,6 +109,38 @@ TEST_CASE("reset() drops the pending (a pose was applied elsewhere)", "[reanchor
             == Action::Hold);
 }
 
+TEST_CASE("physical thresholds follow the scale (mm, not px — §1.1)", "[reanchorgate]")
+{
+    // The same 30 px corner shift means opposite things at different
+    // magnifications: 6.8 mm of real drift at a D405 wide view (4.4 px/mm —
+    // must correct) but 0.6 mm under a microscope (50 px/mm — leave healthy
+    // tracking alone). A pixel threshold cannot express both; a millimetre
+    // one can.
+    ReanchorGate::Params p = kP;
+
+    SECTION("D405 wide view: 30 px is real drift → two-tick correction") {
+        p.scalePxPerMm = 4.4;   // gate ≈ 11 px, tol ≈ 6.6 px, cap ≈ 52.8 px
+        ReanchorGate g;
+        REQUIRE(g.evaluate(corners(30.f), corners(0), false, 1000, p).action
+                == Action::Hold);
+        REQUIRE(g.evaluate(corners(33.f), corners(0), false, 4000, p).action
+                == Action::Apply);
+    }
+    SECTION("microscope: the same 30 px is 0.6 mm → within the drift gate") {
+        p.scalePxPerMm = 50.0;  // gate = clamp(125, 6, 60) = 60 px
+        ReanchorGate g;
+        REQUIRE(g.evaluate(corners(30.f), corners(0), false, 1000, p).action
+                == Action::Skip);
+    }
+    SECTION("D405: 100 px exceeds the mm-derived healthy cap") {
+        p.scalePxPerMm = 4.4;   // cap ≈ 52.8 px
+        ReanchorGate g;
+        const auto d = g.evaluate(corners(100.f), corners(0), false, 1000, p);
+        REQUIRE(d.action == Action::Skip);
+        REQUIRE(d.reason.find("cap") != std::string::npos);
+    }
+}
+
 TEST_CASE("healthy-tracking cap defeats a repeatable aliased estimate", "[reanchorgate]")
 {
     // ERREUR #58, the field « clack »: a perfect user-blessed pose, healthy

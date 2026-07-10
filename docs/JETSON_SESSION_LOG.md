@@ -35,7 +35,7 @@
 > - **`main.cpp`** : `app` scopée pour que `~Application` s'exécute avant `Logger::shutdown()` ; chemin d'échec d'init traité pareil. **Crash handler durci** : backtrace sur stderr en premier (async-signal-safe), spdlog seulement si le default logger est vivant.
 > - **Bonus** : `m_mainToolBar->setObjectName("MainToolBar")` — le warning Qt `'objectName' not set for QToolBar` du log terrain signifiait que la position de la toolbar n'était **jamais** persistée par `saveState()`.
 > - Validation terrain : fermer l'app → exit propre sans « Segmentation fault (core dumped) ». Tests : 9/9 cibles PASS (main.cpp/MainWindow hors CI stub). Fichiers : `src/main.cpp`, `src/gui/MainWindow.cpp`, docs.
-> - Prochain sur la liste (validé « on attaque la suite ») : seuils `ReanchorGate` en mm (§1.1 — 12 px = 2,7 mm en vue D405 mais 0,24 mm au microscope).
+> - **Seuils `ReanchorGate` en mm (§1.1) — fait dans la foulée (suite 146)** : `Params` porte désormais `scalePxPerMm` + `minShiftMm=2.5` / `confirmTolMm=1.5` / `maxShiftMm=12` ; quand l'échelle est connue, les seuils px effectifs sont dérivés (clamps 6-60 / 4-40 / 40-250 px), sinon fallback px historique. `Application` passe `m_currentPixelsPerMm` au lieu de convertir lui-même (le clamp manuel du cap est supprimé ; `maxShiftPx=150` reste le fallback sans échelle). Défauts calés sur le comportement historique à 4.4 px/mm (11 px ≈ 12). Test : le même shift de 30 px = dérive réelle à corriger en vue D405 (6,8 mm) mais Skip au microscope (0,6 mm) — un seuil px ne peut pas exprimer les deux. **10 cas / 28 assertions, 9/9 cibles PASS.**
 
 ## État actuel — au 2026-07-09 (Recadrage carte AVANT détection — pas seulement filtrage après)
 

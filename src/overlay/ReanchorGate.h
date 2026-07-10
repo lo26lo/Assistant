@@ -49,6 +49,18 @@ public:
         /// pose two ticks in a row → confirmed → a perfect user-blessed pose
         /// yanked 185 px sideways: the field « clack »). 0 disables.
         double maxShiftPx = 0.0;
+
+        /// ── Physical thresholds (INVESTIGATION_360 §1.1) ──
+        /// When scalePxPerMm > 0 the three px thresholds above are DERIVED
+        /// from these instead (clamped to sane px windows). Pixel thresholds
+        /// change meaning with magnification — 12 px is 2.7 mm at a D405 wide
+        /// view yet 0.24 mm under a microscope (hyper-sensitive gate);
+        /// millimetres don't. Defaults match the historical px behaviour at
+        /// the D405 field scale (~4.4 px/mm).
+        double scalePxPerMm = 0.0;
+        double minShiftMm   = 2.5;   ///< drift gate     → clamp(×s,  6,  60) px
+        double confirmTolMm = 1.5;   ///< confirmation   → clamp(×s,  4,  40) px
+        double maxShiftMm   = 12.0;  ///< healthy cap    → clamp(×s, 40, 250) px
     };
 
     enum class Action { Skip, Hold, Apply };

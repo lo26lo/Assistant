@@ -1783,15 +1783,14 @@ void Application::componentReanchor(bool silent)
             overlay::ReanchorGate::Params gp;
             gp.pendingMaxAgeMs = 3 * std::max<std::int64_t>(500,
                 static_cast<std::int64_t>(m_config->reanchorIntervalS() * 1000.0));
-            // 12 mm cap (clamped 40-250 px) on silent corrections while
-            // tracking is healthy: beyond that the "correction" is an aliased
-            // estimate (repetitive pad lattice) or a real board move — and
-            // board moves recover via Lost. Without it a repeatable alias
-            // passes the two-tick confirmation and yanks a perfect pose
-            // sideways (ERREUR #58, the field « clack », shift 185 px).
-            gp.maxShiftPx = m_currentPixelsPerMm > 0.0
-                ? std::clamp(12.0 * m_currentPixelsPerMm, 40.0, 250.0)
-                : 150.0;
+            // Physical thresholds (§1.1): with the scale, the gate derives
+            // drift gate / confirmation / healthy cap from mm — a px gate is
+            // hyper-sensitive under a microscope and lax at a wide view. The
+            // px values below only serve as fallback when no scale is known
+            // yet; maxShiftPx additionally keeps the anti-« clack » cap
+            // (ERREUR #58) armed in that fallback.
+            gp.scalePxPerMm = m_currentPixelsPerMm;
+            gp.maxShiftPx   = 150.0;
             const bool trackingLost = m_lastTrackingState ==
                 static_cast<int>(overlay::TrackingWorker::State::Lost);
             const auto gate = m_reanchorGate.evaluate(

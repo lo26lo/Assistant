@@ -35,11 +35,23 @@ ReanchorGate::Decision ReanchorGate::evaluate(
         return d;
     }
 
+    // Effective thresholds: physical (mm × scale, clamped) when the caller
+    // provides a scale — px thresholds change meaning with magnification
+    // (§1.1) — else the raw px values.
+    double minShift   = params.minShiftPx;
+    double confirmTol = params.confirmTolPx;
+    double maxShift   = params.maxShiftPx;
+    if (params.scalePxPerMm > 0.0) {
+        minShift   = std::clamp(params.minShiftMm   * params.scalePxPerMm,  6.0,  60.0);
+        confirmTol = std::clamp(params.confirmTolMm * params.scalePxPerMm,  4.0,  40.0);
+        maxShift   = std::clamp(params.maxShiftMm   * params.scalePxPerMm, 40.0, 250.0);
+    }
+
     d.maxShiftPx = maxCornerShift(newCorners, curCorners);
 
     // Drift gate: the pose is fine — and whatever disagreement a previous
     // tick held onto resolved itself (e.g. tracking caught up), so drop it.
-    if (d.maxShiftPx < params.minShiftPx) {
+    if (d.maxShiftPx < minShift) {
         reset();
         d.action = Action::Skip;
         d.reason = "pose within drift gate";
@@ -61,7 +73,7 @@ ReanchorGate::Decision ReanchorGate::evaluate(
     // pose. Crucially this also drops any pending: a systematic alias
     // (repetitive layout) reproduces identically on the next tick and would
     // otherwise sail through the two-tick confirmation (ERREUR #58).
-    if (params.maxShiftPx > 0.0 && d.maxShiftPx > params.maxShiftPx) {
+    if (maxShift > 0.0 && d.maxShiftPx > maxShift) {
         reset();
         d.action = Action::Skip;
         d.reason = "correction exceeds healthy-tracking cap — board moves recover via Lost";
@@ -74,7 +86,7 @@ ReanchorGate::Decision ReanchorGate::evaluate(
     const bool pendingFresh = m_pendingCorners.size() >= 4 &&
                               (nowMs - m_pendingMs) <= params.pendingMaxAgeMs;
     if (pendingFresh &&
-        maxCornerShift(newCorners, m_pendingCorners) <= params.confirmTolPx) {
+        maxCornerShift(newCorners, m_pendingCorners) <= confirmTol) {
         reset();
         d.action = Action::Apply;
         d.reason = "confirmed by second concordant estimate";
