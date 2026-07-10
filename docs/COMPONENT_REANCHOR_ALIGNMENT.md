@@ -143,6 +143,19 @@ prior-free ouvert. Le caller masque d'abord les détections au quad + 20 % de
 marge (`filterToBoardRegion`) — la « surface + 1-2 cm ». C'est le chemin
 `contour+pads` de l'Auto-Align carte nue.
 
+**Et si la carte prend tout l'écran (bords invisibles) ?** Cas déjà couvert
+par construction : l'Auto-Align tente le bootstrap pads/composants **avant**
+le contour, et le bootstrap n'a pas besoin des bords (c'est sa raison d'être).
+En plein écran le junk d'arrière-plan disparaît de lui-même (tout le cadre est
+carte) et la vue partielle est tolérée (les pads hors cadre sont des
+références non réclamées ; le seuil de consensus s'adapte à `min(nDet,
+nRefs)`). Ce qui reste dur à froid en plein écran : l'ambiguïté d'orientation
+sans l'aide du contour → refus `ambiguous` possible sur un sous-ensemble
+symétrique. **Workflow recommandé : aligner de loin (carte entière →
+`contour+pads`, orientation garantie), puis approcher** — le live tracking
+suit en continu et `estimate()` (prior-based, matching local) fonctionne sur
+vue partielle ; le cap `maxShiftPx` protège la pose.
+
 ### 2.4 Choix du rayon de gating
 
 Le gate de matching peut être **physique** : quand `matchGateMm` et
