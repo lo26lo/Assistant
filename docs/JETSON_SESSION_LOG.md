@@ -29,6 +29,14 @@
 
 ---
 
+## État actuel — au 2026-07-10 (AlignmentController étape 2 : la machine à états d'orchestration extraite)
+
+> **2026-07-10 (suite 147)** : « AlignmentController » (demande utilisateur, item P2 §7.1) — **étape 2** après ReanchorGate (suite 133), fidèle à la doctrine « extraction incrémentale, pas de big-bang » : la **machine à états d'orchestration** sort d'`Application` en classe pure ; la plomberie Qt (QTimer, watchers, messages) reste en place.
+> - **Nouveau `app/AlignmentController`** (`.h/.cpp`, zéro Qt/OpenCV/horloge — pur std) : (1) **budget de retries interactifs** (3 essais/clic, 300 ms sur frame fraîche) ; (2) **streak d'échecs silencieux** (cap 20, reset sur succès) ; (3) **chaîne de récupération Lost** — armement unique par perte (`onTrackingLost`), premier poll 800 ms, cadence rapide 3 s, **warn utilisateur exactement une fois** au passage en backoff (6ᵉ tentative), puis 15 s ; tick occupé = poll sans consommer de tentative ; stop+désarmement sur récupération/fin de live/projet déchargé (la perte suivante repart à 1). Constantes nommées (`kRecoveryFastAttempts`…) au lieu des littéraux épars.
+> - **`Application`** : les 4 champs d'état (`m_reanchorFailStreak`, `m_autoAlignRetriesLeft`, `m_lostRecoveryArmed/Attempts`) remplacés par `m_alignCtl` ; `attemptLostRecovery()` réduit à la plomberie (décision → invocations Qt) ; 7 sites convertis (dispatch, handler autoAlign, handler componentReanchor ×2, logFullState, armement Lost).
+> - **Tests** : `tests/test_alignment_controller.cpp` — 6 cas couvrant le comportement terrain à l'identique (ERREUR #54/suite 127) : budget 3 puis abandon + réarmement au clic suivant ; cap/reset du streak ; phase rapide 5×3 s → warn unique à 6 → backoff 15 s sans re-warn ; tick occupé ne brûle pas de tentative ; stop sur les 3 conditions + chaîne fraîche ensuite ; pas de projet = pas de chaîne. Câblé CMake racine + tests + `ci_unit_tests.sh` (10ᵉ cible CI).
+> - ⚠️ `Application.{h,cpp}` non compilables ici — item build Jetson. Prochaine étape 3 possible (session future, après build) : déplacer la plomberie elle-même (watchers/timers) dans un vrai contrôleur QObject.
+
 ## État actuel — au 2026-07-10 (PR #23 mergée dans main ; fix du segfault à la fermeture — ERREUR #60)
 
 > **2026-07-10 (suite 145)** : **PR #23 mergée dans `main`** (merge `d5de066`, CI 4/4 verte — les 13 commits des suites 133-144 : ReanchorGate, carte nue #57-#59, fusion contour+pads, vue de debug). Branche relancée depuis `main` (fast-forward, même nom). Nouveau chantier : le **segfault à chaque fermeture** vu dans le log terrain du 09/07 — voir [ERREUR #60](JETSON_ERREURS.md) : `Logger::shutdown()` avant `~Application` → destructeurs qui loggent sur le default logger détruit → SIGSEGV, et le crash handler (qui loggait aussi) re-fautait, d'où l'absence de backtrace.

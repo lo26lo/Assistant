@@ -163,6 +163,7 @@ set(SOURCES
     src/overlay/ComponentReanchor.cpp
     src/overlay/BlobComponentDetector.cpp
     src/overlay/ReanchorGate.cpp
+    src/app/AlignmentController.cpp
 
     # GUI
     src/gui/MainWindow.cpp

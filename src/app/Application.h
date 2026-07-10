@@ -20,6 +20,7 @@
 #include "ibom/IBomData.h"         // ibom::Layer (m_activeLayer — an enum
                                    // class can't be forward-declared here)
 #include "overlay/ReanchorGate.h"  // silent re-anchor decision logic (member)
+#include "app/AlignmentController.h"  // alignment orchestration state machine
 
 namespace ibom {
 
@@ -277,7 +278,6 @@ private:
     // under the drift gate, docs/BLOB_REANCHOR_JITTER_ANALYSE.md). Off by
     // default. See docs/JETSON_SESSION_LOG.md.
     QTimer* m_reanchorTimer = nullptr;
-    int     m_reanchorFailStreak = 0;   // consecutive BoardLocator misses → back off
     int     m_reanchorTickCount  = 0;   // for skipping ticks while backing off
 
     // Decision logic for silent corrections (drift gate + two-tick
@@ -286,17 +286,14 @@ private:
     // and whenever the pose is deliberately dropped (Reset, layer flip).
     overlay::ReanchorGate m_reanchorGate;
 
-    // Interactive Auto-Align retry budget (see autoAlignBoard's isRetry doc).
-    int  m_autoAlignRetriesLeft = 0;
-    // Loss-recovery poll state (see attemptLostRecovery): last state reported
-    // by trackingStateChanged, and whether a recovery chain is already armed
-    // (Lost can be signalled repeatedly — only one poll chain must run).
+    // Alignment orchestration state machine (interactive retry budget, silent
+    // failure streak, Lost-recovery chain arm/backoff/warn-once) — extracted
+    // into a unit-tested class, step 2 of the AlignmentController extraction
+    // (§7.1). Application keeps only the QTimer plumbing around it.
+    AlignmentController m_alignCtl;
+
+    // Last tracking state reported by trackingStateChanged (Lost detection).
     int  m_lastTrackingState  = -1;
-    bool m_lostRecoveryArmed  = false;
-    // Consecutive loss-recovery ticks (attemptLostRecovery): drives the
-    // back-off from 3 s → 15 s once geometric re-anchor proves hopeless on a
-    // detector-less, board-fills-the-frame scene.
-    int  m_lostRecoveryAttempts = 0;
 
     // Focus assist — last time the sharpness metric was computed (throttle).
     qint64 m_lastSharpnessMs = 0;

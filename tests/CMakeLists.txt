@@ -69,6 +69,13 @@ add_ibom_test(test_reanchor_gate
     LIBS    opencv_core
 )
 
+# Alignment orchestration state machine — interactive retry budget, silent
+# failure streak, Lost-recovery chain (arm/backoff/warn-once). Pure std.
+add_ibom_test(test_alignment_controller
+    SOURCES test_alignment_controller.cpp
+            ${CMAKE_SOURCE_DIR}/src/app/AlignmentController.cpp
+)
+
 # BoardLocator test — synthetic contour/depth scenes with a known pose.
 add_ibom_test(test_boardlocator
     SOURCES test_boardlocator.cpp

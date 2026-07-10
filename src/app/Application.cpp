@@ -1296,7 +1296,7 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
     // badly-timed frame — blur, glare, a hand in view — shouldn't fail the
     // whole click; the completion handler retries on fresh frames).
     if (!silent && !isRetry)
-        m_autoAlignRetriesLeft = 2;
+        m_alignCtl.beginInteractiveAlign();
 
     // Cancel any other interactive picking mode.
     m_alignOnComponents = false;
@@ -1349,20 +1349,18 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
 
         if (!result.found) {
             if (silent) {
-                m_reanchorFailStreak = std::min(m_reanchorFailStreak + 1, 20);
+                m_alignCtl.onSilentResult(false);
                 spdlog::debug("Periodic re-anchor: board not found ({}), streak {}",
-                              result.message, m_reanchorFailStreak);
-            } else if (m_autoAlignRetriesLeft > 0) {
+                              result.message, m_alignCtl.failStreak());
+            } else if (const auto rd = m_alignCtl.onInteractiveAlignFailed(); rd.retry) {
                 // One frame is a lottery ticket (blur/glare/hand); retry on a
                 // fresh frame before reporting failure to the user.
-                const int attempt = 3 - m_autoAlignRetriesLeft;
-                --m_autoAlignRetriesLeft;
                 m_mainWindow->updateStatusMessage(
                     tr("Auto-Align: board not found — retrying on a fresh frame (%1/3)…")
-                        .arg(attempt + 1));
-                spdlog::info("Auto-Align: not found ({}), retry {} of 2 in 300 ms",
-                             result.message, attempt);
-                QTimer::singleShot(300, this, [this]() {
+                        .arg(rd.attempt + 1));
+                spdlog::info("Auto-Align: not found ({}), retry {} of 2 in {} ms",
+                             result.message, rd.attempt, rd.delayMs);
+                QTimer::singleShot(rd.delayMs, this, [this]() {
                     autoAlignBoard(/*silent=*/false, /*isRetry=*/true);
                 });
             } else {
@@ -1381,7 +1379,7 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
         if (silent) {
             // BoardLocator found the board here → geometric re-anchor works;
             // clear any back-off streak.
-            m_reanchorFailStreak = 0;
+            m_alignCtl.onSilentResult(true);
             if (result.score < m_config->reanchorMinScore()) {
                 spdlog::debug("Periodic re-anchor: score {:.2f} < {:.2f}, skipping",
                               result.score, m_config->reanchorMinScore());
@@ -1647,15 +1645,14 @@ void Application::autoStartLiveTracking()
 void Application::attemptLostRecovery()
 {
     using S = overlay::TrackingWorker::State;
-    if (!m_liveMode || !m_ibomProject ||
-        m_lastTrackingState != static_cast<int>(S::Lost)) {
-        m_lostRecoveryArmed    = false;  // recovered (or live mode ended) — chain stops
-        m_lostRecoveryAttempts = 0;
-        return;
-    }
+    // All decisions (stop/attempt/warn/backoff) live in the unit-tested
+    // AlignmentController; this method is only the QTimer + signal plumbing.
+    const auto d = m_alignCtl.onLostRecoveryTick(
+        m_liveMode, m_ibomProject != nullptr,
+        m_lastTrackingState == static_cast<int>(S::Lost), m_autoAligning);
+    if (d.stop) return;  // recovered (or live mode ended) — chain stops
 
-    if (!m_autoAligning) {
-        ++m_lostRecoveryAttempts;
+    if (d.attempt) {
         // componentReanchor() registers a component constellation against the
         // iBOM — from the trained model when loaded, else the model-free blob
         // detector (classic CV). Either way it needs no visible board outline,
@@ -1664,12 +1661,12 @@ void Application::attemptLostRecovery()
         // bootstraps (no current pose required).
         const bool viaModel = componentDetector() != nullptr;
         spdlog::info("Tracking LOST — auto re-anchor attempt #{} via {} component detection",
-                     m_lostRecoveryAttempts, viaModel ? "AI-model" : "blob");
+                     d.attemptNumber, viaModel ? "AI-model" : "blob");
         componentReanchor(/*silent=*/true);
 
         // If it keeps failing (hard scene: bare/sparse board, blobs can't lock),
         // tell the user once and slow down so the log/CPU aren't hammered.
-        if (m_lostRecoveryAttempts == 6) {
+        if (d.warnUser) {
             m_mainWindow->updateStatusMessage(tr(
                 "Tracking still lost — component re-anchor can't lock on this view. "
                 "Align manually (4-corner / Multi-Comp)%1.")
@@ -1681,8 +1678,7 @@ void Application::attemptLostRecovery()
 
     // State-change signals only fire on transitions; a persistent loss needs
     // polling. Cadence backs off after several failures so nothing is hammered.
-    const int delayMs = (m_lostRecoveryAttempts < 6) ? 3000 : 15000;
-    QTimer::singleShot(delayMs, this, &Application::attemptLostRecovery);
+    QTimer::singleShot(d.nextDelayMs, this, &Application::attemptLostRecovery);
 }
 
 void Application::componentReanchor(bool silent)
@@ -1747,9 +1743,9 @@ void Application::componentReanchor(bool silent)
         }
         if (!result.found) {
             if (silent) {
-                m_reanchorFailStreak = std::min(m_reanchorFailStreak + 1, 20);
+                m_alignCtl.onSilentResult(false);
                 spdlog::debug("Component re-anchor: {} (streak {})",
-                              result.message, m_reanchorFailStreak);
+                              result.message, m_alignCtl.failStreak());
             } else {
                 m_mainWindow->updateStatusMessage(
                     tr("Component re-anchor failed: %1")
@@ -1758,7 +1754,7 @@ void Application::componentReanchor(bool silent)
             }
             return;
         }
-        m_reanchorFailStreak = 0;
+        m_alignCtl.onSilentResult(true);
 
         // Drift gate (silent only): skip if the new pose barely moves the board
         // corners, to leave healthy tracking undisturbed (a re-anchor resets the
@@ -1962,7 +1958,7 @@ void Application::logFullState()
                  c.trackingGpuMode(), c.microscopeIncremental(), c.microscopeReanchorDriftPx(),
                  c.hybridDriftCorrection());
     spdlog::info("[reanchor] enabled={} interval={:.1f}s minScore={:.2f} failStreak={}",
-                 c.reanchorEnabled(), c.reanchorIntervalS(), c.reanchorMinScore(), m_reanchorFailStreak);
+                 c.reanchorEnabled(), c.reanchorIntervalS(), c.reanchorMinScore(), m_alignCtl.failStreak());
     spdlog::info("[overlay]  pads={} silk={} fab={} opacity={:.2f} placedOpacity={:.2f} selOutlineW={:.1f} colors[sel={} placed={} normal={}]",
                  c.showPads(), c.showSilkscreen(), c.showFabrication(), c.overlayOpacity(),
                  c.placedOpacity(), c.selectedOutlineWidth(), c.selectedColorHex(),
@@ -2192,10 +2188,10 @@ void Application::connectSignals()
                     // Give the worker a moment to re-acquire on its own (mask
                     // fallback + jump-recovery usually do), then re-locate the
                     // board outright. One chain only, however often Lost fires.
-                    if (!m_lostRecoveryArmed && m_ibomProject) {
-                        m_lostRecoveryArmed    = true;
-                        m_lostRecoveryAttempts = 0;
-                        QTimer::singleShot(800, this, &Application::attemptLostRecovery);
+                    if (const auto ad = m_alignCtl.onTrackingLost(m_ibomProject != nullptr);
+                        ad.arm) {
+                        QTimer::singleShot(ad.delayMs, this,
+                                           &Application::attemptLostRecovery);
                     }
                     break;
             }
