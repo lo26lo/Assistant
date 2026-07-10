@@ -29,6 +29,13 @@
 
 ---
 
+## État actuel — au 2026-07-10 (Dev → Test AI detection : « le modèle est-il utilisé ? » en un clic)
+
+> **2026-07-10 (suite 149)** : le screenshot utilisateur confirme un placement **correct** (`~/Assistant-git/models/component_detector.onnx`, 103 Mo, + `.txt` de classes) mais les logs restent `components(blobs)` — sans les lignes de démarrage on ne peut pas trancher entre « pas redémarré », « TensorRT compile encore » (103 Mo sur Orin = minutes au 1er lancement) et « chargement échoué ». Demande utilisateur : un module Dev pour la vision YOLO.
+> - **Nouveau `Dev → Test AI detection (YOLO) on current frame`** : one-shot — si le détecteur n'est **pas** prêt, le statut dit **pourquoi** (ai.enabled=false / aucun .onnx trouvé au démarrage / encore en chargement-TensorRT ou échec → voir log `AI pipeline`) ; s'il est prêt, une inférence sur la frame courante → `data/debug/yolo_test.jpg` annoté (boîtes vertes, classe+confiance, temps d'inférence en en-tête) + message de statut. La **vue de debug** (suite 143) affiche maintenant tous les `*.jpg` du dossier (pas seulement `reanchor_*`), donc le résultat YOLO s'y affiche en direct.
+> - Ce test devient l'outil standard d'évaluation du modèle : compter les détections sur carte peuplée vs nue, voir la confiance, mesurer la latence (première mesure de la vitesse ORT/TRT sur Orin).
+> - ⚠️ GUI/Application non compilables ici — build Jetson. 10/10 cibles PASS. Fichiers : `src/gui/MainWindow.{h,cpp}`, `src/app/Application.cpp`, docs.
+
 ## État actuel — au 2026-07-10 (Modèle ONNX : diagnostic + fix « le modèle désactivait le chemin pads »)
 
 > **2026-07-10 (suite 148)** : l'utilisateur a déposé un modèle `.onnx` mais « n'a pas l'impression qu'il l'utilise » (log : toujours `components(blobs)`). Deux volets :

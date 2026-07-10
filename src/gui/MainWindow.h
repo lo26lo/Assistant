@@ -102,6 +102,9 @@ signals:
     void dumpStateRequested();
     /// Dev menu: trigger an on-demand AI component-level re-anchor.
     void componentReanchorRequested();
+    /// Dev menu: one-shot YOLO detection test on the current frame (annotated
+    /// result lands in the debug view; tells WHY when the model isn't ready).
+    void aiDetectionTestRequested();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

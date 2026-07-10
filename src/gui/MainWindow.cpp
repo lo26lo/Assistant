@@ -365,6 +365,15 @@ void MainWindow::createMenuBar()
     connect(m_actReanchorDbg, &QAction::toggled, this,
             &MainWindow::toggleReanchorDebugView);
 
+    auto* actAiTest = devMenu->addAction(tr("Test AI detection (YOLO) on current frame"));
+    actAiTest->setToolTip(tr(
+        "Run the loaded .onnx detector once on the current camera frame and "
+        "show the annotated result (boxes, classes, confidences, inference "
+        "time) in the debug view. If the model is not ready, says WHY "
+        "(not found / still compiling TensorRT / failed)."));
+    connect(actAiTest, &QAction::triggered, this,
+            &MainWindow::aiDetectionTestRequested);
+
     auto* actDumpState = devMenu->addAction(tr("Dump full state to log"));
     actDumpState->setToolTip(tr(
         "Write a snapshot of the entire current configuration and runtime state "
@@ -928,10 +937,11 @@ void MainWindow::toggleReanchorDebugView(bool on)
 void MainWindow::refreshReanchorDebugView()
 {
     if (!m_reanchorDbgLabel) return;
-    // Pick the most recently modified reanchor_*.jpg the workers dropped.
+    // Pick the most recently modified debug frame — re-anchor dumps AND the
+    // one-shot YOLO test share this window.
     const QString dir = QString::fromStdString((utils::dataDir() / "debug").string());
     QDir d(dir);
-    const auto files = d.entryInfoList({ "reanchor_*.jpg" }, QDir::Files, QDir::Time);
+    const auto files = d.entryInfoList({ "*.jpg" }, QDir::Files, QDir::Time);
     if (files.isEmpty()) return;
     const QFileInfo& newest = files.first();
     const qint64 mtime = newest.lastModified().toMSecsSinceEpoch();

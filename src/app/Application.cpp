@@ -3847,6 +3847,69 @@ void Application::connectControlSignals()
         componentReanchor(/*silent=*/false);
     });
 
+    // ── Dev: one-shot YOLO detection test (suite 149) ─────────────
+    // Answers "is my model actually used?" in one click: says WHY when the
+    // detector isn't ready, else runs it once and drops an annotated frame
+    // (boxes, classes, confidences, inference time) into the debug view.
+    connect(m_mainWindow.get(), &gui::MainWindow::aiDetectionTestRequested,
+            this, [this]() {
+        if (!m_lastColorFrame || m_lastColorFrame->empty()) {
+            m_mainWindow->updateStatusMessage(tr("AI test: no camera frame yet"));
+            return;
+        }
+        auto* detector = componentDetector();
+        if (!detector) {
+            QString why;
+            if (!m_config->aiEnabled())
+                why = tr("ai.enabled=false in config");
+            else if (!m_modelManager || m_modelManager->availableModels().empty())
+                why = tr("no .onnx model was found at startup — check models/ "
+                         "and restart");
+            else
+                why = tr("model still loading (first TensorRT compile takes "
+                         "minutes) or failed — check the log for 'AI pipeline'");
+            m_mainWindow->updateStatusMessage(tr("AI test: detector NOT ready — %1").arg(why));
+            spdlog::warn("AI detection test: detector not ready ({})", why.toStdString());
+            return;
+        }
+        const cv::Mat frame = m_lastColorFrame->clone();
+        auto* watcher = new QFutureWatcher<QString>(this);
+        connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher]() {
+            m_mainWindow->updateStatusMessage(watcher->result());
+            watcher->deleteLater();
+        });
+        watcher->setFuture(QtConcurrent::run([frame, detector]() -> QString {
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto dets = detector->detect(frame);
+            const double ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+            cv::Mat vis = frame.clone();
+            for (const auto& d : dets) {
+                cv::rectangle(vis, cv::Rect(d.bbox), cv::Scalar(0, 255, 0), 2);
+                const std::string label = d.className + " " +
+                    std::to_string(static_cast<int>(d.confidence * 100.f)) + "%";
+                cv::putText(vis, label,
+                            cv::Point(static_cast<int>(d.bbox.x),
+                                      static_cast<int>(d.bbox.y) - 4),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.45,
+                            cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+            }
+            const std::string header = "YOLO: " + std::to_string(dets.size()) +
+                " detections in " + std::to_string(static_cast<int>(ms)) + " ms";
+            cv::putText(vis, header, cv::Point(8, 22), cv::FONT_HERSHEY_SIMPLEX,
+                        0.55, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            const fs::path dir = utils::dataDir() / "debug";
+            fs::create_directories(dir, ec);
+            cv::imwrite((dir / "yolo_test.jpg").string(), vis);
+            spdlog::info("AI detection test: {} detections in {:.0f} ms -> {}",
+                         dets.size(), ms, (dir / "yolo_test.jpg").string());
+            return tr("AI test: %1 detections in %2 ms — see Dev → debug view")
+                       .arg(dets.size()).arg(static_cast<int>(ms));
+        }));
+    });
+
     spdlog::info("Signal/slot connections established, FPS timer started.");
 }
 
