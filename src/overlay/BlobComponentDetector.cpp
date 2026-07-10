@@ -126,4 +126,93 @@ std::vector<ai::Detection> detectComponentBlobs(const cv::Mat& image,
     return out;
 }
 
+std::vector<ai::Detection> detectPadBlobs(const cv::Mat& image,
+                                          double scalePxPerMm,
+                                          int maxDetections)
+{
+    std::vector<ai::Detection> out;
+    if (image.empty()) return out;
+
+    cv::Mat gray;
+    if (image.channels() == 3)      cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
+    else if (image.channels() == 4) cv::cvtColor(image, gray, cv::COLOR_BGRA2GRAY);
+    else                            gray = image;
+
+    // Pad size window (px): ~0.3 mm (an 0201 pad) to ~6 mm (QFN thermal,
+    // connector tab). No scale → permissive pixel defaults.
+    double minSide, maxSide;
+    if (scalePxPerMm > 0.0) {
+        minSide = std::max(2.0, 0.3 * scalePxPerMm);
+        maxSide = 6.0 * scalePxPerMm;
+    } else {
+        minSide = 2.0;
+        maxSide = 40.0;
+    }
+
+    // White top-hat: keeps bright features SMALLER than the structuring
+    // element, flattens everything slower-varying (soldermask, table, light
+    // gradient). Response is relative to the local background — that's what
+    // makes it hold up in the dim scenes where MSER drowned (ERREUR #59).
+    const int k = (static_cast<int>(maxSide) | 1) + 2;  // odd, > biggest pad
+    cv::Mat tophat;
+    cv::morphologyEx(gray, tophat, cv::MORPH_TOPHAT,
+                     cv::getStructuringElement(cv::MORPH_ELLIPSE, { k, k }));
+
+    // Otsu adapts the cut to the scene; the absolute floor keeps a blank or
+    // noise-only frame (Otsu happily splits pure noise) from yielding speckle.
+    constexpr double kContrastFloor = 18.0;
+    cv::Mat bin;
+    const double otsu = cv::threshold(tophat, bin, 0, 255,
+                                      cv::THRESH_BINARY | cv::THRESH_OTSU);
+    if (otsu < kContrastFloor)
+        cv::threshold(tophat, bin, kContrastFloor, 255, cv::THRESH_BINARY);
+
+    // Solid connected components in the pad-size window. No dedup needed —
+    // components are disjoint by construction.
+    cv::Mat labels, stats, centroids;
+    const int n = cv::connectedComponentsWithStats(bin, labels, stats,
+                                                   centroids, 8, CV_32S);
+    struct PadBlob { double area; cv::Rect box; cv::Point2f c; };
+    std::vector<PadBlob> pads;
+    pads.reserve(static_cast<size_t>(std::max(0, n - 1)));
+    for (int i = 1; i < n; ++i) {
+        const int w    = stats.at<int>(i, cv::CC_STAT_WIDTH);
+        const int h    = stats.at<int>(i, cv::CC_STAT_HEIGHT);
+        const int area = stats.at<int>(i, cv::CC_STAT_AREA);
+        if (w < minSide || h < minSide) continue;
+        if (w > maxSide && h > maxSide) continue;  // both huge = background band
+        const double aspect = static_cast<double>(std::max(w, h))
+                            / std::max(1, std::min(w, h));
+        if (aspect > 5.0) continue;                // streaks, silk lines
+        if (area < 0.35 * w * h) continue;         // hollow/ragged = not a pad
+        pads.push_back({ static_cast<double>(area),
+                         cv::Rect(stats.at<int>(i, cv::CC_STAT_LEFT),
+                                  stats.at<int>(i, cv::CC_STAT_TOP), w, h),
+                         cv::Point2f(static_cast<float>(centroids.at<double>(i, 0)),
+                                     static_cast<float>(centroids.at<double>(i, 1))) });
+    }
+    std::sort(pads.begin(), pads.end(),
+              [](const PadBlob& a, const PadBlob& b) { return a.area > b.area; });
+    if (static_cast<int>(pads.size()) > maxDetections)
+        pads.resize(maxDetections);
+
+    out.reserve(pads.size());
+    for (const auto& p : pads) {
+        ai::Detection d;
+        d.classId    = 0;
+        d.className  = "pad";
+        d.confidence = 1.0f;
+        // Center the bbox on the centroid: consumers take its center
+        // (ComponentReanchor::detectionCenter).
+        d.bbox = cv::Rect2f(p.c.x - p.box.width * 0.5f,
+                            p.c.y - p.box.height * 0.5f,
+                            static_cast<float>(p.box.width),
+                            static_cast<float>(p.box.height));
+        out.push_back(std::move(d));
+    }
+    spdlog::debug("[pad-detect] {} pad-like blobs (otsu {:.0f}, scale={:.2f} px/mm)",
+                  out.size(), otsu, scalePxPerMm);
+    return out;
+}
+
 } // namespace ibom::overlay

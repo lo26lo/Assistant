@@ -39,6 +39,11 @@
 #include <QPrinter>
 #include <QDesktopServices>
 #include <QTemporaryDir>
+#include <QDialog>
+#include <QVBoxLayout>
+#include <QPixmap>
+#include <QFileInfo>
+#include "utils/Paths.h"
 #include <cmath>
 #include <algorithm>
 #include <spdlog/spdlog.h>
@@ -349,6 +354,16 @@ void MainWindow::createMenuBar()
         "optical flow, overlay, re-anchor, calibration, AI, settings…) is written "
         "to the log file. Use 'Copy log file path' to find the file. Persisted."));
     connect(m_actVerboseLog, &QAction::toggled, this, &MainWindow::verboseLoggingToggled);
+
+    m_actReanchorDbg = devMenu->addAction(tr("Show re-anchor debug view"));
+    m_actReanchorDbg->setCheckable(true);
+    m_actReanchorDbg->setToolTip(tr(
+        "Open a live window showing the newest annotated Auto-Align / re-anchor "
+        "frame: MSER detections (red), pad detections (magenta), the iBOM pads "
+        "projected under the found pose (green). Same images the workers drop "
+        "under data/debug — refreshed on every alignment attempt."));
+    connect(m_actReanchorDbg, &QAction::toggled, this,
+            &MainWindow::toggleReanchorDebugView);
 
     auto* actDumpState = devMenu->addAction(tr("Dump full state to log"));
     actDumpState->setToolTip(tr(
@@ -871,6 +886,60 @@ void MainWindow::dropEvent(QDropEvent* event)
 }
 
 // ── Layout State ─────────────────────────────────────────────────
+
+void MainWindow::toggleReanchorDebugView(bool on)
+{
+    if (!on) {
+        if (m_reanchorDbgTimer) m_reanchorDbgTimer->stop();
+        if (m_reanchorDbgDialog) m_reanchorDbgDialog->hide();
+        return;
+    }
+    if (!m_reanchorDbgDialog) {
+        m_reanchorDbgDialog = new QDialog(this);
+        m_reanchorDbgDialog->setWindowTitle(tr("Re-anchor debug view"));
+        m_reanchorDbgDialog->resize(848, 520);
+        auto* lay = new QVBoxLayout(m_reanchorDbgDialog);
+        lay->setContentsMargins(0, 0, 0, 0);
+        m_reanchorDbgLabel = new QLabel(tr("Waiting for an Auto-Align or re-anchor…"),
+                                        m_reanchorDbgDialog);
+        m_reanchorDbgLabel->setAlignment(Qt::AlignCenter);
+        m_reanchorDbgLabel->setStyleSheet("background:#111; color:#888;");
+        m_reanchorDbgLabel->setMinimumSize(320, 200);
+        lay->addWidget(m_reanchorDbgLabel);
+        m_reanchorDbgTimer = new QTimer(m_reanchorDbgDialog);
+        m_reanchorDbgTimer->setInterval(400);
+        connect(m_reanchorDbgTimer, &QTimer::timeout, this,
+                &MainWindow::refreshReanchorDebugView);
+        // Untick the menu action when the user closes the window.
+        connect(m_reanchorDbgDialog, &QDialog::finished, this, [this](int) {
+            if (m_actReanchorDbg) m_actReanchorDbg->setChecked(false);
+        });
+    }
+    m_reanchorDbgMtime = 0;  // force a reload of whatever is there
+    m_reanchorDbgDialog->show();
+    m_reanchorDbgDialog->raise();
+    refreshReanchorDebugView();
+    m_reanchorDbgTimer->start();
+}
+
+void MainWindow::refreshReanchorDebugView()
+{
+    if (!m_reanchorDbgLabel) return;
+    // Pick the most recently modified reanchor_*.jpg the workers dropped.
+    const QString dir = QString::fromStdString((utils::dataDir() / "debug").string());
+    QDir d(dir);
+    const auto files = d.entryInfoList({ "reanchor_*.jpg" }, QDir::Files, QDir::Time);
+    if (files.isEmpty()) return;
+    const QFileInfo& newest = files.first();
+    const qint64 mtime = newest.lastModified().toMSecsSinceEpoch();
+    if (mtime == m_reanchorDbgMtime) return;  // nothing new since last tick
+    m_reanchorDbgMtime = mtime;
+    QPixmap pm(newest.absoluteFilePath());
+    if (pm.isNull()) return;
+    m_reanchorDbgLabel->setPixmap(pm.scaled(m_reanchorDbgLabel->size(),
+                                            Qt::KeepAspectRatio,
+                                            Qt::SmoothTransformation));
+}
 
 void MainWindow::restoreLayoutState()
 {

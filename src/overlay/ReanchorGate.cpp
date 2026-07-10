@@ -56,6 +56,18 @@ ReanchorGate::Decision ReanchorGate::evaluate(
         return d;
     }
 
+    // Healthy-tracking cap: a huge disagreement with a pose the tracker is
+    // confidently following is not drift — distrust the ESTIMATE, not the
+    // pose. Crucially this also drops any pending: a systematic alias
+    // (repetitive layout) reproduces identically on the next tick and would
+    // otherwise sail through the two-tick confirmation (ERREUR #58).
+    if (params.maxShiftPx > 0.0 && d.maxShiftPx > params.maxShiftPx) {
+        reset();
+        d.action = Action::Skip;
+        d.reason = "correction exceeds healthy-tracking cap — board moves recover via Lost";
+        return d;
+    }
+
     // Two-tick confirmation: apply only when this estimate lands where the
     // previously held one did. A lone aberrant estimate arms a pending that
     // the next sane estimate fails to confirm (and replaces).

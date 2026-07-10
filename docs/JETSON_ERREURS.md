@@ -15,6 +15,9 @@
 
 | # | Date | Composant | Statut | Titre court |
 |---|------|-----------|--------|-------------|
+| 59 | 2026-07-09 | BlobComponentDetector / Application — scène sombre | ✅ RÉSOLU (à valider terrain) | [2e retour terrain : pose fausse « cohérente » à 200/292 pads — en scène sombre les blobs MSER sont du **bruit taille-de-pad** et les vrais pads ratent la détection ; fix : détecteur de pads dédié (top-hat brillant-sur-masque) + dump de debug annoté](#erreur-59--scene-sombre--blobs-mser--bruit--detecteur-de-pads-dedie) |
+| 58 | 2026-07-08 | ComponentReanchor / ReanchorGate — alias de réseau | ✅ RÉSOLU (à valider terrain) | [Retour terrain du fix #57 : le réseau de pads répétitif **aliase** — locks pads à 44-65 % de ratio sur des poses décalées, et le « clack » (un alias **répétable** passe la confirmation 2-ticks et éjecte une pose parfaite de 185 px) ; fix : seeding déterministe par ancres + marge d'ambiguïté + cap de correction silencieuse + filtre 6 mm](#erreur-58--alias-de-reseau-de-pads--seeding-deterministe--cap-anti-clack) |
+| 57 | 2026-07-08 | ComponentReanchor / Application — Auto-Align blobs | ✅ RÉSOLU (à valider terrain) | [Auto-Align verrouille une pose fausse sur **carte nue** avec « score 1.00 » — les blobs sont des PADS, pas des corps de composants ; le score `0.4+inliers/30` sature à 1.00 et les gates absolus laissent passer 40/117 = 34 % d'inliers ; fix : constellation de pads + gate de ratio + score honnête + gate de matching en mm](#erreur-57--auto-align-carte-nue--pose-aliasee-acceptee-a-score-100) |
 | 56 | 2026-07-02 | ComponentReanchor / IBomParser — Component::position | ✅ RÉSOLU | [`bootstrap: degenerate component layout` — `Component::position` reste (0,0) quand l'iBOM n'a pas de champ `center` → tout le re-anchor composant (bootstrap ET estimate, modèle compris) cassé ; fix : utiliser le centre de la bbox](#erreur-56--componentposition-non-remplie--re-anchor-composant-degenere) |
 | 55 | 2026-07-02 | tests/test_component_reanchor.cpp — build | ✅ RÉSOLU | [`ai::Detection` ne résout pas à portée globale — `ai` est le namespace imbriqué `ibom::ai`, visible sans qualification seulement depuis `namespace ibom`](#erreur-55--aidetection-ne-resout-pas-a-portee-globale-dans-le-test) |
 | 54 | 2026-07-02 | TrackingWorker / Application — terrain | 🟡 CONTOURNÉ | [PCB soulevé puis reposé → live tracking « perd le nord » et ne récupère jamais — le gate anti-saut exige la continuité avec une pose devenue obsolète ; mitigations : bypass après 2 s sans pose saine + re-anchor automatique sur état Lost](#erreur-54--pcb-souleve-puis-repose--tracking-jamais-recupere) |
@@ -1387,6 +1390,85 @@ Renommé les deux variables en `cornerTL`/`cornerTR` dans `autoAlignBoard()`.
 
 ### Leçon
 Ne jamais nommer une variable locale `tr` (ou tout identifiant Qt courant comme `tr`/`qDebug`/etc.) dans une méthode `QObject`, même si elle semble hors de portée du prochain appel `tr(...)` — un refactor ultérieur peut facilement élargir la portée sans qu'on s'en rende compte. Préférer un nom descriptif (`cornerTL`, `topRight`, …) systématiquement.
+
+## ERREUR 59 — Scène sombre : blobs MSER = bruit → détecteur de pads dédié
+
+**Date :** 2026-07-09 (3e itération de la série #57/#58, même carte)
+**Composant :** `src/overlay/BlobComponentDetector.{h,cpp}` + `src/app/Application.cpp`
+**Statut :** ✅ RÉSOLU (unit-testé ici ; terrain à valider avec les dumps)
+
+### Symptôme
+Après les fixes #57/#58, en scène **sombre** : locks pads à 44-65 % de ratio sur des poses fausses (`200/292 pads, median 1,82px` — overlay « mal tourné, ne correspond à aucun pad »), refus `ambiguous` fréquents, et comportement en loterie d'une frame à l'autre. Cap de 300 détections systématiquement saturé.
+
+### Cause
+**200 « inliers » cohérents à 1,8 px sur une pose fausse = les détections ne sont pas les pads.** MSER + CLAHE sur une image sombre et bruitée fabrique des centaines de blobs de bruit **taille-de-pad** (qui passent tous les filtres géométriques), pendant que les vrais pads — peu contrastés en MSER — ratent la détection. Le consensus mesure alors des coïncidences de densité entre du bruit et un réseau de pads dense, pas des correspondances. Aucun raffinement de la registration (gates #57, seeding/ambiguïté/cap #58) ne peut compenser des points d'entrée qui n'existent pas physiquement. Diagnostiqué après **deux mauvaises lectures de captures d'écran** — d'où le dump de debug, pour ne plus jamais deviner.
+
+### Solution appliquée ✅
+1. **`detectPadBlobs`** (nouveau, `BlobComponentDetector`) : détecteur **physiquement fondé** pour carte nue — les pads étamés sont *brillants sur masque plus sombre*. White top-hat (réponse relative au **fond local** → tient en scène sombre, aplatit masque/table/gradients) → Otsu avec plancher de contraste absolu (une frame vide bruitée ne rend rien — Otsu seul splitte le bruit) → composantes connexes filtrées taille pad (0,3-6 mm via prior d'échelle), aspect ≤ 5, solidité ≥ 0,35. Limites connues documentées : glyphes de sérigraphie et vias passent (FP tolérés par le consensus), pads à ~kernel/2 du bord peuvent fusionner avec la bande de contour.
+2. **Chemins pads branchés dessus** (`Application`, les 2 workers) : la tentative constellation-pads utilise `detectPadBlobs` au lieu du MSER filtré 6 mm ; MSER reste pour la tentative corps-de-composants (carte peuplée).
+3. **Dump de debug enrichi** : détections MSER en rouge, détections pad en **magenta**, pads projetés en vert — les deux mondes visibles sur la même image.
+
+Tests (`test_blob_detector`, +3 cas) : carte nue **sombre** synthétique (pads à 110 sur masque ~50) → ≥ 80 % des pads détectés, ≤ 3 FP ; frame vide bruitée → ≤ 8 détections ; bout-en-bout pads → lock à ratio ≥ 0,75 et médiane < 3 px vs pads dessinés. 9/9 cibles PASS.
+
+### Leçon
+Quand les statistiques d'un fit sont excellentes et le résultat visiblement faux, ce ne sont pas les maths qu'il faut retoucher : ce sont les **données d'entrée** qu'il faut aller regarder (garbage in, consensus out). Et un détecteur générique « features stables » (MSER) n'est pas un détecteur de l'objet qu'on cherche — exploiter la propriété physique discriminante (pads = brillants) bat l'accumulation de garde-fous géométriques en aval. Enfin : instrumenter (dump annoté) avant de théoriser — deux captures d'écran mal lues ont coûté une itération complète.
+
+## ERREUR 58 — Alias de réseau de pads : seeding déterministe + cap anti-« clack »
+
+**Date :** 2026-07-08 (même session que #57, retour terrain immédiat)
+**Composant :** `src/overlay/ComponentReanchor.cpp` (bootstrap) + `src/overlay/ReanchorGate.{h,cpp}` + `src/app/Application.cpp`
+**Statut :** ✅ RÉSOLU (unit-testé ici ; terrain à valider)
+
+### Symptôme
+Le fix #57 tourne sur le Jetson : le gate de ratio rejette bien l'ancienne pose (`inlier ratio too low (30/117)`), le chemin pads gagne… mais **verrouille des poses décalées à 44-51 % de ratio** (`re-anchored on 99/195 pads`), overlay toujours faux. Pire, rapporté par l'utilisateur : *« si je tourne la carte pour correspondre à l'empreinte, l'auto-align est parfait — et clack, il part sur le côté »* — log : `Component re-anchor: HELD (shift 185.5px, re-anchored on 80/124 pads)` → confirmé au tick suivant → une pose parfaite éjectée. Et `300 dets` systématique = cap MSER saturé par le grain du bois / tapis.
+
+### Cause (quatre mécanismes)
+1. **Alias de réseau** : les pads en rangées répétitives font qu'une pose décalée d'un pas de grille pose ~la moitié des pads sur d'autres pads → ratio 44-65 %, au-dessus de tout gate raisonnable.
+2. **Le tirage aléatoire paire→paire ne tire jamais la vraie pose** : une seule correspondance correcte parmi des dizaines de milliers de paires compatibles, contre des milliers de paires qui soutiennent chaque alias. 3000 itérations trouvent les alias par défaut, la vraie pose par chance (E[hits] < 1). C'est pour ça que tourner la carte vers l'orientation nominale « répare » : les hypothèses proches de l'identité abondent.
+3. **La confirmation 2-ticks suppose l'aberration aléatoire** : un alias est **systématique** (même scène → même pose) → deux ticks concordants → confirmé → « clack ».
+4. **Le cap 300 du détecteur garde les plus GROS blobs** : le junk d'arrière-plan (bois, ombres) est gros → il évince les vrais pads (petits).
+
+### Solution appliquée ✅
+1. **Seeding déterministe par ancres** (`bootstrap` phase 1) : paires longues-baselines à extrémités **disjointes** parmi les 40 plus grosses détections (l'extrémal = là où vit le junk ; disjoint ⇒ ≥ 12−s ancres saines) ; pour chaque ancre, énumération **exhaustive** des paires de constellation compatibles-échelle (index trié des séparations) ; pré-score bas coût contre un hash spatial des détections sur ~60 refs **en foulée** sur toute la constellation (les pads discriminants sont souvent en fin de liste) ; consensus complet sur les 256 meilleures graines. La vraie pose est trouvée **par construction, pas par chance**. Test réseau 12×10+8 marqueurs tourné 90° : consensus 128/128, 0.08 px vs GT (l'aléatoire seul : deux alias 116/113).
+2. **Marge d'ambiguïté** (`bootstrapAmbiguityRatio = 0.97`) : si une pose **distincte** (comparaison partie linéaire + centroïde du layout — pas l'origine PCB, dont le bras de levier fabrique de fausses distinctions) atteint ≥ 97 % du meilleur consensus → refus explicite `ambiguous registration … refusing to guess`. Une grille parfaitement symétrique est refusée au lieu d'être posée à l'envers une fois sur deux.
+3. **Cap anti-« clack »** (`ReanchorGate::Params::maxShiftPx`, posé à 12 mm clamp 40-250 px) : tracking sain + shift énorme = estimation aliasée ou vrai déplacement de carte — dans les deux cas on **refuse la correction silencieuse** (les déplacements passent par la récupération Lost, exemptée). Purge aussi le pending : l'alias répétable ne peut plus se confirmer.
+4. **Échantillonnage compatible-échelle** (phase 2) + **filtre 6 mm** côté pads (cap détecteur monté à 600, sous-ensembles par constellation) : le junk gros ne pollue plus le matching ni n'évince les pads.
+
+### Leçon
+La confirmation multi-échantillons ne protège que contre le bruit **aléatoire** — face à une erreur **systématique**, elle la valide avec enthousiasme ; il faut une défense d'amplitude (cap), pas de répétition. Et un RANSAC dont les bonnes hypothèses sont exponentiellement plus rares que les alias ne converge pas vers la vérité en ajoutant des itérations : il faut rendre la découverte **déterministe** (énumération guidée) là où la structure du problème le permet.
+
+## ERREUR 57 — Auto-Align carte nue : pose aliasée acceptée à « score 1.00 »
+
+**Date :** 2026-07-08
+**Composant :** `src/overlay/ComponentReanchor.{h,cpp}` + `src/app/Application.cpp` (autoAlignBoard, componentReanchor)
+**Statut :** ✅ RÉSOLU (logique unit-testée ici ; comportement terrain à valider au prochain run Jetson)
+
+### Symptôme
+Terrain (D405 à 100 mm, 848×480, 4.4 px/mm, **carte nue** FOC_Slim, models/ vide) :
+```
+[comp-reanchor] bootstrap(57 consensus): re-anchored on 40/117 components, median 3,77px
+Auto-Align succeeded via components(blobs) (score 1.00)
+```
+→ overlay appliqué **au mauvais endroit**, live tracking démarre et verrouille la pose fausse. Les ticks silencieux suivants la **renforcent** au lieu de la corriger (estimate() gate autour des prédictions fausses → re-lock de la même pose → drift gate « pose fine »).
+
+### Cause (trois défauts qui se cumulent)
+1. **Constellation inadaptée à la carte nue** : `detectComponentBlobs` (MSER) voit les **pads étamés** (brillants), pas des corps de composants — la carte est nue. Apparier une constellation de pads contre les **centres de composants** iBOM n'a qu'une ressemblance de coïncidence → une pose aliasée trouve toujours ~40 paires d'accord sur 133 composants. Or l'assemblage main **commence** carte nue : cas d'usage central, pas marginal.
+2. **Gates absolus, pas relatifs** : `estimate()` validait `inliers ≥ 8` et `median ≤ 8px` — 40/117 = **34 %** de support passe, alors qu'un vrai lock est à 60-90 %.
+3. **Score synthétique** : `Application.cpp` mappait `score = min(1.0, 0.4 + inliers/30)` → 40 inliers = **1.00 saturé**, quel que soit le désaccord. Le gate de confiance (0.45) ne pouvait structurellement rien attraper.
+
+Aggravant : `maxMatchDistPx = 60px` fixe = **13,6 mm** à 4.4 px/mm — presque tout gate sur quelque chose (INVESTIGATION_360 §1.1, seuils en px non physiques).
+
+### Solution appliquée ✅
+1. **`ComponentReanchor::Constellation::Pads`** : la constellation attendue peut être construite depuis les **positions de pads** (coordonnées carte absolues, déjà dans le parser — c'est ce que l'overlay dessine). Sur carte nue, blobs↔pads est bien posé. Cap à 250 pads (plus grands d'abord) pour borner le consensus O(nRef×nDet). Fallback centre composant si footprint sans pad.
+2. **`Params::minInlierRatio = 0.4`** : rejette tout fit soutenu par < 40 % des matches gated (« constellation coincidence, not a lock »). Le cas terrain 34 % est rejeté ; les tests synthétiques sains passent à 88-100 %.
+3. **Score honnête** : `score = inliers/matches` dans `autoAlignBoard` — le gate de confiance 0.45 et `reanchorMinScore` 0.5 mesurent enfin quelque chose.
+4. **`Params::matchGateMm = 5.0` + `scalePxPerMm`** : gate de matching **physique** (clamp 15-90 px), activé dans le re-anchor périodique. §1.1 appliqué là où il a mordu.
+5. **Les deux chemins blobs essaient les DEUX constellations** (composants puis pads) et gardent le fit au meilleur ratio — carte peuplée et carte nue marchent sans toggle UI.
+
+Tests : `test_component_reanchor` +3 cas / +10 assertions (lock pads sur carte nue à 98 % de ratio et 0.26 px vs vérité terrain ; rejet du scénario coïncidence 12/40 ; gate physique divise les matches par ≥3). **9/9 cibles CI PASS ici** (OpenCV 4.6 + Catch2 apt, comme la CI).
+
+### Leçon
+Trois garde-fous « raisonnables » individuellement (inliers absolus, médiane, score plancher généreux) peuvent former **zéro** défense composée : chacun supposait que les autres attrapaient le cas dégénéré. Valider un fit par sa **fraction** de support, pas par des comptes absolus ; et un « score » qui n'est pas une mesure (mapping monotone d'un compte) donne une confiance de papier — le gate qui le consomme ne protège rien. Enfin : sur le terrain, le détecteur voit ce qui **existe** (pads sur carte nue), pas ce que le modèle de données préfère (composants) — la constellation de référence doit s'adapter à l'état physique de la carte.
 
 ## ERREUR 56 — `Component::position` non remplie → re-anchor composant dégénéré
 

@@ -41,6 +41,14 @@ public:
         /// must not be confirmed against minutes-old corners. Callers set it
         /// from the re-anchor interval (e.g. 3×).
         std::int64_t pendingMaxAgeMs = 9000;
+        /// Cap on a SILENT correction while tracking is healthy: a shift this
+        /// large is not drift — it is either a systematically aliased estimate
+        /// (repetitive pad lattice, ERREUR #58) or a real board move, and
+        /// board moves recover via the Lost bypass. Without the cap a
+        /// REPEATABLE alias defeats the two-tick confirmation (same wrong
+        /// pose two ticks in a row → confirmed → a perfect user-blessed pose
+        /// yanked 185 px sideways: the field « clack »). 0 disables.
+        double maxShiftPx = 0.0;
     };
 
     enum class Action { Skip, Hold, Apply };

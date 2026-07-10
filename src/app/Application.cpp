@@ -72,6 +72,7 @@
 #include <limits>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/calib3d.hpp>
 #include <filesystem>
 
@@ -81,6 +82,157 @@ Q_DECLARE_METATYPE(ibom::Layer)
 Q_DECLARE_METATYPE(std::vector<cv::Point2f>)
 
 namespace ibom {
+
+namespace {
+
+/// Annotated re-anchor debug frame (ERREUR #59) : detections in RED, the pad
+/// constellation projected under the RESULT pose in GREEN, result message on
+/// top — so a field misalignment is diagnosed from what the algorithm actually
+/// saw instead of guesses over screenshots. Rolling window of 10 files under
+/// dataDir()/debug/. Written UNCONDITIONALLY: it's bounded (10 files) and only
+/// fires on an alignment action (user click or the slow periodic re-anchor),
+/// so the cost is negligible — and gating it on log verbosity proved too
+/// fragile to rely on when a field bug needs the evidence (an earlier version
+/// keyed off default_logger()->level(), which the verbose switch doesn't
+/// necessarily move). Called from the QtConcurrent worker threads — touches
+/// only its arguments and the disk.
+void dumpReanchorDebug(const cv::Mat& frame,
+                       const std::vector<ai::Detection>& detections,
+                       const std::vector<ai::Detection>& padDetections,
+                       const IBomProject& project,
+                       Layer layer,
+                       const overlay::ComponentReanchorResult& res)
+{
+    try {
+        cv::Mat vis = frame.clone();
+        for (const auto& d : detections) {
+            const cv::Point c(static_cast<int>(d.bbox.x + d.bbox.width * 0.5f),
+                              static_cast<int>(d.bbox.y + d.bbox.height * 0.5f));
+            const int r = std::max(3, static_cast<int>(d.bbox.width * 0.5f));
+            cv::circle(vis, c, r, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
+        }
+        // Dedicated pad detections (bare-board path) in MAGENTA, so the dump
+        // shows both what MSER saw and what the pad detector saw.
+        for (const auto& d : padDetections) {
+            const cv::Point c(static_cast<int>(d.bbox.x + d.bbox.width * 0.5f),
+                              static_cast<int>(d.bbox.y + d.bbox.height * 0.5f));
+            const int r = std::max(2, static_cast<int>(d.bbox.width * 0.5f));
+            cv::circle(vis, c, r, cv::Scalar(255, 0, 255), 1, cv::LINE_AA);
+        }
+        if (res.found && !res.homography.empty()) {
+            std::vector<cv::Point2f> pcb;
+            for (const auto& comp : project.components) {
+                if (comp.layer != layer) continue;
+                for (const auto& pad : comp.pads)
+                    pcb.push_back({ static_cast<float>(pad.position.x),
+                                    static_cast<float>(pad.position.y) });
+            }
+            if (!pcb.empty()) {
+                std::vector<cv::Point2f> img;
+                cv::perspectiveTransform(pcb, img, res.homography);
+                for (const auto& p : img)
+                    cv::drawMarker(vis, p, cv::Scalar(0, 255, 0),
+                                   cv::MARKER_CROSS, 7, 1, cv::LINE_AA);
+            }
+        }
+        cv::putText(vis, res.message.substr(0, 90), cv::Point(8, 22),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.45,
+                    cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
+        static std::atomic<int> counter{ 0 };
+        namespace fs = std::filesystem;
+        const fs::path dir = utils::dataDir() / "debug";
+        fs::create_directories(dir);
+        const int n = counter++;
+        const fs::path file =
+            dir / ("reanchor_" + std::to_string(n % 10) + ".jpg");
+        if (!cv::imwrite(file.string(), vis))
+            throw std::runtime_error("cv::imwrite returned false for " + file.string());
+        // First write logged at INFO so the exact path is visible in the
+        // console without verbose mode — the field diagnostic needs it.
+        if (n == 0)
+            spdlog::info("[comp-reanchor] debug frames writing to {}", dir.string());
+        else
+            spdlog::debug("[comp-reanchor] debug frame written: {}", file.string());
+    } catch (const std::exception& e) {
+        // WARNING, not debug: a silently-failing dump is exactly what wasted a
+        // field session looking for images that were never written.
+        spdlog::warn("[comp-reanchor] debug dump FAILED: {}", e.what());
+    }
+}
+
+/// Keep only detections that fall inside the board region — the board quad
+/// projected under a KNOWN pose, expanded by a margin (ERREUR #59): the field
+/// scene is ~60 % background (wood, mat, and a large glare reflection), a
+/// detection magnet that pollutes the prior-free bootstrap fallback and breeds
+/// aliases. Only usable when a pose exists (the periodic re-anchor always has
+/// one); the initial Auto-Align has no pose to mask by.
+std::vector<ai::Detection> filterToBoardRegion(
+    const std::vector<ai::Detection>& dets,
+    const IBomProject& project,
+    const overlay::Homography& pose,
+    double marginFrac)
+{
+    if (!pose.isValid()) return dets;
+    const auto& bb = project.boardInfo.boardBBox;
+    // Corners expanded outward by the margin, in PCB mm, then projected to
+    // image — so the polygon follows any rotation/perspective of the pose.
+    const double mx = (bb.maxX - bb.minX) * marginFrac;
+    const double my = (bb.maxY - bb.minY) * marginFrac;
+    std::vector<cv::Point2f> quad;
+    for (const auto& c : { cv::Point2f(bb.minX - mx, bb.minY - my),
+                           cv::Point2f(bb.maxX + mx, bb.minY - my),
+                           cv::Point2f(bb.maxX + mx, bb.maxY + my),
+                           cv::Point2f(bb.minX - mx, bb.maxY + my) })
+        quad.push_back(pose.pcbToImage(c));
+    std::vector<ai::Detection> kept;
+    kept.reserve(dets.size());
+    for (const auto& d : dets) {
+        const cv::Point2f ctr(d.bbox.x + d.bbox.width * 0.5f,
+                              d.bbox.y + d.bbox.height * 0.5f);
+        if (cv::pointPolygonTest(quad, ctr, false) >= 0)
+            kept.push_back(d);
+    }
+    return kept;
+}
+
+/// Axis-aligned image ROI covering the board quad under a KNOWN pose, expanded
+/// by marginFrac (the "board + 1-2 cm" the user asked to scan), clamped to the
+/// frame. Empty when the pose is invalid. Cropping detection to this — rather
+/// than detecting full-frame and discarding — matters: detectPadBlobs's Otsu
+/// threshold is computed over its input, so a bright background glare in the
+/// frame raises the cut and suppresses real pads. Restricting to the board
+/// makes the threshold adapt to the board alone (ERREUR #59, field follow-up).
+cv::Rect boardRoi(const IBomProject& project, const overlay::Homography& pose,
+                  double marginFrac, const cv::Size& imageSize)
+{
+    if (!pose.isValid()) return {};
+    const auto& bb = project.boardInfo.boardBBox;
+    const double mx = (bb.maxX - bb.minX) * marginFrac;
+    const double my = (bb.maxY - bb.minY) * marginFrac;
+    float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+    for (const auto& c : { cv::Point2f(bb.minX - mx, bb.minY - my),
+                           cv::Point2f(bb.maxX + mx, bb.minY - my),
+                           cv::Point2f(bb.maxX + mx, bb.maxY + my),
+                           cv::Point2f(bb.minX - mx, bb.maxY + my) }) {
+        const cv::Point2f p = pose.pcbToImage(c);
+        minx = std::min(minx, p.x); maxx = std::max(maxx, p.x);
+        miny = std::min(miny, p.y); maxy = std::max(maxy, p.y);
+    }
+    const cv::Rect r(static_cast<int>(std::floor(minx)),
+                     static_cast<int>(std::floor(miny)),
+                     static_cast<int>(std::ceil(maxx - minx)),
+                     static_cast<int>(std::ceil(maxy - miny)));
+    return r & cv::Rect(0, 0, imageSize.width, imageSize.height);
+}
+
+/// Shift detection bboxes back to full-frame coordinates after detecting on a
+/// crop.
+void offsetDetections(std::vector<ai::Detection>& dets, const cv::Point2f& off)
+{
+    for (auto& d : dets) { d.bbox.x += off.x; d.bbox.y += off.y; }
+}
+
+} // namespace
 
 Application::Application(QApplication& qapp)
     : QObject(&qapp)
@@ -161,6 +313,12 @@ bool Application::initialize()
                      utils::Logger::logFilePath());
     }
     m_mainWindow->setVerboseLoggingChecked(m_config->verboseLogging());
+
+    // Announce the re-anchor debug-dump path (ERREUR #59): every Auto-Align /
+    // periodic re-anchor drops an annotated frame here, so a field
+    // misalignment is diagnosed from what the detector saw, not screenshots.
+    spdlog::info("Re-anchor debug frames: {}",
+                 (utils::dataDir() / "debug").string());
 
     // Reflect persisted AI settings in the control panel (before initializeAI
     // so the spinner already shows the threshold the detector will use).
@@ -1355,7 +1513,11 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
         if (detector) {
             detections = detector->detect(colorCopy);
         } else {
-            detections = overlay::detectComponentBlobs(colorCopy, expectedPixelsPerMm);
+            // High cap: the per-constellation subsets below re-cap. With the
+            // old 300 cap, large background junk (wood grain, shadows) evicted
+            // the small pad blobs it outranked by area (ERREUR #58).
+            detections = overlay::detectComponentBlobs(colorCopy, expectedPixelsPerMm,
+                                                       /*maxDetections=*/600);
             detSrc = "blobs";
         }
         if (!detections.empty()) {
@@ -1365,17 +1527,49 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
             // noise-fits its perspective terms there).
             overlay::ComponentReanchor::Params rp;
             rp.fitSimilarity = (detector == nullptr);
-            const auto boot = overlay::ComponentReanchor::bootstrap(
-                detections, *project, activeLayer, expectedPixelsPerMm, rp);
+            // Component-body attempt: the 300 largest (historic behaviour —
+            // detectComponentBlobs returns area-descending).
+            std::vector<ai::Detection> compDets = detections;
+            if (!detector && compDets.size() > 300) compDets.resize(300);
+            auto boot = overlay::ComponentReanchor::bootstrap(
+                compDets, *project, activeLayer, expectedPixelsPerMm, rp);
+            std::vector<ai::Detection> padDets;
+            if (detector == nullptr) {
+                // Model-free blobs on a bare/partially populated board are
+                // the shiny PADS, not component bodies — matching them against
+                // component centers is a constellation coincidence that
+                // aliases (ERREUR #57: 40/117 inliers applied as score 1.00).
+                // The pad attempt uses the DEDICATED pad detector (bright-on-
+                // mask top-hat, ERREUR #59) — MSER in a dim scene yields
+                // pad-sized noise blobs while the actual pads go undetected.
+                padDets = overlay::detectPadBlobs(colorCopy, expectedPixelsPerMm);
+                overlay::ComponentReanchor::Params rpPads = rp;
+                rpPads.constellation =
+                    overlay::ComponentReanchor::Constellation::Pads;
+                const auto bootPads = overlay::ComponentReanchor::bootstrap(
+                    padDets, *project, activeLayer, expectedPixelsPerMm, rpPads);
+                const auto ratio = [](const overlay::ComponentReanchorResult& r) {
+                    return r.matches > 0
+                        ? static_cast<double>(r.inliers) / r.matches : 0.0;
+                };
+                if (bootPads.found && (!boot.found || ratio(bootPads) > ratio(boot)))
+                    boot = bootPads;
+            }
+            // Full detection sets on purpose: junk must be VISIBLE in the dump.
+            dumpReanchorDebug(colorCopy, detections, padDets, *project,
+                              activeLayer, boot);
             if (boot.found) {
                 overlay::BoardLocateResult blr;
                 blr.found  = true;
                 blr.method = std::string("components(") + detSrc + ")";
-                // Map inliers onto the shared [0,1] score consumed by the
-                // trust (0.45) and reanchor (0.5) gates: 8 inliers → 0.67,
-                // saturates at 18+. Component consensus is far more specific
-                // than edge agreement, hence the generous floor.
-                blr.score   = std::min(1.0, 0.4 + boot.inliers / 30.0);
+                // Honest confidence for the trust (0.45) and reanchor (0.5)
+                // gates: the inlier fraction of the gated matches. The old
+                // mapping (0.4 + inliers/30) saturated at 1.00 from 18 inliers
+                // no matter how many matches disagreed — the ERREUR #57
+                // aliased lock scored a perfect 1.00.
+                blr.score   = boot.matches > 0
+                    ? std::min(1.0, static_cast<double>(boot.inliers) / boot.matches)
+                    : 0.0;
                 blr.message = boot.message;
                 const auto& bb = project->boardInfo.boardBBox;
                 const std::vector<cv::Point2f> pcb = {
@@ -1390,8 +1584,53 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
             spdlog::info("Auto-Align: component bootstrap ({}) didn't lock ({}), "
                          "falling back to board outline", detSrc, boot.message);
         }
-        return overlay::BoardLocator::locate(colorCopy, depthCopy, *project,
-                                             expectedPixelsPerMm, activeLayer);
+        auto blr = overlay::BoardLocator::locate(colorCopy, depthCopy, *project,
+                                                 expectedPixelsPerMm, activeLayer);
+        if (blr.found && !detector && blr.imageCorners.size() == 4) {
+            // Contour + pads fusion (field insight, suite 142): the located
+            // outline reliably fixes position, scale and the board SURFACE —
+            // mask detections to it (+20 % margin ≈ 1-2 cm) — while the PADS
+            // decide the orientation the edge-agreement score can't (weakly
+            // discriminative on a busy PCB). Four discrete hypotheses with a
+            // known surface beat the open-ended prior-free bootstrap.
+            const auto& bb = project->boardInfo.boardBBox;
+            const std::vector<cv::Point2f> pcb = {
+                {static_cast<float>(bb.minX), static_cast<float>(bb.minY)},
+                {static_cast<float>(bb.maxX), static_cast<float>(bb.minY)},
+                {static_cast<float>(bb.maxX), static_cast<float>(bb.maxY)},
+                {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
+            };
+            overlay::Homography quadPose;
+            quadPose.setMatrix(cv::getPerspectiveTransform(pcb, blr.imageCorners));
+            // Scan only the board + margin (the located surface + ~1-2 cm) so
+            // the pad detector's Otsu adapts to the board, not the background.
+            const cv::Rect roi = boardRoi(*project, quadPose, 0.2, colorCopy.size());
+            const cv::Mat detImg = roi.area() > 0 ? colorCopy(roi) : colorCopy;
+            std::vector<ai::Detection> padsOnBoard =
+                overlay::detectPadBlobs(detImg, expectedPixelsPerMm);
+            offsetDetections(padsOnBoard,
+                             { static_cast<float>(roi.x), static_cast<float>(roi.y) });
+            padsOnBoard = filterToBoardRegion(padsOnBoard, *project, quadPose, 0.2);
+            overlay::ComponentReanchor::Params rpo;
+            rpo.fitSimilarity = true;
+            rpo.constellation = overlay::ComponentReanchor::Constellation::Pads;
+            rpo.matchGateMm   = 5.0;
+            rpo.scalePxPerMm  = expectedPixelsPerMm;
+            const auto vote = overlay::ComponentReanchor::estimateOrientations(
+                padsOnBoard, *project, blr.imageCorners, activeLayer, rpo);
+            if (vote.found) {
+                blr.method  += "+pads";
+                // Honest confidence: pad-support ratio of the winning rotation.
+                blr.score    = vote.matches > 0
+                    ? std::min(1.0, static_cast<double>(vote.inliers) / vote.matches)
+                    : 0.0;
+                blr.message  = vote.message;
+                cv::perspectiveTransform(pcb, blr.imageCorners, vote.homography);
+                dumpReanchorDebug(colorCopy, {}, padsOnBoard, *project,
+                                  activeLayer, vote);
+            }
+        }
+        return blr;
     }));
 }
 
@@ -1544,6 +1783,15 @@ void Application::componentReanchor(bool silent)
             overlay::ReanchorGate::Params gp;
             gp.pendingMaxAgeMs = 3 * std::max<std::int64_t>(500,
                 static_cast<std::int64_t>(m_config->reanchorIntervalS() * 1000.0));
+            // 12 mm cap (clamped 40-250 px) on silent corrections while
+            // tracking is healthy: beyond that the "correction" is an aliased
+            // estimate (repetitive pad lattice) or a real board move — and
+            // board moves recover via Lost. Without it a repeatable alias
+            // passes the two-tick confirmation and yanks a perfect pose
+            // sideways (ERREUR #58, the field « clack », shift 185 px).
+            gp.maxShiftPx = m_currentPixelsPerMm > 0.0
+                ? std::clamp(12.0 * m_currentPixelsPerMm, 40.0, 250.0)
+                : 150.0;
             const bool trackingLost = m_lastTrackingState ==
                 static_cast<int>(overlay::TrackingWorker::State::Lost);
             const auto gate = m_reanchorGate.evaluate(
@@ -1600,11 +1848,38 @@ void Application::componentReanchor(bool silent)
     const ibom::Layer activeLayer = m_activeLayer;  // snapshot for the worker
     watcher->setFuture(QtConcurrent::run([detector, colorCopy, project, priorPose,
                                           scalePrior, activeLayer]() {
-        // Detections from the trained model when loaded, else model-free blobs
-        // (classic CV) — component-based re-anchor works with an empty models/.
-        const std::vector<ai::Detection> detections =
+        // Scan ONLY the board + margin, not the whole frame (field follow-up):
+        // the periodic re-anchor always has a prior pose, so crop detection to
+        // the board ROI up front. This isn't just cosmetic — detectPadBlobs's
+        // Otsu adapts to its input, so cropping out the wood/mat/glare that
+        // fills ~60 % of the frame keeps the threshold on the board and stops
+        // the glare from suppressing real pads. Detections are offset back to
+        // full-frame coords so the pose and the debug dump stay in frame space.
+        const cv::Rect roi = boardRoi(*project, priorPose, 0.25, colorCopy.size());
+        const cv::Mat detImg = roi.area() > 0 ? colorCopy(roi) : colorCopy;
+        const cv::Point2f roiOff(static_cast<float>(roi.x), static_cast<float>(roi.y));
+
+        std::vector<ai::Detection> detections =
             detector ? detector->detect(colorCopy)
-                     : overlay::detectComponentBlobs(colorCopy, scalePrior);
+                     : overlay::detectComponentBlobs(detImg, scalePrior,
+                                                     /*maxDetections=*/600);
+        std::vector<ai::Detection> padDets;
+        if (!detector) {
+            // Pad attempt: DEDICATED bright-on-mask pad detector (ERREUR #59)
+            // — physically grounded, holds up in dim scenes where MSER yields
+            // pad-sized noise blobs while the actual pads go undetected.
+            padDets = overlay::detectPadBlobs(detImg, scalePrior);
+            offsetDetections(detections, roiOff);
+            offsetDetections(padDets, roiOff);
+        }
+        std::vector<ai::Detection> compDets = detections;
+        // Final polygon trim: the ROI is the axis-aligned box of a possibly
+        // rotated quad, so its corners spill past the board — drop those.
+        if (priorPose.isValid()) {
+            compDets = filterToBoardRegion(compDets, *project, priorPose, 0.25);
+            padDets  = filterToBoardRegion(padDets,  *project, priorPose, 0.25);
+        }
+        if (!detector && compDets.size() > 300) compDets.resize(300);
         // Blob centers are noisier than model detections: fit a 4-DOF
         // similarity so the pose is repeatable at the board corners — the
         // periodic drift gate measures there, and the 8-DOF fit's noise-fitted
@@ -1612,15 +1887,44 @@ void Application::componentReanchor(bool silent)
         // (docs/BLOB_REANCHOR_JITTER_ANALYSE.md).
         overlay::ComponentReanchor::Params rp;
         rp.fitSimilarity = (detector == nullptr);
+        // Physical matching gate (ERREUR #57 / INVESTIGATION_360 §1.1): 5 mm
+        // around each predicted position instead of a fixed 60 px — which is
+        // 13.6 mm at a D405 wide view, wide enough to gate almost anything
+        // onto something.
+        rp.matchGateMm  = 5.0;
+        rp.scalePxPerMm = scalePrior;
+        overlay::ComponentReanchor::Params rpPads = rp;
+        rpPads.constellation = overlay::ComponentReanchor::Constellation::Pads;
+        const auto ratio = [](const overlay::ComponentReanchorResult& r) {
+            return r.matches > 0 ? static_cast<double>(r.inliers) / r.matches : 0.0;
+        };
         // Prior-based correction first (cheap, precise when the pose is only
-        // drifting); global bootstrap when there is no usable prior — no pose
-        // yet, or a pose so stale (board moved/picked up) that nothing falls
-        // inside the matching radius anymore.
+        // drifting); with model-free blobs, try BOTH constellations — bodies
+        // on a populated board, pads on a bare one (ERREUR #57) — and keep
+        // the better-supported fit. Global bootstrap when there is no usable
+        // prior — no pose yet, or a pose so stale (board moved/picked up)
+        // that nothing falls inside the matching radius anymore.
         auto res = overlay::ComponentReanchor::estimate(
-            detections, *project, priorPose, activeLayer, {}, rp);
-        if (!res.found)
+            compDets, *project, priorPose, activeLayer, {}, rp);
+        if (!detector) {
+            const auto resPads = overlay::ComponentReanchor::estimate(
+                padDets, *project, priorPose, activeLayer, {}, rpPads);
+            if (resPads.found && (!res.found || ratio(resPads) > ratio(res)))
+                res = resPads;
+        }
+        if (!res.found) {
             res = overlay::ComponentReanchor::bootstrap(
-                detections, *project, activeLayer, scalePrior, rp);
+                compDets, *project, activeLayer, scalePrior, rp);
+            if (!detector) {
+                const auto bootPads = overlay::ComponentReanchor::bootstrap(
+                    padDets, *project, activeLayer, scalePrior, rpPads);
+                if (bootPads.found && (!res.found || ratio(bootPads) > ratio(res)))
+                    res = bootPads;
+            }
+        }
+        // Full detection sets on purpose: junk must be VISIBLE in the dump.
+        dumpReanchorDebug(colorCopy, detections, padDets, *project,
+                          activeLayer, res);
         return res;
     }));
 }
@@ -2818,7 +3122,19 @@ void Application::connectControlSignals()
         m_anchorMode = false;
         setMultiAlignUIState(false);  // also clears the PCB Map click targets
 
+        // Drop the pose FIRST, then turn live tracking off. Order matters: the
+        // live-mode toggle's disable path restores m_baseHomography onto
+        // m_homography — releasing it here makes that a no-op so the reset
+        // isn't undone. Leaving live tracking ON after a reset meant the frame
+        // handler kept feeding the tracker and the periodic re-anchor kept
+        // firing on a board with no reference — exactly when a blob alias could
+        // silently re-apply a wrong pose.
         m_homography->reset();
+        m_baseHomography.release();  // stale — the pose it captured is gone
+        if (m_liveMode) {
+            if (auto* cp = m_mainWindow->controlPanel()) cp->setLiveMode(false);
+            spdlog::info("Live tracking mode disabled (alignment reset)");
+        }
         m_reanchorGate.reset();  // no pose left for a held candidate to correct
         ++m_alignmentEpoch;
         m_currentPixelsPerMm = 0.0;
@@ -2829,8 +3145,9 @@ void Application::connectControlSignals()
         m_config->save();
 
         m_mainWindow->updateStatusMessage(
-            tr("Alignment reset — the overlay is unaligned. Use one of the "
-               "Align buttons (or the Alignment Assistant) to set it up again."));
+            tr("Alignment reset — the overlay is unaligned and live tracking is "
+               "off. Use one of the Align buttons (or the Alignment Assistant) "
+               "to set it up again."));
         spdlog::info("Alignment reset by user");
     });
 

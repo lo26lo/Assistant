@@ -20,6 +20,7 @@
 
 namespace ai = ibom::ai;
 using ibom::overlay::detectComponentBlobs;
+using ibom::overlay::detectPadBlobs;
 using ibom::overlay::ComponentReanchor;
 
 namespace {
@@ -199,4 +200,166 @@ TEST_CASE("blob detector returns nothing on a blank image", "[blob]")
     const auto dets = detectComponentBlobs(blank, 6.0);
     // A flat field has no stable component-sized regions.
     REQUIRE(dets.size() <= 2);
+}
+
+// ── detectPadBlobs — the bare-board path (ERREUR #59) ──────────────────────
+
+namespace {
+
+/// Bare-board scene generator: dark background (mat), slightly lighter
+/// soldermask board, BRIGHT pad rectangles — 2-pad passives at ground-truth
+/// positions. Returns the ground-truth pad centers (image px).
+cv::Mat makeBareBoardImage(double s, int brightness,
+                           std::vector<cv::Point2f>& padCentersOut)
+{
+    // Board 100×80 mm axis-aligned at (60, 40) px for simplicity.
+    cv::Mat img(560, 760, CV_8UC3, cv::Scalar(25, 25, 25));           // mat
+    const cv::Rect board(60, 40, static_cast<int>(100 * s),
+                         static_cast<int>(80 * s));
+    cv::rectangle(img, board, cv::Scalar(45, 62, 40), cv::FILLED);    // mask
+
+    std::mt19937 rng(41);
+    std::uniform_real_distribution<float> ux(12.f, 88.f);
+    std::uniform_real_distribution<float> uy(12.f, 68.f);
+    std::vector<cv::Point2f> centersMm;
+    while (centersMm.size() < 30) {
+        cv::Point2f c(ux(rng), uy(rng));
+        bool ok = true;
+        for (const auto& q : centersMm)
+            if (std::hypot(c.x - q.x, c.y - q.y) < 6.f) { ok = false; break; }
+        if (!ok) continue;
+        centersMm.push_back(c);
+        // Two 1.2×1.4 mm pads at ±1.1 mm around the component center.
+        for (int k = -1; k <= 1; k += 2) {
+            const cv::Point2f pmm(c.x + 1.1f * k, c.y);
+            const cv::Point2f ppx(board.x + pmm.x * static_cast<float>(s),
+                                  board.y + pmm.y * static_cast<float>(s));
+            const int hw = std::max(2, static_cast<int>(0.6 * s));
+            const int hh = std::max(2, static_cast<int>(0.7 * s));
+            cv::rectangle(img,
+                cv::Rect(cvRound(ppx.x) - hw, cvRound(ppx.y) - hh, 2 * hw, 2 * hh),
+                cv::Scalar(brightness, brightness, brightness), cv::FILLED);
+            padCentersOut.push_back(ppx);
+        }
+    }
+    // Sensor noise (deterministic).
+    cv::theRNG().state = 777;
+    cv::Mat noise(img.size(), CV_8UC3);
+    cv::randn(noise, 0, 3);
+    img += noise;
+    return img;
+}
+
+} // namespace
+
+TEST_CASE("pad detector finds bright pads on a DIM bare board", "[blob][pads]")
+{
+    // Field failure ERREUR #59: dim scene → MSER yields pad-sized noise blobs
+    // while real pads go undetected. The top-hat detector is relative to the
+    // LOCAL background — pads at brightness 110 on a 50-ish mask must all be
+    // found even though the whole scene is dark.
+    const double s = 6.0;
+    std::vector<cv::Point2f> padCenters;
+    const cv::Mat img = makeBareBoardImage(s, /*brightness=*/110, padCenters);
+
+    const auto dets = detectPadBlobs(img, s);
+    INFO("pads drawn = " << padCenters.size() << ", detected = " << dets.size());
+    REQUIRE(dets.size() >= padCenters.size() * 8 / 10);
+
+    // Each detection's center must sit on a drawn pad (≤ 2.5 px).
+    int onPad = 0;
+    for (const auto& d : dets) {
+        const cv::Point2f c(d.bbox.x + d.bbox.width * 0.5f,
+                            d.bbox.y + d.bbox.height * 0.5f);
+        for (const auto& gt : padCenters)
+            if (cv::norm(c - gt) <= 2.5) { ++onPad; break; }
+    }
+    INFO("detections on a real pad = " << onPad << "/" << dets.size());
+    REQUIRE(onPad >= static_cast<int>(dets.size()) - 3);  // ≤3 spurious
+}
+
+TEST_CASE("pad detector stays quiet on a blank noisy frame", "[blob][pads]")
+{
+    // Otsu on pure noise splits it — the absolute contrast floor must not.
+    cv::Mat img(480, 640, CV_8UC3, cv::Scalar(40, 40, 40));
+    cv::theRNG().state = 99;
+    cv::Mat noise(img.size(), CV_8UC3);
+    cv::randn(noise, 0, 6);
+    img += noise;
+    const auto dets = detectPadBlobs(img, 6.0);
+    INFO("detections on noise = " << dets.size());
+    REQUIRE(dets.size() <= 8);
+}
+
+TEST_CASE("pad detector + pads bootstrap align a bare board end to end", "[blob][pads][reanchor]")
+{
+    // The full ERREUR #57/#59 chain, model-free: bare board → bright-pad
+    // detection → pad-constellation bootstrap → pose. The iBOM project carries
+    // the same pads the image draws (absolute mm, like the parser fills them).
+    const double s = 6.0;
+    std::vector<cv::Point2f> padCentersPx;
+    const cv::Mat img = makeBareBoardImage(s, /*brightness=*/120, padCentersPx);
+
+    // Rebuild the matching project: same generator constants as the image.
+    ibom::IBomProject project;
+    {
+        std::mt19937 rng(41);
+        std::uniform_real_distribution<float> ux(12.f, 88.f);
+        std::uniform_real_distribution<float> uy(12.f, 68.f);
+        std::vector<cv::Point2f> centersMm;
+        while (centersMm.size() < 30) {
+            cv::Point2f c(ux(rng), uy(rng));
+            bool ok = true;
+            for (const auto& q : centersMm)
+                if (std::hypot(c.x - q.x, c.y - q.y) < 6.f) { ok = false; break; }
+            if (!ok) continue;
+            centersMm.push_back(c);
+            ibom::Component comp;
+            comp.reference = "R" + std::to_string(centersMm.size());
+            comp.layer     = ibom::Layer::Front;
+            comp.bbox      = { c.x - 1.7, c.y - 0.7, c.x + 1.7, c.y + 0.7 };
+            for (int k = -1; k <= 1; k += 2) {
+                ibom::Pad pad;
+                pad.position = { c.x + 1.1 * k, c.y };
+                pad.sizeX = 1.2;
+                pad.sizeY = 1.4;
+                pad.isSMD = true;
+                comp.pads.push_back(std::move(pad));
+            }
+            project.components.push_back(std::move(comp));
+        }
+        project.boardInfo.boardBBox = { 0.0, 0.0, 100.0, 80.0 };
+    }
+
+    const auto dets = detectPadBlobs(img, s);
+    INFO("detections = " << dets.size());
+
+    ComponentReanchor::Params rp;
+    rp.fitSimilarity = true;
+    rp.constellation = ComponentReanchor::Constellation::Pads;
+    const auto boot = ComponentReanchor::bootstrap(dets, project,
+                                                   ibom::Layer::Front, s, rp);
+    INFO(boot.message);
+    REQUIRE(boot.found);
+    // A clean bare-board lock must be strongly supported — this is the number
+    // that separates a real lock from the field aliases (44-65 %).
+    REQUIRE(boot.inliers >= static_cast<int>(0.75 * boot.matches));
+
+    // The image draws the board at (60, 40) px with scale s: the recovered
+    // pose must map pad mm-positions onto the drawn pads.
+    std::vector<cv::Point2f> pcb, proj;
+    for (const auto& comp : project.components)
+        for (const auto& pad : comp.pads)
+            pcb.push_back({ static_cast<float>(pad.position.x),
+                            static_cast<float>(pad.position.y) });
+    cv::perspectiveTransform(pcb, proj, boot.homography);
+    std::vector<double> errs;
+    for (size_t i = 0; i < pcb.size(); ++i) {
+        const cv::Point2f gt(60.f + pcb[i].x * static_cast<float>(s),
+                             40.f + pcb[i].y * static_cast<float>(s));
+        errs.push_back(cv::norm(proj[i] - gt));
+    }
+    std::nth_element(errs.begin(), errs.begin() + errs.size() / 2, errs.end());
+    INFO("median reprojection vs drawn pads = " << errs[errs.size() / 2] << " px");
+    REQUIRE(errs[errs.size() / 2] < 3.0);
 }

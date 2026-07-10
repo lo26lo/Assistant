@@ -108,3 +108,30 @@ TEST_CASE("reset() drops the pending (a pose was applied elsewhere)", "[reanchor
     REQUIRE(g.evaluate(corners(40.f), corners(0), false, 4000, kP).action
             == Action::Hold);
 }
+
+TEST_CASE("healthy-tracking cap defeats a repeatable aliased estimate", "[reanchorgate]")
+{
+    // ERREUR #58, the field « clack »: a perfect user-blessed pose, healthy
+    // tracking — and a pad-lattice alias 185 px away that reproduces
+    // IDENTICALLY on consecutive ticks. Without the cap, tick 1 arms the
+    // pending and tick 2 confirms it: the overlay jumps sideways.
+    ReanchorGate g;
+    ReanchorGate::Params p = kP;
+    p.maxShiftPx = 60.0;
+
+    REQUIRE(g.evaluate(corners(185.f), corners(0), false, 1000, p).action
+            == Action::Skip);
+    // The identical alias on the next tick must NOT confirm anything.
+    REQUIRE(g.evaluate(corners(185.f), corners(0), false, 4000, p).action
+            == Action::Skip);
+
+    // Lost recovery is exempt: huge shifts are the point there.
+    REQUIRE(g.evaluate(corners(185.f), corners(0), true, 7000, p).action
+            == Action::Apply);
+
+    // An in-cap real drift still corrects through the two-tick confirmation.
+    REQUIRE(g.evaluate(corners(40.f), corners(0), false, 10000, p).action
+            == Action::Hold);
+    REQUIRE(g.evaluate(corners(41.f), corners(0), false, 13000, p).action
+            == Action::Apply);
+}

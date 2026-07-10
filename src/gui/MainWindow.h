@@ -13,6 +13,7 @@
 
 class QStackedWidget;
 class QComboBox;
+class QDialog;
 
 namespace ibom {
 class Application;
@@ -181,6 +182,18 @@ private:
 
     bool m_darkMode = true;
     bool m_cameraFullscreen = false;
+
+    // Re-anchor debug view (Dev menu): a lazily-created window that displays
+    // the newest annotated frame the re-anchor workers drop under
+    // dataDir()/debug — the same images used to diagnose alignment in the
+    // field, live and in-app instead of hunting for JPGs on disk.
+    void toggleReanchorDebugView(bool on);
+    void refreshReanchorDebugView();
+    QDialog* m_reanchorDbgDialog = nullptr;
+    QLabel*  m_reanchorDbgLabel  = nullptr;
+    QTimer*  m_reanchorDbgTimer  = nullptr;
+    QAction* m_actReanchorDbg    = nullptr;
+    qint64   m_reanchorDbgMtime  = 0;
 };
 
 } // namespace ibom::gui
