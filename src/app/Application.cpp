@@ -195,6 +195,43 @@ std::vector<ai::Detection> filterToBoardRegion(
     return kept;
 }
 
+/// Axis-aligned image ROI covering the board quad under a KNOWN pose, expanded
+/// by marginFrac (the "board + 1-2 cm" the user asked to scan), clamped to the
+/// frame. Empty when the pose is invalid. Cropping detection to this — rather
+/// than detecting full-frame and discarding — matters: detectPadBlobs's Otsu
+/// threshold is computed over its input, so a bright background glare in the
+/// frame raises the cut and suppresses real pads. Restricting to the board
+/// makes the threshold adapt to the board alone (ERREUR #59, field follow-up).
+cv::Rect boardRoi(const IBomProject& project, const overlay::Homography& pose,
+                  double marginFrac, const cv::Size& imageSize)
+{
+    if (!pose.isValid()) return {};
+    const auto& bb = project.boardInfo.boardBBox;
+    const double mx = (bb.maxX - bb.minX) * marginFrac;
+    const double my = (bb.maxY - bb.minY) * marginFrac;
+    float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+    for (const auto& c : { cv::Point2f(bb.minX - mx, bb.minY - my),
+                           cv::Point2f(bb.maxX + mx, bb.minY - my),
+                           cv::Point2f(bb.maxX + mx, bb.maxY + my),
+                           cv::Point2f(bb.minX - mx, bb.maxY + my) }) {
+        const cv::Point2f p = pose.pcbToImage(c);
+        minx = std::min(minx, p.x); maxx = std::max(maxx, p.x);
+        miny = std::min(miny, p.y); maxy = std::max(maxy, p.y);
+    }
+    const cv::Rect r(static_cast<int>(std::floor(minx)),
+                     static_cast<int>(std::floor(miny)),
+                     static_cast<int>(std::ceil(maxx - minx)),
+                     static_cast<int>(std::ceil(maxy - miny)));
+    return r & cv::Rect(0, 0, imageSize.width, imageSize.height);
+}
+
+/// Shift detection bboxes back to full-frame coordinates after detecting on a
+/// crop.
+void offsetDetections(std::vector<ai::Detection>& dets, const cv::Point2f& off)
+{
+    for (auto& d : dets) { d.bbox.x += off.x; d.bbox.y += off.y; }
+}
+
 } // namespace
 
 Application::Application(QApplication& qapp)
@@ -1565,8 +1602,14 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
             };
             overlay::Homography quadPose;
             quadPose.setMatrix(cv::getPerspectiveTransform(pcb, blr.imageCorners));
+            // Scan only the board + margin (the located surface + ~1-2 cm) so
+            // the pad detector's Otsu adapts to the board, not the background.
+            const cv::Rect roi = boardRoi(*project, quadPose, 0.2, colorCopy.size());
+            const cv::Mat detImg = roi.area() > 0 ? colorCopy(roi) : colorCopy;
             std::vector<ai::Detection> padsOnBoard =
-                overlay::detectPadBlobs(colorCopy, expectedPixelsPerMm);
+                overlay::detectPadBlobs(detImg, expectedPixelsPerMm);
+            offsetDetections(padsOnBoard,
+                             { static_cast<float>(roi.x), static_cast<float>(roi.y) });
             padsOnBoard = filterToBoardRegion(padsOnBoard, *project, quadPose, 0.2);
             overlay::ComponentReanchor::Params rpo;
             rpo.fitSimilarity = true;
@@ -1805,27 +1848,33 @@ void Application::componentReanchor(bool silent)
     const ibom::Layer activeLayer = m_activeLayer;  // snapshot for the worker
     watcher->setFuture(QtConcurrent::run([detector, colorCopy, project, priorPose,
                                           scalePrior, activeLayer]() {
-        // Detections from the trained model when loaded, else model-free blobs
-        // (classic CV) — component-based re-anchor works with an empty models/.
-        // High blob cap: per-constellation subsets below re-cap (ERREUR #58 —
-        // the old 300 cap let large background junk evict the small pads).
-        const std::vector<ai::Detection> detections =
+        // Scan ONLY the board + margin, not the whole frame (field follow-up):
+        // the periodic re-anchor always has a prior pose, so crop detection to
+        // the board ROI up front. This isn't just cosmetic — detectPadBlobs's
+        // Otsu adapts to its input, so cropping out the wood/mat/glare that
+        // fills ~60 % of the frame keeps the threshold on the board and stops
+        // the glare from suppressing real pads. Detections are offset back to
+        // full-frame coords so the pose and the debug dump stay in frame space.
+        const cv::Rect roi = boardRoi(*project, priorPose, 0.25, colorCopy.size());
+        const cv::Mat detImg = roi.area() > 0 ? colorCopy(roi) : colorCopy;
+        const cv::Point2f roiOff(static_cast<float>(roi.x), static_cast<float>(roi.y));
+
+        std::vector<ai::Detection> detections =
             detector ? detector->detect(colorCopy)
-                     : overlay::detectComponentBlobs(colorCopy, scalePrior,
+                     : overlay::detectComponentBlobs(detImg, scalePrior,
                                                      /*maxDetections=*/600);
-        std::vector<ai::Detection> compDets = detections;
         std::vector<ai::Detection> padDets;
         if (!detector) {
             // Pad attempt: DEDICATED bright-on-mask pad detector (ERREUR #59)
             // — physically grounded, holds up in dim scenes where MSER yields
             // pad-sized noise blobs while the actual pads go undetected.
-            padDets = overlay::detectPadBlobs(colorCopy, scalePrior);
+            padDets = overlay::detectPadBlobs(detImg, scalePrior);
+            offsetDetections(detections, roiOff);
+            offsetDetections(padDets, roiOff);
         }
-        // Board-region mask (ERREUR #59): the periodic re-anchor always has a
-        // prior pose — drop every detection outside the projected board (+25 %
-        // margin) so the wood/mat/glare junk that fills ~60 % of the frame
-        // can't feed the bootstrap fallback or breed aliases. estimate() gates
-        // per-pad anyway; this is what cleans the prior-free fallback.
+        std::vector<ai::Detection> compDets = detections;
+        // Final polygon trim: the ROI is the axis-aligned box of a possibly
+        // rotated quad, so its corners spill past the board — drop those.
         if (priorPose.isValid()) {
             compDets = filterToBoardRegion(compDets, *project, priorPose, 0.25);
             padDets  = filterToBoardRegion(padDets,  *project, priorPose, 0.25);

@@ -29,6 +29,14 @@
 
 ---
 
+## État actuel — au 2026-07-09 (Recadrage carte AVANT détection — pas seulement filtrage après)
+
+> **2026-07-09 (suite 144)** : l'utilisateur voit dans la nouvelle vue de debug que la détection scanne **tout le cadre** (cercles rouges/magenta sur le bois et le reflet) alors qu'on avait convenu de ne scanner que la carte +2 cm. Vrai défaut, pas cosmétique : la suite 141 masquait les détections **après** coup (`filterToBoardRegion`) mais `detectPadBlobs` calcule son **Otsu sur toute l'image** → le reflet fait monter le seuil et **supprime de vrais pads**.
+> - **`boardRoi`** (nouveau, `Application.cpp`) : ROI axis-aligned du quad projeté + marge, clampée au cadre. **`offsetDetections`** : re-décale les bboxes en coords plein-cadre après détection sur crop.
+> - **Périodique** (a toujours une pose) + **contour+pads** (a le quad) : détection lancée sur `colorCopy(roi)` puis offset → Otsu/top-hat s'adaptent à la carte seule, plus au reflet. Le `filterToBoardRegion` reste en trim final (coins de la ROI hors quad tourné). Le dump reçoit les détections offset → la vue de debug ne montre plus de cercles sur le fond.
+> - Seul le **cold-start** (1er Auto-Align, aucune pose ni quad connus) scanne encore plein-cadre — inévitable, on ne sait pas encore où est la carte. Dès qu'un lock existe, tout est recadré (« une fois qu'on est sûr d'avoir détecté la carte, on ne scanne que la surface +1-2 cm » — exactement la demande).
+> - ⚠️ Application.cpp non compilé ici. Reste : 9/9 PASS. Fichiers : `src/app/Application.cpp`, docs.
+
 ## État actuel — au 2026-07-09 (Menu Dev : vue de debug re-anchor en direct)
 
 > **2026-07-09 (suite 143)** : demande utilisateur — pouvoir activer, depuis le menu Dev, une **vue live** comme les images de debug (au lieu d'aller chercher les JPG sur disque). Approche low-risk : le dump écrit déjà `dataDir()/debug/reanchor_0..9.jpg` en rotation ; la vue affiche simplement la **plus récente**.
