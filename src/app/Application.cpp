@@ -67,6 +67,7 @@
 #include <QFutureWatcher>
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -671,6 +672,12 @@ void Application::createSubsystems()
         const fs::path rulesPath = fs::exists(overridePath) ? overridePath : defaultPath;
         QMetaObject::invokeMethod(m_datasetCreator, "setClassRulesPath", Qt::QueuedConnection,
             Q_ARG(QString, QString::fromStdString(rulesPath.string())));
+        // Same rules feed the class-aware matching prior (plan Modèle V2 §3a):
+        // component → canonical class → MODEL class id, consumed by
+        // ComponentReanchor::useClassPrior once a multi-class model is loaded.
+        m_classMapper = std::make_unique<features::ClassMapper>();
+        if (!m_classMapper->load(rulesPath.string()))
+            m_classMapper.reset();
     }
 
     // Periodic re-anchor timer (plan B): during live tracking, correct
@@ -1495,9 +1502,12 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
 
     ai::ComponentDetector* detector = componentDetector();
     const ibom::Layer activeLayer = m_activeLayer;  // snapshot for the worker
+    // Class-aware matching prior (plan Modèle V2 §3a) — empty unless a
+    // multi-class model is ready.
+    const std::vector<int> classPrior = buildClassPrior();
     watcher->setFuture(QtConcurrent::run([colorCopy, depthCopy, project,
                                           expectedPixelsPerMm, detector,
-                                          activeLayer]() {
+                                          activeLayer, classPrior]() {
         // Detection-first (docs/AUTO_ALIGN_V2_PLAN.md): register the detected-
         // component constellation against the iBOM layout — needs no visible
         // board outline, so it works exactly where the geometric path
@@ -1531,12 +1541,17 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
             // noise-fits its perspective terms there).
             overlay::ComponentReanchor::Params rp;
             rp.fitSimilarity = (detector == nullptr);
+            // Class-aware matching (§3a): with a multi-class model, a
+            // component may only match a detection of its own class — kills
+            // the 180° alias on any class-asymmetric board.
+            rp.useClassPrior = (detector != nullptr && !classPrior.empty());
             // Component-body attempt: the 300 largest (historic behaviour —
             // detectComponentBlobs returns area-descending).
             std::vector<ai::Detection> compDets = detections;
             if (!detector && compDets.size() > 300) compDets.resize(300);
             auto boot = overlay::ComponentReanchor::bootstrap(
-                compDets, *project, activeLayer, expectedPixelsPerMm, rp);
+                compDets, *project, activeLayer, expectedPixelsPerMm, rp,
+                classPrior);
             {
                 // Pad-constellation attempt (ERREUR #57/#59): bodies vs pads,
                 // keep the better-supported fit. Pad centroids are CV blobs
@@ -1631,6 +1646,34 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
         }
         return blr;
     }));
+}
+
+std::vector<int> Application::buildClassPrior() const
+{
+    // MODEL class id expected for each component of the loaded project, or
+    // empty when the prior can't help: no project, no mapper, no ready model,
+    // or a presence-only (single-class) model — matching everything to the
+    // same class would constrain nothing.
+    std::vector<int> prior;
+    if (!m_ibomProject || !m_classMapper || !componentDetector() || !m_modelManager)
+        return prior;
+    const auto& modelNames = m_modelManager->classNames();
+    if (modelNames.size() < 2)
+        return prior;
+    const auto& canonical = m_classMapper->classNames();
+    prior.reserve(m_ibomProject->components.size());
+    for (const auto& c : m_ibomProject->components) {
+        const int canonId = m_classMapper->classId(c);
+        int modelId = -1;  // unknown → unconstrained for this component
+        if (canonId >= 0 && canonId < static_cast<int>(canonical.size())) {
+            const auto it = std::find(modelNames.begin(), modelNames.end(),
+                                      canonical[canonId]);
+            if (it != modelNames.end())
+                modelId = static_cast<int>(it - modelNames.begin());
+        }
+        prior.push_back(modelId);
+    }
+    return prior;
 }
 
 void Application::autoStartLiveTracking()
@@ -1842,8 +1885,11 @@ void Application::componentReanchor(bool silent)
     });
 
     const ibom::Layer activeLayer = m_activeLayer;  // snapshot for the worker
+    // Class-aware matching prior (plan Modèle V2 §3a) — empty unless a
+    // multi-class model is ready.
+    const std::vector<int> classPrior = buildClassPrior();
     watcher->setFuture(QtConcurrent::run([detector, colorCopy, project, priorPose,
-                                          scalePrior, activeLayer]() {
+                                          scalePrior, activeLayer, classPrior]() {
         // Scan ONLY the board + margin, not the whole frame (field follow-up):
         // the periodic re-anchor always has a prior pose, so crop detection to
         // the board ROI up front. This isn't just cosmetic — detectPadBlobs's
@@ -1891,6 +1937,10 @@ void Application::componentReanchor(bool silent)
         // onto something.
         rp.matchGateMm  = 5.0;
         rp.scalePxPerMm = scalePrior;
+        // Class-aware matching (§3a): with a multi-class model, a component
+        // may only match a detection of its own class — kills the 180° alias
+        // on any class-asymmetric board.
+        rp.useClassPrior = (detector != nullptr && !classPrior.empty());
         overlay::ComponentReanchor::Params rpPads = rp;
         rpPads.constellation = overlay::ComponentReanchor::Constellation::Pads;
         // Pad blob centroids are CV detections whatever the primary detector
@@ -1907,7 +1957,7 @@ void Application::componentReanchor(bool silent)
         // prior — no pose yet, or a pose so stale (board moved/picked up)
         // that nothing falls inside the matching radius anymore.
         auto res = overlay::ComponentReanchor::estimate(
-            compDets, *project, priorPose, activeLayer, {}, rp);
+            compDets, *project, priorPose, activeLayer, classPrior, rp);
         {
             const auto resPads = overlay::ComponentReanchor::estimate(
                 padDets, *project, priorPose, activeLayer, {}, rpPads);
@@ -1916,7 +1966,7 @@ void Application::componentReanchor(bool silent)
         }
         if (!res.found) {
             res = overlay::ComponentReanchor::bootstrap(
-                compDets, *project, activeLayer, scalePrior, rp);
+                compDets, *project, activeLayer, scalePrior, rp, classPrior);
             const auto bootPads = overlay::ComponentReanchor::bootstrap(
                 padDets, *project, activeLayer, scalePrior, rpPads);
             if (bootPads.found && (!res.found || ratio(bootPads) > ratio(res)))

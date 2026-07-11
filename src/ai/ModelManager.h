@@ -26,6 +26,11 @@ public:
     /// Get class name by index.
     std::string className(int classId) const;
 
+    /// All class names of the loaded model (.txt sidecar), in model-id order.
+    /// Used to translate our canonical footprint classes into MODEL class ids
+    /// for class-aware matching (ComponentReanchor::useClassPrior).
+    const std::vector<std::string>& classNames() const { return m_classNames; }
+
     /// Get all available model names.
     std::vector<std::string> availableModels() const;
 

@@ -289,7 +289,8 @@ ComponentReanchorResult ComponentReanchor::bootstrap(
     const ibom::IBomProject& project,
     ibom::Layer activeLayer,
     double scalePriorPxPerMm,
-    const Params& params)
+    const Params& params,
+    const std::vector<int>& classOfComponent)
 {
     ComponentReanchorResult r;
 
@@ -682,7 +683,10 @@ ComponentReanchorResult ComponentReanchor::bootstrap(
     // bootstrap prior — don't let a caller-set physical gate re-shrink it.
     refine.matchGateMm = 0.0;
 
-    r = estimate(detections, project, prior, activeLayer, {}, refine);
+    // The class prior (when provided) acts HERE, at the validation that
+    // decides found/inliers: an aliased pose lands components on wrong-class
+    // detections, which the class-gated matching refuses to pair.
+    r = estimate(detections, project, prior, activeLayer, classOfComponent, refine);
     r.message = "bootstrap(" + std::to_string(bestScore) + " consensus): " + r.message;
     if (r.found)
         spdlog::info("[comp-reanchor] {}", r.message);

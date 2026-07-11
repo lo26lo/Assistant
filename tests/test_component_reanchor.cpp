@@ -553,6 +553,76 @@ TEST_CASE("orientation vote fixes the corner assignment the outline can't", "[re
     REQUIRE(errs[errs.size() / 2] < 3.0);
 }
 
+TEST_CASE("class prior kills a geometrically perfect 180° alias", "[reanchor]")
+{
+    // Plan Modèle V2 §3a: a 180°-symmetric layout — 20 components in a
+    // zigzag row where the rotation maps component i EXACTLY onto component
+    // 19−i. Geometry cannot tell the true pose from the alias; the classes
+    // can (left half class 0, right half class 1): under the alias every
+    // pair is cross-class.
+    ibom::IBomProject project;
+    std::vector<int> classOfComponent;
+    for (int i = 0; i < 20; ++i) {
+        ibom::Component c;
+        c.reference = "U" + std::to_string(i);
+        c.layer     = ibom::Layer::Front;
+        const double x = 10.0 + i * 4.0;
+        const double y = 40.0 + ((i % 2) ? 2.0 : -2.0);  // symmetric zigzag
+        c.bbox = { x - 1.0, y - 1.0, x + 1.0, y + 1.0 };
+        project.components.push_back(std::move(c));
+        classOfComponent.push_back(i < 10 ? 0 : 1);
+    }
+    project.boardInfo.boardBBox = { 0.0, 0.0, 96.0, 80.0 };
+
+    // Detections at the TRUE pose (s=5, t=(100,60)), carrying true classes.
+    const double s = 5.0;
+    std::vector<ai::Detection> dets;
+    for (int i = 0; i < 20; ++i) {
+        const double x = 10.0 + i * 4.0;
+        const double y = 40.0 + ((i % 2) ? 2.0 : -2.0);
+        auto d = detectionAt({ static_cast<float>(s * x + 100.0),
+                               static_cast<float>(s * y + 60.0) });
+        d.classId = (i < 10) ? 0 : 1;
+        dets.push_back(d);
+    }
+
+    // Aliased prior: 180° about the row centre — lands component i exactly
+    // on detection 19−i (x_i + x_{19−i} = 96, zigzag flips with parity).
+    cv::Mat Ha = (cv::Mat_<double>(3, 3) <<
+        -s, 0, s * 96.0 + 100.0,
+        0, -s, s * 80.0 + 60.0,
+        0, 0, 1);
+    ibom::overlay::Homography aliasPrior;
+    aliasPrior.setMatrix(Ha);
+
+    ComponentReanchor::Params p;
+    p.fitSimilarity = true;
+
+    SECTION("geometry alone happily locks the alias — the blind spot") {
+        const auto r = ComponentReanchor::estimate(dets, project, aliasPrior,
+                                                   ibom::Layer::Front,
+                                                   classOfComponent, p);
+        INFO(r.message);
+        REQUIRE(r.found);  // documents WHY the class prior is needed
+    }
+    SECTION("the class prior refuses every cross-class pair") {
+        p.useClassPrior = true;
+        const auto alias = ComponentReanchor::estimate(dets, project, aliasPrior,
+                                                       ibom::Layer::Front,
+                                                       classOfComponent, p);
+        INFO(alias.message);
+        REQUIRE_FALSE(alias.found);
+
+        // …while the TRUE pose still locks fully under the same constraint.
+        const auto ok = ComponentReanchor::estimate(
+            dets, project, makeSimilarityPose(s, 100.0, 60.0),
+            ibom::Layer::Front, classOfComponent, p);
+        INFO(ok.message);
+        REQUIRE(ok.found);
+        REQUIRE(ok.inliers == 20);
+    }
+}
+
 TEST_CASE("bootstrap rejects an unrelated constellation", "[reanchor]")
 {
     std::vector<cv::Point2f> centers;

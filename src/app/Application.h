@@ -62,6 +62,7 @@ class Measurement;
 class SnapshotHistory;
 class DatasetCreator;
 class RemoteView;
+class ClassMapper;
 }
 
 namespace exports {
@@ -291,6 +292,15 @@ private:
     // into a unit-tested class, step 2 of the AlignmentController extraction
     // (§7.1). Application keeps only the QTimer plumbing around it.
     AlignmentController m_alignCtl;
+
+    // Class-aware matching prior (plan Modèle V2 §3a): footprint_classes.json
+    // rules (shared with the DatasetCreator) map each iBOM component to a
+    // canonical class, translated into MODEL class ids via the loaded model's
+    // label list. Fed to ComponentReanchor::useClassPrior — a connector can
+    // then never match a resistor, which kills the 180° alias as soon as the
+    // model is multi-class. Empty when no multi-class model is ready.
+    std::unique_ptr<features::ClassMapper> m_classMapper;
+    std::vector<int> buildClassPrior() const;
 
     // Last tracking state reported by trackingStateChanged (Lost detection).
     int  m_lastTrackingState  = -1;

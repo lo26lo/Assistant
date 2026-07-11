@@ -29,6 +29,14 @@
 
 ---
 
+## État actuel — au 2026-07-10 (§3a fait : useClassPrior branché — les datasets publics deviennent exploitables)
+
+> **2026-07-10 (suite 151)** : question utilisateur — « on avait parlé que ces datasets permettaient de connaître les composants principaux avec leurs pads, peut-on les utiliser ? » → oui, deux réponses livrées :
+> - **Doc (PLAN_MODELE_V2 §Phase 2)** : chemin **V2b-public** — les datasets publics suffisent pour le multi-classes SANS attendre les captures banc (`fetch` ×2-3 → `remap_classes.py --map` sur les 14 classes canoniques → `merge` → `train`). Les types de composants généralisent d'une carte à l'autre.
+> - **Code (§3a) : `useClassPrior` enfin alimenté** — la plomberie `ComponentReanchor` existait, jamais branchée (`{}` partout). Nouveau `Application::buildClassPrior()` : composant iBOM → classe canonique (via le **`ClassMapper` réutilisé du DatasetCreator**, mêmes règles `footprint_classes.json`) → **id de classe du MODÈLE** par lookup de nom dans le `.txt` (`ModelManager::classNames()`, nouvel accesseur) — robuste à l'ordre des classes du modèle, -1 = non contraint. Passé aux tentatives **composants** (estimate + bootstrap, les 2 workers) ; `bootstrap()` gagne un paramètre `classOfComponent` (défaut `{}`) forwardé au refine (là où found/inliers se décident). Actif seulement si modèle **multi-classes** chargé (≥2 noms) — le modèle presence actuel ne change rien.
+> - **Test** (`test_component_reanchor`, +1 cas) : layout 20 composants en zigzag **parfaitement symétrique à 180°** (géométrie incapable de départager) — sans prior l'alias **est verrouillé** (documente l'angle mort) ; avec prior, refusé, et la vraie pose locke 20/20. **10/10 cibles PASS.**
+> - Effet : dès qu'un modèle V2b (multi-classes) est déposé dans `models/`, le matching classe-à-classe s'active tout seul et l'alias 180° devient impossible sur toute carte à classes asymétriques. Fichiers : `src/app/Application.{h,cpp}`, `src/overlay/ComponentReanchor.{h,cpp}`, `src/ai/ModelManager.h`, `tests/test_component_reanchor.cpp`, docs. ⚠️ Application non compilé ici (build Jetson).
+
 ## État actuel — au 2026-07-10 (Plan Modèle V2 — le modèle générique est « inutile dans l'état »)
 
 > **2026-07-10 (suite 150)** : verdict terrain via le nouveau test Dev — le modèle **fonctionne** (`AI pipeline ready`, TensorRT, **85 ms/inférence**, warnings TRT cosmétiques) mais est **inutile dans l'état** (1 détection sur la carte nue) : c'est le détecteur Piste B du TUTO_MODELE_REANCRAGE — présence de composants génériques, dataset Roboflow étranger, mono-classe. Demande utilisateur : « comment faire mieux, fais un plan avant toute chose » → **[PLAN_MODELE_V2.md](PLAN_MODELE_V2.md)** (doc seul, pas de code).

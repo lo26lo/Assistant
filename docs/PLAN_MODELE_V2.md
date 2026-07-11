@@ -67,7 +67,16 @@ prévoir une session de rodage.
   capturer maintenant.
 
 ### Phase 2 — Entraînement V2 (PC RTX 5070, 1-2 h de GPU)
-- `merge_datasets.py` : Roboflow SMD (généralisation) + tes sessions (spécifique).
+- **V2b-public — disponible SANS attendre la Phase 1** : les datasets publics
+  (TUTO_DATASETS §1) suffisent pour apprendre les **types** de composants
+  (résistance/condo/IC/connecteur… généralisent bien d'une carte à l'autre,
+  avec leurs formes de pads). Chemin : `fetch_roboflow_dataset.py` × 2-3 →
+  `remap_classes.py --map` (projette les noms de classes source sur nos
+  **14 classes canoniques** — modèle : `scripts/class_mapping.example.yaml`)
+  → `merge_datasets.py` → `train_yolo.py`. C'est la réponse à « peut-on
+  utiliser ces datasets » : oui, pour le multi-classes, dès maintenant.
+- `merge_datasets.py` : Roboflow SMD (généralisation) + tes sessions
+  (spécifique, quand la Phase 1 les aura produites).
 - **V2a (rapide)** : rester presence-1-classe, fine-tune depuis le `best.pt`
   actuel (`train_yolo.py … --model best.pt`) → gain immédiat carte peuplée.
 - **V2b (le vrai gain)** : multi-classes via le mapping
@@ -78,12 +87,15 @@ prévoir une session de rodage.
   sur le Jetson, vider `data/tensorrt-cache/` si le modèle change de forme.
 
 ### Phase 3 — Code (sessions Claude, en parallèle de 1-2)
-- **3a. Brancher `useClassPrior`** : construire `classOfComponent` depuis
-  `footprint_classes.json` (même logique de mapping que le DatasetCreator) et le
-  passer aux `estimate()`/`bootstrap()` quand le modèle est multi-classes.
-  C'est le débouché algorithmique de V2b : matching contraint par classe →
-  l'alias 180° devient géométriquement impossible dès qu'une classe asymétrique
-  (connecteur, QFN, module) est visible. Testable en pur (synthétique).
+- **3a. Brancher `useClassPrior` — ✅ FAIT (suite 151)** : `buildClassPrior()`
+  (Application) mappe chaque composant iBOM → classe canonique (via le
+  `ClassMapper` partagé avec le DatasetCreator) → **id de classe du MODÈLE**
+  (lookup par nom dans le `.txt` du modèle, robuste à l'ordre) ; passé aux
+  `estimate()`/`bootstrap()` des tentatives composants, activé seulement si
+  modèle multi-classes chargé. Test : un alias 180° **géométriquement
+  parfait** (layout symétrique) est verrouillé sans le prior, refusé avec —
+  et la vraie pose locke à 20/20 sous la même contrainte. S'active tout seul
+  dès qu'un modèle V2b est déposé.
 - **3b. (Option c) Labels « pad » dans le DatasetCreator** : projeter aussi les
   pads iBOM (la constellation existe — suite 136) pour les sessions carte nue →
   permet d'entraîner la classe « pad ». Petit ajout, même mécanique que les bboxes.

@@ -182,12 +182,21 @@ public:
     /// @param scalePriorPxPerMm  When > 0 (e.g. D405 pinhole fx/distance, or
     ///        the current px/mm), hypotheses outside ~[0.55, 1.8]× of it are
     ///        rejected early — fewer iterations wasted, fewer aliases.
+    /// @param classOfComponent  Optional (same contract as estimate()): the
+    ///        MODEL class id expected per component. The pair→pair consensus
+    ///        stays class-blind, but the prior is forwarded to the refine
+    ///        estimate() — where found/inliers are decided — so an aliased
+    ///        pose that lands components on wrong-class detections starves
+    ///        there (a connector cannot match a resistor: the 180° alias of
+    ///        a class-asymmetric board becomes impossible). Only active when
+    ///        params.useClassPrior is set.
     static ComponentReanchorResult bootstrap(
         const std::vector<ai::Detection>& detections,
         const ibom::IBomProject& project,
         ibom::Layer activeLayer,
         double scalePriorPxPerMm,
-        const Params& params);
+        const Params& params,
+        const std::vector<int>& classOfComponent = {});
 
     /// Convenience overload (default Params) — defined in the .cpp for the
     /// same nested-aggregate reason as the estimate() overload above.
