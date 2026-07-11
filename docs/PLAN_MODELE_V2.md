@@ -99,9 +99,13 @@ prévoir une session de rodage.
 - **3b. (Option c) Labels « pad » dans le DatasetCreator** : projeter aussi les
   pads iBOM (la constellation existe — suite 136) pour les sessions carte nue →
   permet d'entraîner la classe « pad ». Petit ajout, même mécanique que les bboxes.
-- **3c. Éval automatisée** : script comparant détections ↔ vérité iBOM projetée
-  sur les sessions capturées (précision/rappel par classe) — chaque itération de
-  modèle devient mesurable au lieu de « j'ai l'impression que ».
+- **3c. Éval automatisée — ✅ ÉCRIT (suite 152, à valider sur le PC GPU)** :
+  `scripts/eval_model.py` — précision/rappel/mAP50 **par classe** + verdict,
+  soit sur un `data.yaml`, soit directement sur des **sessions du
+  DatasetCreator** (data.yaml temporaire généré, classes canoniques par
+  défaut). Alerte spécifique quand la précision d'une classe est < 0.6
+  (mauvais pour `useClassPrior` : une classe confondue ferait rejeter de
+  bonnes correspondances).
 
 ### Phase 4 — Validation terrain (critères de succès mesurables)
 - Carte **peuplée** + modèle V2 : locks `components(model)` à ratio ≥ ~0.8,

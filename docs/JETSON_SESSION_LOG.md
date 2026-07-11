@@ -29,6 +29,11 @@
 
 ---
 
+## État actuel — au 2026-07-10 (§3c : script d'évaluation des modèles)
+
+> **2026-07-10 (suite 152)** : dernier volet code du plan Modèle V2 réalisable sans le banc — **`scripts/eval_model.py`** (§3c). Précision/rappel/mAP50 **par classe** + verdict global, deux entrées : `--data data.yaml` classique, ou `--sessions session_*` du DatasetCreator (data.yaml temporaire tout-en-val généré, classes canoniques `pcb_classes.json` par défaut). Alerte dédiée précision < 0.6 par classe (mauvais pour `useClassPrior`). Repères du plan §4 intégrés au verdict (rappel ≥ 0.7 pour le re-ancrage). Wrapper ultralytics `model.val()` — **non exécutable ici** (pas de torch), syntaxe validée (`py_compile`) ; à valider sur le PC RTX à la première éval V2. Fichiers : `scripts/eval_model.py` (nouveau), docs.
+> - **État du plan Modèle V2 côté code : 3a ✅ (useClassPrior) + 3c ✅ (éval) — il ne reste que 3b (labels pads, si option retenue). La balle est au banc/PC : Phase 0 (éval express), Phase 1 (captures), Phase 2 (entraînement V2b — possible dès maintenant depuis les datasets publics seuls).**
+
 ## État actuel — au 2026-07-10 (§3a fait : useClassPrior branché — les datasets publics deviennent exploitables)
 
 > **2026-07-10 (suite 151)** : question utilisateur — « on avait parlé que ces datasets permettaient de connaître les composants principaux avec leurs pads, peut-on les utiliser ? » → oui, deux réponses livrées :
