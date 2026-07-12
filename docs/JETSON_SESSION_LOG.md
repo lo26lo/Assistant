@@ -30,6 +30,10 @@
 
 ---
 
+## État actuel — au 2026-07-12 (Propositions de nouvelles features — doc seul)
+
+> **2026-07-12 (suite 146)** : demande utilisateur « propose-moi de nouvelles features dans un plan structuré ». Livrable : [FEATURE_PROPOSALS_2026-07.md](FEATURE_PROPOSALS_2026-07.md) — 10 propositions **absentes** des roadmaps existantes (INVESTIGATION_360 §11, IDEES_AMELIORATIONS), organisées en 4 thèmes : A) inspection sans modèle IA (scan mosaïque, golden-board diff — câble enfin HeatmapRenderer —, inspection 3D depth D405), B) workflow guidé (tour d'inspection, annotations épinglées, undo/audit), C) données (diff de révisions iBOM, bibliothèque de cartes keyée hash pcbdata), D) assistance temps réel (conseiller de scène — leçon des suites 138-141 —, loupe locale). Matrice de priorisation en §5 ; trio recommandé : tour guidé B1 + conseiller de scène D1, puis chaîne C2→A1→A2. **Aucun code modifié.** Fichiers : `docs/FEATURE_PROPOSALS_2026-07.md` (nouveau), ce journal. Le bloc « À valider au prochain build » est inchangé.
+
 ## État actuel — au 2026-07-10 (Minimap V2 — zoom/pan, grande vue, LOD, couverture, santé tracking)
 
 > **2026-07-10 (suite 145)** : refonte complète de `gui/BoardMinimap` (demande utilisateur : « la minimap est petite, si la carte est plus grosse ça n'ira pas — fais tout en une passe »). Le widget passe d'une vue fit-only bridée à 360 px de large à une carte navigable :
