@@ -2,6 +2,8 @@
 
 #include "ICameraSource.h"
 
+#include <opencv2/videoio.hpp>
+
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -55,6 +57,13 @@ public:
 
 private:
     void captureLoop();
+
+    /// Full open sequence (HW GStreamer attempt → V4L2/Auto backends → device
+    /// re-enumeration fallback → MJPG negotiation → warmup). Shared by the
+    /// initial open and the hot-reconnect path in captureLoop(). With quiet,
+    /// failures log at warn level and emit no captureError (reconnect retries
+    /// would otherwise spam the UI every backoff cycle).
+    bool openAndWarmup(cv::VideoCapture& cap, bool& openedViaGst, bool quiet);
 
     int m_deviceIndex;
     int m_width = 1920;

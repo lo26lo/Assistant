@@ -40,9 +40,17 @@ public:
     /// Set max FPS for streaming (throttle)
     void setMaxFps(int fps);
 
+    /// Access token clients must present (`AUTH <token>` as their first text
+    /// message) before receiving frames/status. Empty = open access (LAN
+    /// trust). Set BEFORE start(); embedded in the generated viewer URL hint.
+    void setToken(const QString& token) { m_token = token; }
+    QString token() const { return m_token; }
+
     /// Self-contained HTML viewer page (connects back over WebSocket).
     /// Written to disk by the application so it can be opened in a browser.
-    QString generateHTMLViewer() const;
+    /// includeToken embeds the access token in the page (only safe for the
+    /// copy written to the host's own disk — never over the wire unauthed).
+    QString generateHTMLViewer(bool includeToken = true) const;
 
 signals:
     void clientConnected(const QString& address);
@@ -59,6 +67,7 @@ private slots:
 private:
     void broadcastFrame();
     QByteArray compressFrame(const QImage& frame) const;
+    bool isAuthed(const QWebSocket* socket) const;
 
     std::unique_ptr<QWebSocketServer> m_server;
     std::vector<QWebSocket*>          m_clients;
@@ -69,6 +78,7 @@ private:
     int      m_jpegQuality   = 70;
     int      m_maxFps        = 15;
     bool     m_frameDirty    = false;
+    QString  m_token;
 };
 
 } // namespace ibom::features

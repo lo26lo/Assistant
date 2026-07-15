@@ -76,7 +76,7 @@ void RemoteView::pushFrame(const QImage& frame)
 void RemoteView::pushStatus(const QString& jsonStatus)
 {
     for (auto* client : m_clients) {
-        if (client->isValid()) {
+        if (client->isValid() && isAuthed(client)) {
             client->sendTextMessage(jsonStatus);
         }
     }
@@ -123,6 +123,14 @@ void RemoteView::onNewConnection()
     emit clientConnected(addr);
     spdlog::info("RemoteView: client connected from {}", addr.toStdString());
 
+    // With a token configured, the client sees no frames/status until it
+    // authenticates (`AUTH <token>`); tell it so instead of staying silent.
+    if (!m_token.isEmpty()) {
+        QJsonObject hello;
+        hello["auth"] = "required";
+        socket->sendTextMessage(QJsonDocument(hello).toJson(QJsonDocument::Compact));
+    }
+
     // Send the HTML viewer page on first text request
     // (Initial binary frames will be the video stream)
 }
@@ -147,14 +155,40 @@ void RemoteView::onTextMessage(const QString& message)
     auto* socket = qobject_cast<QWebSocket*>(sender());
     if (!socket) return;
 
+    if (message.startsWith(QStringLiteral("AUTH "))) {
+        const QString presented = message.mid(5).trimmed();
+        QJsonObject reply;
+        if (m_token.isEmpty() || presented == m_token) {
+            socket->setProperty("ibomAuthed", true);
+            reply["auth"] = "ok";
+            socket->sendTextMessage(QJsonDocument(reply).toJson(QJsonDocument::Compact));
+        } else {
+            reply["auth"] = "denied";
+            socket->sendTextMessage(QJsonDocument(reply).toJson(QJsonDocument::Compact));
+            spdlog::warn("RemoteView: bad token from {} — closing",
+                         socket->peerAddress().toString().toStdString());
+            socket->close(QWebSocketProtocol::CloseCodePolicyViolated);
+        }
+        return;
+    }
+
+    // The viewer page may be requested before auth (it's how a client gets
+    // the UI), but the baked-in token only goes to authenticated clients —
+    // otherwise GET_HTML would leak the very secret AUTH protects.
     if (message == "GET_HTML") {
-        socket->sendTextMessage(generateHTMLViewer());
+        socket->sendTextMessage(generateHTMLViewer(isAuthed(socket)));
     } else if (message == "GET_STATUS") {
+        if (!isAuthed(socket)) return;
         QJsonObject status;
         status["clients"] = clientCount();
         status["streaming"] = !m_latestFrame.isNull();
         socket->sendTextMessage(QJsonDocument(status).toJson(QJsonDocument::Compact));
     }
+}
+
+bool RemoteView::isAuthed(const QWebSocket* socket) const
+{
+    return m_token.isEmpty() || socket->property("ibomAuthed").toBool();
 }
 
 // ── Private ──────────────────────────────────────────────────────
@@ -167,7 +201,7 @@ void RemoteView::broadcastFrame()
     m_frameDirty = false;
 
     for (auto* client : m_clients) {
-        if (client->isValid()) {
+        if (client->isValid() && isAuthed(client)) {
             client->sendBinaryMessage(compressed);
         }
     }
@@ -189,7 +223,7 @@ QByteArray RemoteView::compressFrame(const QImage& frame) const
     return data;
 }
 
-QString RemoteView::generateHTMLViewer() const
+QString RemoteView::generateHTMLViewer(bool includeToken) const
 {
     QString html = R"(<!DOCTYPE html>
 <html>
@@ -214,13 +248,23 @@ QString RemoteView::generateHTMLViewer() const
         const params = new URLSearchParams(location.search);
         const host = params.get('host') || location.hostname || 'localhost';
         const port = params.get('port') || '__WS_PORT__';
+        // Access token: taken from the URL (?token=...), falling back to the
+        // value baked in when this page was generated on the host itself.
+        const token = params.get('token') || '__WS_TOKEN__';
         const ws = new WebSocket('ws://' + host + ':' + port);
         ws.binaryType = 'arraybuffer';
         let frames = 0;
         setInterval(() => { status.textContent = frames + ' FPS'; frames = 0; }, 1000);
 
         ws.onmessage = (e) => {
-            if (typeof e.data === 'string') return;
+            if (typeof e.data === 'string') {
+                try {
+                    const msg = JSON.parse(e.data);
+                    if (msg.auth === 'denied') status.textContent = 'Access denied (bad token)';
+                    else if (msg.auth === 'required' && !token) status.textContent = 'Token required (?token=...)';
+                } catch (_) {}
+                return;
+            }
             const blob = new Blob([e.data], { type: 'image/jpeg' });
             const url = URL.createObjectURL(blob);
             const img = new Image();
@@ -234,12 +278,16 @@ QString RemoteView::generateHTMLViewer() const
             img.src = url;
         };
 
-        ws.onopen = () => status.textContent = 'Connected';
+        ws.onopen = () => {
+            status.textContent = 'Connected';
+            if (token) ws.send('AUTH ' + token);
+        };
         ws.onclose = () => status.textContent = 'Disconnected';
     </script>
 </body>
 </html>)";
     html.replace(QStringLiteral("__WS_PORT__"), QString::number(m_port));
+    html.replace(QStringLiteral("__WS_TOKEN__"), includeToken ? m_token : QString());
     return html;
 }
 

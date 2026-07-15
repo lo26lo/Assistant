@@ -31,7 +31,7 @@
 | 46 | 2026-06-19 | Application.cpp — overlay caméra | ✅ RÉSOLU | [« Reset Alignment ne fait rien » : l'overlay est dessiné seulement si `m_homography->isValid()`, donc quand l'homographie devient invalide le bloc est sauté et la dernière image d'overlay reste figée à l'écran (jamais effacée)](#erreur-46--reset-alignment-ne-fait-rien-overlay-fige) |
 | 45 | 2026-06-19 | IBomParser.cpp — détection pin 1 | ✅ RÉSOLU | [`pin1` lu uniquement comme booléen alors que l'iBOM l'encode en entier → pin 1 jamais détectée pour les parts dont le pad pin 1 n'est pas nommé "1" (ex. ESP32 U7)](#erreur-45--pin1-ibom-entier-non-detecte) |
 | 44 | 2026-06-19 | BoardLocator.cpp — Auto-Align | ✅ RÉSOLU | [Auto-Align via profondeur "réussit" à score faible (0.13) sur carte coplanaire → overlay décalé ; la feuille blanche sous la carte ne servait à rien car le contour 2D n'était jamais essayé](#erreur-44--auto-align-depth-faible-score-contour-jamais-essaye) |
-| 43 | 2026-06-19 | Application — sortie process | 🔴 OUVERT | [Segmentation fault au moment de quitter l'app (après "Application exiting with code 0") — non investigué](#erreur-43--segfault-a-la-sortie-de-lapplication) |
+| 43 | 2026-06-19 | Application — sortie process | ✅ RÉSOLU (2026-07-15, à valider au build) | [Segmentation fault au moment de quitter l'app (après "Application exiting with code 0") — `Logger::shutdown()` appelé AVANT que `~Application` ne détruise les sous-systèmes qui loggent](#erreur-43--segfault-a-la-sortie-de-lapplication) |
 | 42 | 2026-06-19 | Application.cpp / BoardMinimap | ✅ RÉSOLU | [Clic minimap déplaçait tout l'overlay sur D405 (anchor 1-point pensé pour microscope FOV étroit) au lieu de surligner le composant](#erreur-42--clic-minimap-deplace-loverlay-sur-realsense-au-lieu-de-highlighter) |
 | 41 | 2026-06-18 | BoardLocator.cpp — Auto-Align depth | 🟡 CONTOURNÉ | [Auto-Align D405 intermittent : carte posée à plat sur une surface coplanaire → le plan de profondeur englobe carte + table (2.5×), rejet par `validateSize()`](#erreur-41--auto-align-d405-carte-coplanaire-avec-la-table) |
 | 40 | 2026-06-18 | StatsPanel.cpp — Inspection Progress | ✅ RÉSOLU (2026-07-06, à valider au build) | [`StatsPanel::setTotalComponents()` jamais appelé — le panneau Inspection Progress affiche toujours "No inspection data" / 0%](#erreur-40--settotalcomponents-jamais-appele--inspection-progress-toujours-a-zero) |
@@ -1775,9 +1775,9 @@ Quand on offre plusieurs stratégies de détection avec des forces complémentai
 
 ## ERREUR 43 — Segfault à la sortie de l'application
 
-**Date** : 2026-06-19
-**Composant** : `Application` — arrêt/destruction
-**Statut** : 🔴 OUVERT
+**Date** : 2026-06-19 (diagnostic 2026-07-15)
+**Composant** : `main.cpp` — ordre du teardown / `MainWindow` — objectName toolbar
+**Statut** : ✅ RÉSOLU (2026-07-15, suite 146 — à valider au build Jetson)
 
 ### Symptôme
 Dans le log terminal fourni par l'utilisateur, juste après la fermeture normale de la fenêtre :
@@ -1786,19 +1786,27 @@ Dans le log terminal fourni par l'utilisateur, juste après la fermeture normale
 QMainWindow::saveState(): 'objectName' not set for QToolBar 0xaaaaef79a040 'Main'
 Segmentation fault (core dumped)
 ```
-Le message « exiting with code 0 » et le warning Qt sortent **avant** le crash — donc `main()` est sorti proprement, et le segfault survient pendant le déroulement des destructeurs/cleanup process (probablement lié à l'ordre de destruction des `QThread`s : `m_trackingThread`/`m_datasetThread`, ou à un objet Qt détruit après son parent).
+Le message « exiting with code 0 » et le warning Qt sortent **avant** le crash — donc `main()` est sorti proprement, et le segfault survient pendant le déroulement des destructeurs/cleanup process.
 
-### Cause
-Non investigué. Pistes à explorer la prochaine fois que ça se reproduit :
-- Ordre de destruction `Application::~Application()` vs `QApplication` (créée dans `main.cpp` avant `Application`, donc devrait être détruite après — à vérifier que rien dans `~Application()` ne déclenche un signal/slot Qt après que `QApplication` a commencé sa propre destruction).
-- Les deux `QThread` dédiés (`m_trackingThread`, `m_datasetThread`) : `quit()`/`wait()` bien appelés avant la destruction du worker (`deleteLater` sur `finished`) ? Un `deleteLater` qui n'a pas le temps de s'exécuter avant la fin de la boucle d'événements peut laisser un objet Qt à moitié détruit.
-- Corrélation avec le warning `QMainWindow::saveState(): 'objectName' not set for QToolBar 'Main'` — possible mais pas confirmé ; ce warning seul ne devrait pas crasher.
+### Cause (identifiée 2026-07-15)
+**Ordre de teardown dans `main.cpp`** : l'`Application app` était une variable locale directe de `main()`, donc son destructeur ne s'exécute **qu'après** la dernière ligne du corps de `main()` — c'est-à-dire **après** `ibom::utils::Logger::shutdown()` (qui appelle `spdlog::shutdown()`). Or `~Application()` détruit les sous-systèmes dont plusieurs **loggent pendant leur arrêt** : `CameraCapture::~CameraCapture()` → `stop()` → `spdlog::info("Stopping camera capture...")`, idem RealSense, etc. Séquence fatale :
+1. `qapp.exec()` retourne
+2. `spdlog::info("Application exiting with code 0")`
+3. `Logger::shutdown()` → `spdlog::shutdown()` → le **logger par défaut devient nul**
+4. destruction de `app` (fin de scope de `main`) → `~Application` → `CameraCapture::stop()` → `spdlog::info(...)` **déréférence le logger nul** → SIGSEGV
 
-### Solution appliquée
-Aucune — pas encore reproduit/isolé. Noté ici uniquement parce que l'utilisateur en a fourni le log, par souci de ne pas le perdre.
+Le crash handler `posixCrashHandler` aggravait le tableau : lui aussi appelait `spdlog::critical()` / `spdlog::default_logger()->flush()` sur le logger déjà détruit, re-crashant dans le handler et masquant la vraie backtrace.
+
+Le warning `QToolBar 'Main' objectName not set` était réel mais **orthogonal** (il ne crashait pas) — juste du bruit qui a fait soupçonner le teardown Qt.
+
+### Solution appliquée ✅
+- **`main.cpp`** : `Application app` mise dans un **scope explicite `{ … }`** qui se ferme **avant** `Logger::shutdown()`. Le destructeur d'`Application` (et donc tous les `stop()` qui loggent) tourne maintenant pendant que le logger est encore vivant. `Logger::shutdown()` est la toute dernière chose.
+- **`posixCrashHandler`** : garde `if (auto* logger = spdlog::default_logger_raw())` avant de logger — plus de déréférencement d'un logger nul dans le handler (utile si un signal arrive après shutdown).
+- **`MainWindow::createToolBar()`** : `m_mainToolBar->setObjectName("MainToolBar")` — supprime le warning `saveState()` et fait que l'état de la toolbar est bien persisté.
 
 ### Leçon
-Si ce crash se reproduit et qu'on a le temps d'investiguer : lancer sous `gdb`/`valgrind --tool=memcheck` au moment du `Stop-Process`/fermeture de fenêtre pour obtenir une stack trace, plutôt que d'essayer de deviner depuis le seul "exiting with code 0" + segfault.
+Un objet à durée de vie « locale de `main` » est détruit **après** la dernière instruction du corps de `main` : tout `shutdown()` de ressource globale (logger, etc.) écrit à la fin de `main` s'exécute donc **avant** ces destructeurs. Quand ces destructeurs utilisent la ressource globale (ici le logger), il faut soit borner l'objet dans un scope, soit ordonner explicitement le shutdown après. Le « exiting with code 0 » suivi d'un segfault est la signature classique d'un crash **dans les destructeurs de fin de `main`**, pas dans la logique applicative.
+⚠️ Non exécuté sur Jetson (pas de GUI ici) — le fix est du pur ordonnancement C++/Qt, vérifié par relecture + compilation `-fsyntax-only`. À confirmer au prochain build : fermer l'app → plus de segfault, plus de warning toolbar.
 
 ## ERREUR 42 — Clic minimap déplace l'overlay sur RealSense au lieu de highlighter
 
