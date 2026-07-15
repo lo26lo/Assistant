@@ -238,10 +238,16 @@ private:
     /// Mat on failure. When `inlierMask` is non-null it receives the chosen
     /// fit's Nx1 uchar inlier mask (empty on failure) — used by the optical-flow
     /// path to prune outlier landmarks from its tracked set.
+    /// With reuseAutoChoice, an Auto call reuses the model family the last
+    /// full arbitration picked (one fit instead of two) — the optical-flow
+    /// path runs at camera rate and the arbitration outcome is stable on a
+    /// planar board between ORB re-seeds (roadmap §1.1). Full-arbitration
+    /// calls (the ORB paths) refresh the memorized choice.
     cv::Mat estimateModel(const std::vector<cv::Point2f>& src,
                           const std::vector<cv::Point2f>& dst,
                           int& inliers, double& reprojErr,
-                          cv::Mat* inlierMask = nullptr);
+                          cv::Mat* inlierMask = nullptr,
+                          bool reuseAutoChoice = false);
 
     /// Signed double-area (shoelace ×2, px²) of the board polygon projected
     /// through H. NaN when it can't be computed or any corner is non-finite.
@@ -302,6 +308,10 @@ private:
 
     // Phase-2 stabilization (docs/LIVE_TRACKING_PLAN.md).
     Model   m_model            = Model::Homography;  // safe default = legacy
+    // Auto-mode memory (roadmap §1.1): the family the last full arbitration
+    // picked. Auto = not arbitrated yet; refreshed on every full-arbitration
+    // estimateModel() call (ORB paths), consumed by reuseAutoChoice callers.
+    Model   m_autoChoice       = Model::Auto;
     double  m_oneEuroMinCutoff = 1.0;  // Hz
     double  m_oneEuroBeta      = 0.02;
     std::vector<OneEuroFilter> m_cornerFilters;  // 2 per board corner (x,y)

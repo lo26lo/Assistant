@@ -258,30 +258,31 @@ std::vector<std::pair<int, std::string>> CameraCapture::listDevices()
     return devices;
 }
 
-void CameraCapture::captureLoop()
+bool CameraCapture::openAndWarmup(cv::VideoCapture& cap, bool& openedViaGst, bool quiet)
 {
-    cv::VideoCapture cap;
-
     // V4L2 first, generic fallback if the V4L2 open fails (e.g. GStreamer source)
     std::vector<std::pair<int, const char*>> backends = {
         {cv::CAP_V4L2, "V4L2"},
         {cv::CAP_ANY,  "Auto"}
     };
 
-    // Log available OpenCV videoio backends
-    auto availBackends = cv::videoio_registry::getBackends();
-    spdlog::info("OpenCV videoio backends available ({}):", availBackends.size());
-    for (auto b : availBackends) {
-        spdlog::info("  - {} (id={})", cv::videoio_registry::getBackendName(b), static_cast<int>(b));
-    }
-    auto camBackends = cv::videoio_registry::getCameraBackends();
-    spdlog::info("OpenCV camera backends ({}):", camBackends.size());
-    for (auto b : camBackends) {
-        spdlog::info("  - {} (id={})", cv::videoio_registry::getBackendName(b), static_cast<int>(b));
+    // Log available OpenCV videoio backends (skipped on reconnect retries —
+    // the registry cannot change while the process lives)
+    if (!quiet) {
+        auto availBackends = cv::videoio_registry::getBackends();
+        spdlog::info("OpenCV videoio backends available ({}):", availBackends.size());
+        for (auto b : availBackends) {
+            spdlog::info("  - {} (id={})", cv::videoio_registry::getBackendName(b), static_cast<int>(b));
+        }
+        auto camBackends = cv::videoio_registry::getCameraBackends();
+        spdlog::info("OpenCV camera backends ({}):", camBackends.size());
+        for (auto b : camBackends) {
+            spdlog::info("  - {} (id={})", cv::videoio_registry::getBackendName(b), static_cast<int>(b));
+        }
     }
 
     bool opened = false;
-    bool openedViaGst = false;
+    openedViaGst = false;
 
     // Preferred path on Jetson: hardware MJPG decode through GStreamer
     // (nvv4l2decoder). The pipeline already outputs BGR frames, so the
@@ -363,11 +364,13 @@ void CameraCapture::captureLoop()
 #endif
 
     if (!opened) {
-        spdlog::error("Failed to open camera device {} with any backend", m_deviceIndex);
-        emit captureError(QString("Failed to open camera device %1").arg(m_deviceIndex));
-        m_capturing.store(false);
-        emit captureStateChanged(false);
-        return;
+        if (quiet) {
+            spdlog::warn("Failed to open camera device {} with any backend", m_deviceIndex);
+        } else {
+            spdlog::error("Failed to open camera device {} with any backend", m_deviceIndex);
+            emit captureError(QString("Failed to open camera device %1").arg(m_deviceIndex));
+        }
+        return false;
     }
 
     // These V4L2 properties are meaningless on the GStreamer path — the format,
@@ -452,8 +455,6 @@ void CameraCapture::captureLoop()
         }
     }
 
-    cv::MatAllocator* alloc = unifiedAllocator();
-
     // Warmup: some UVC cameras need a few frames before the pipeline settles
     constexpr int kWarmupAttempts = 60;  // up to 3 seconds at 50ms each
     bool warmupOk = false;
@@ -467,14 +468,32 @@ void CameraCapture::captureLoop()
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     if (!warmupOk) {
-        spdlog::error("Camera warmup failed: no frame after {} attempts", kWarmupAttempts);
-        emit captureError(QString("Camera failed to provide frames (device %1, %2x%3)")
-            .arg(m_deviceIndex).arg(m_width).arg(m_height));
+        if (quiet) {
+            spdlog::warn("Camera warmup failed: no frame after {} attempts", kWarmupAttempts);
+        } else {
+            spdlog::error("Camera warmup failed: no frame after {} attempts", kWarmupAttempts);
+            emit captureError(QString("Camera failed to provide frames (device %1, %2x%3)")
+                .arg(m_deviceIndex).arg(m_width).arg(m_height));
+        }
+        cap.release();
+        return false;
+    }
+
+    return true;
+}
+
+void CameraCapture::captureLoop()
+{
+    cv::VideoCapture cap;
+    bool openedViaGst = false;
+
+    if (!openAndWarmup(cap, openedViaGst, /*quiet=*/false)) {
         m_capturing.store(false);
         emit captureStateChanged(false);
-        cap.release();
         return;
     }
+
+    cv::MatAllocator* alloc = unifiedAllocator();
 
     int consecutiveFailures = 0;
     while (m_capturing.load()) {
@@ -487,10 +506,40 @@ void CameraCapture::captureLoop()
         if (!cap.read(frame) || frame.empty()) {
             ++consecutiveFailures;
             if (consecutiveFailures >= 30) {
-                spdlog::error("Camera: 30 consecutive read failures, stopping capture");
-                emit captureError(QString("Camera stopped: sustained read failures on device %1")
+                // Hot reconnect (roadmap §2.2): a USB unplug/replug used to
+                // kill the capture loop for good, forcing an app restart.
+                // Instead, release the device and retry the full open
+                // sequence with exponential backoff — openAndWarmup's
+                // re-enumeration fallback also adopts a NEW /dev/video index
+                // if the device came back under a different number.
+                spdlog::warn("Camera: 30 consecutive read failures on device {} — "
+                             "attempting hot reconnection", m_deviceIndex);
+                emit captureError(QString("Camera lost (device %1) — reconnecting…")
                     .arg(m_deviceIndex));
-                break;
+                cap.release();
+
+                bool reopened = false;
+                int backoffMs = 1000;
+                while (m_capturing.load()) {
+                    // Sleep in short slices so stop() stays responsive.
+                    for (int slept = 0; slept < backoffMs && m_capturing.load(); slept += 100)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    if (!m_capturing.load())
+                        break;
+                    spdlog::info("Camera: reconnection attempt (device {})", m_deviceIndex);
+                    if (openAndWarmup(cap, openedViaGst, /*quiet=*/true)) {
+                        reopened = true;
+                        break;
+                    }
+                    backoffMs = std::min(backoffMs * 2, 8000);
+                }
+                if (!reopened)
+                    break;  // stop() requested during reconnection
+                consecutiveFailures = 0;
+                spdlog::info("Camera reconnected on device {}", m_deviceIndex);
+                emit captureError(QString("Camera reconnected (device %1)")
+                    .arg(m_deviceIndex));
+                continue;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(33));
             continue;

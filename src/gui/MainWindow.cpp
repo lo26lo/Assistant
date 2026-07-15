@@ -436,6 +436,9 @@ void MainWindow::createMenuBar()
 void MainWindow::createToolBar()
 {
     m_mainToolBar = addToolBar(tr("Main"));
+    // saveState() requires a stable objectName; without it Qt warns at exit
+    // and the toolbar's state is silently dropped from the saved layout.
+    m_mainToolBar->setObjectName(QStringLiteral("MainToolBar"));
     m_mainToolBar->setMovable(false);
     m_mainToolBar->setIconSize(QSize(theme::ToolbarIcon, theme::ToolbarIcon));
 
