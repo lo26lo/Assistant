@@ -204,13 +204,15 @@ void TrackingWorker::resetReference()
     m_flowFramesSinceDetect = 0;
     m_flowHealthy           = false;
     m_lastHealthyPoseMs     = 0;
+    m_autoChoice            = Model::Auto;  // re-arbitrate on the next ORB pass
     setState(State::Lost);
 }
 
 cv::Mat TrackingWorker::estimateModel(const std::vector<cv::Point2f>& src,
                                       const std::vector<cv::Point2f>& dst,
                                       int& inliers, double& reprojErr,
-                                      cv::Mat* inlierMask)
+                                      cv::Mat* inlierMask,
+                                      bool reuseAutoChoice)
 {
     inliers = 0;
     reprojErr = 1e9;
@@ -262,6 +264,21 @@ cv::Mat TrackingWorker::estimateModel(const std::vector<cv::Point2f>& src,
     }
     case Model::Auto:
     default: {
+        // Camera-rate callers (optical flow) reuse the family the last full
+        // arbitration picked — one RANSAC fit instead of two, ~30 saved
+        // findHomography calls per second on the Orin (roadmap §1.1). The
+        // choice is re-arbitrated on every ORB pass (reuseAutoChoice=false),
+        // so a real perspective change is picked up at the next re-seed.
+        if (reuseAutoChoice && m_autoChoice != Model::Auto) {
+            int inl = 0; double er = 1e9;
+            cv::Mat M = m_autoChoice == Model::Homography
+                ? fitHomog(inl, er, mask)
+                : fitAffine(true, inl, er, mask);
+            if (!M.empty())
+                return deliver(M, inl, er, mask);
+            // Memorized family failed on this frame — fall through to the
+            // full arbitration below rather than reporting a loss.
+        }
         int si = 0, hi = 0; double se = 1e9, he = 1e9;
         cv::Mat sMask, hMask;
         cv::Mat S = fitAffine(true, si, se, sMask);
@@ -269,6 +286,7 @@ cv::Mat TrackingWorker::estimateModel(const std::vector<cv::Point2f>& src,
         // Keep the simpler (steadier) similarity unless the homography is
         // clearly better — notably lower error and at least as many inliers.
         const bool homogBetter = !H.empty() && he < se * 0.7 && hi >= si;
+        m_autoChoice = homogBetter ? Model::Homography : Model::Similarity;
         if (!S.empty() && !homogBetter) return deliver(S, si, se, sMask);
         if (!H.empty())                 return deliver(H, hi, he, hMask);
         return deliver(S, si, se, sMask);
@@ -590,7 +608,11 @@ bool TrackingWorker::runOpticalFlow(const cv::Mat& fullGray)
     int inliers = 0;
     double reprojErr = 0.0;
     cv::Mat inlierMask;
-    cv::Mat H = estimateModel(keptPcb, keptImg, inliers, reprojErr, &inlierMask);
+    // reuseAutoChoice=true: this is the camera-rate flow path — reuse the
+    // model family the last ORB arbitration chose instead of re-fitting both
+    // every frame (roadmap §1.1). The ORB paths below re-arbitrate.
+    cv::Mat H = estimateModel(keptPcb, keptImg, inliers, reprojErr, &inlierMask,
+                              /*reuseAutoChoice=*/true);
     if (H.empty() || inliers < m_minMatchCount) {
         m_flowHealthy = false;
         return false;

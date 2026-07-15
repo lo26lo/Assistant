@@ -154,6 +154,12 @@ public:
     int remoteViewPort() const { return m_remoteViewPort; }
     void setRemoteViewPort(int port) { m_remoteViewPort = port; }
 
+    /// Access token remote clients must present (empty = open access; a
+    /// random token is generated and persisted the first time the server
+    /// starts, see Application::applyRemoteViewConfig()).
+    std::string remoteViewToken() const { return m_remoteViewToken; }
+    void setRemoteViewToken(const std::string& t) { m_remoteViewToken = t; }
+
     /// Verbose debug logging: when true, the logger level is lowered to trace so
     /// every spdlog::debug/trace call is written to the log file (toggled from
     /// the Dev menu; persisted so it survives restarts).
@@ -361,6 +367,7 @@ private:
     bool m_voiceControl    = false;
     bool m_remoteView      = false;
     int  m_remoteViewPort  = 8080;
+    std::string m_remoteViewToken;
     bool m_verboseLogging  = false;
 
     // Live Tracking. Defaults = the fast path validated on Jetson (suite 100:

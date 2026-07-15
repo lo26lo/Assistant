@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QThread>
 #include <QImage>
@@ -296,6 +297,10 @@ private:
     // Remote browser view (WebSocket MJPEG) — created on demand when
     // features.remote_view is enabled (config or Settings dialog).
     std::unique_ptr<features::RemoteView>       m_remoteView;
+    // Throttles the captureView() composition for remote clients (the widget
+    // repaint runs on the GUI thread — cheaper than 30 fps, plenty for a
+    // remote monitor).
+    QElapsedTimer m_remotePushTimer;
 
     // FPS tracking
     QTimer* m_fpsTimer = nullptr;
@@ -308,7 +313,6 @@ private:
     // default. See docs/JETSON_SESSION_LOG.md.
     QTimer* m_reanchorTimer = nullptr;
     int     m_reanchorFailStreak = 0;   // consecutive BoardLocator misses → back off
-    int     m_reanchorTickCount  = 0;   // for skipping ticks while backing off
 
     // Decision logic for silent corrections (drift gate + two-tick
     // confirmation + Lost bypass — remède C, BLOB_REANCHOR_JITTER_ANALYSE.md

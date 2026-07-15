@@ -73,6 +73,7 @@
 #include <QVBoxLayout>
 #include <QTableWidget>
 #include <QHeaderView>
+#include <QRandomGenerator>
 #include <QtConcurrent/QtConcurrent>
 #include <QFutureWatcher>
 #include <nlohmann/json.hpp>
@@ -527,6 +528,22 @@ void Application::applyRemoteViewConfig()
     else if (m_remoteView->isRunning())
         m_remoteView->stop();
 
+    // Access token (roadmap §3.2): the server listens on all interfaces, so
+    // gate the stream behind a token. Generated once, persisted in config —
+    // stable across restarts so a bookmarked viewer URL keeps working.
+    if (m_config->remoteViewToken().empty()) {
+        static const char kAlphabet[] =
+            "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+        QString tok;
+        auto* rng = QRandomGenerator::system();
+        for (int i = 0; i < 10; ++i)
+            tok.append(QLatin1Char(kAlphabet[rng->bounded(
+                static_cast<quint32>(sizeof(kAlphabet) - 1))]));
+        m_config->setRemoteViewToken(tok.toStdString());
+        m_config->save();
+    }
+    m_remoteView->setToken(QString::fromStdString(m_config->remoteViewToken()));
+
     if (!m_remoteView->start(port))
         return;
 
@@ -538,8 +555,8 @@ void Application::applyRemoteViewConfig()
     if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         f.write(m_remoteView->generateHTMLViewer().toUtf8());
         spdlog::info("RemoteView: streaming on ws://0.0.0.0:{} — viewer page: {} "
-                     "(open with ?host=<jetson-ip> from another machine)",
-                     port, viewerPath.string());
+                     "(open with ?host=<jetson-ip>&token={} from another machine)",
+                     port, viewerPath.string(), m_config->remoteViewToken());
     } else {
         spdlog::warn("RemoteView: could not write viewer page to {}",
                      viewerPath.string());
@@ -1433,10 +1450,19 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
                                              cur.y - result.imageCorners[i].y)));
                 }
             }
-            constexpr double kReanchorMinShiftPx = 12.0;
-            if (maxShift < kReanchorMinShiftPx) {
+            // Drift gate in physical units (roadmap §1.3): a fixed 12 px means
+            // 0.05 mm under the microscope (hyper-sensitive) but ~3 mm in a
+            // wide view. 2.5 mm ≈ the old 12 px at the D405's ~4.4 px/mm;
+            // px clamps keep it sane when the scale estimate is off.
+            constexpr double kReanchorMinShiftMm = 2.5;
+            const double ppm = m_currentPixelsPerMm > 0.0
+                ? m_currentPixelsPerMm : m_basePixelsPerMm;
+            const double reanchorMinShiftPx = ppm > 0.0
+                ? std::clamp(kReanchorMinShiftMm * ppm, 6.0, 48.0)
+                : 12.0;   // scale unknown → legacy px default
+            if (maxShift < reanchorMinShiftPx) {
                 spdlog::debug("Periodic re-anchor: pose within {:.0f}px (shift {:.1f}), skipping",
-                              kReanchorMinShiftPx, maxShift);
+                              reanchorMinShiftPx, maxShift);
                 return;
             }
             spdlog::info("Periodic re-anchor: correcting drift (shift {:.1f}px, score {:.2f})",
@@ -1821,6 +1847,17 @@ void Application::componentReanchor(bool silent)
             gp.maxShiftPx = m_currentPixelsPerMm > 0.0
                 ? std::clamp(12.0 * m_currentPixelsPerMm, 40.0, 250.0)
                 : 150.0;
+            // Drift gate + confirmation tolerance in physical units too
+            // (roadmap §1.3, same rationale as the BoardLocator path): the
+            // px defaults (12/8) only hold near the D405's ~4.4 px/mm.
+            {
+                const double ppm = m_currentPixelsPerMm > 0.0
+                    ? m_currentPixelsPerMm : m_basePixelsPerMm;
+                if (ppm > 0.0) {
+                    gp.minShiftPx   = std::clamp(2.5 * ppm, 6.0, 48.0);
+                    gp.confirmTolPx = std::clamp(1.5 * ppm, 4.0, 32.0);
+                }
+            }
             const bool trackingLost = m_lastTrackingState ==
                 static_cast<int>(overlay::TrackingWorker::State::Lost);
             const auto gate = m_reanchorGate.evaluate(
@@ -2479,9 +2516,19 @@ void Application::wireCameraSignals()
         if (!m_depthViewMode && !irActive)
             m_mainWindow->cameraView()->updateFrame(display);
 
-        // Mirror to remote browser clients (RemoteView throttles internally).
-        if (m_remoteView && m_remoteView->isRunning() && m_remoteView->clientCount() > 0)
-            m_remoteView->pushFrame(display);
+        // Mirror to remote browser clients — the same composition as the
+        // local view (camera + warped iBOM overlay), via captureView()
+        // (roadmap §3.2: the raw camera image was half the value). That
+        // repaints on the GUI thread, so throttle here; RemoteView's own
+        // timer only caps the *network* rate, not the composition cost.
+        if (m_remoteView && m_remoteView->isRunning() && m_remoteView->clientCount() > 0) {
+            constexpr qint64 kRemoteCompositeIntervalMs = 100;   // ~10 fps
+            if (!m_remotePushTimer.isValid()
+                || m_remotePushTimer.elapsed() >= kRemoteCompositeIntervalMs) {
+                m_remotePushTimer.restart();
+                m_remoteView->pushFrame(m_mainWindow->cameraView()->captureView());
+            }
+        }
 
         // ── iBOM overlay: board-space buffer + per-frame warp transform ─────
         // The overlay is rendered ONCE in board (PCB) space — it only changes

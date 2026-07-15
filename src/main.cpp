@@ -13,8 +13,12 @@ extern "C" void posixCrashHandler(int sig)
 {
     void* buf[32];
     int n = backtrace(buf, 32);
-    spdlog::critical("UNHANDLED SIGNAL {} ({})", sig, strsignal(sig));
-    spdlog::default_logger()->flush();
+    // After spdlog::shutdown() the default logger is gone — logging through it
+    // here would segfault inside the crash handler and eat the backtrace.
+    if (auto* logger = spdlog::default_logger_raw()) {
+        logger->critical("UNHANDLED SIGNAL {} ({})", sig, strsignal(sig));
+        logger->flush();
+    }
     backtrace_symbols_fd(buf, n, STDERR_FILENO);
     std::signal(sig, SIG_DFL);
     std::raise(sig);
@@ -48,18 +52,25 @@ int main(int argc, char* argv[])
     qapp.setApplicationVersion("0.1.0");
     qapp.setOrganizationName("MicroscopeIBOM");
 
-    // Create and run application
-    ibom::Application app(qapp);
-    if (!app.initialize()) {
-        spdlog::error("Application initialization failed");
-        return 1;
+    // Create and run application. The scope is deliberate (ERREUR #43): the
+    // Application destructor tears down subsystems whose stop() paths log
+    // (CameraCapture, threads…), so it must run BEFORE Logger::shutdown() —
+    // spdlog::shutdown() nulls the default logger and any later spdlog call
+    // dereferences it → the "Segmentation fault after exiting with code 0".
+    int result = 0;
+    {
+        ibom::Application app(qapp);
+        if (!app.initialize()) {
+            spdlog::error("Application initialization failed");
+            ibom::utils::Logger::shutdown();
+            return 1;
+        }
+
+        spdlog::info("Application started — entering main loop");
+        result = qapp.exec();
+        spdlog::info("Application exiting with code {}", result);
     }
 
-    spdlog::info("Application started — entering main loop");
-    int result = qapp.exec();
-
-    spdlog::info("Application exiting with code {}", result);
     ibom::utils::Logger::shutdown();
-
     return result;
 }
