@@ -796,6 +796,11 @@ void TrackingWorker::processFrame(ibom::camera::FrameRef frame, qint64 captureNs
         cv::Mat gray;
         if (frame->channels() == 3)
             cv::cvtColor(*frame, gray, cv::COLOR_BGR2GRAY);
+        else if (m_useClahe && m_clahe)
+            // Mono camera + CLAHE: the in-place apply() below would otherwise
+            // write straight into the shared zero-copy FrameRef buffer the GUI
+            // is displaying (audit B7 — FrameRef is immutable by contract).
+            gray = frame->clone();
         else
             gray = *frame;
 

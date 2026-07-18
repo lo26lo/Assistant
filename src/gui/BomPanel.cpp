@@ -125,13 +125,32 @@ void BomPanel::setComponentState(const std::string& reference, const QString& st
             auto* stateItem = m_table->item(r, 4);
             if (stateItem) {
                 stateItem->setText(state);
-                // Color by state
-                if (state == "placed")      stateItem->setForeground(theme::placedColor());
-                else if (state == "missing") stateItem->setForeground(theme::missingColor());
-                else if (state == "defect")  stateItem->setForeground(theme::defectColor());
-                else                         stateItem->setForeground(theme::pendingColor());
+                // Color by state — case-insensitive: callers pass "Placed"
+                // (capitalized UI text), the exact-match comparison never hit.
+                if (state.compare(QLatin1String("placed"), Qt::CaseInsensitive) == 0)
+                    stateItem->setForeground(theme::placedColor());
+                else if (state.compare(QLatin1String("missing"), Qt::CaseInsensitive) == 0)
+                    stateItem->setForeground(theme::missingColor());
+                else if (state.compare(QLatin1String("defect"), Qt::CaseInsensitive) == 0)
+                    stateItem->setForeground(theme::defectColor());
+                else
+                    stateItem->setForeground(theme::pendingColor());
             }
             return;
+        }
+    }
+}
+
+void BomPanel::clearAllStates()
+{
+    // Blank every row's inspection state in one pass. Reset used to clear only
+    // the counters, leaving "Placed"/"Skipped" labels behind (audit B2).
+    for (auto& row : m_rows)
+        row.state.clear();
+    for (int r = 0; r < m_table->rowCount(); ++r) {
+        if (auto* stateItem = m_table->item(r, 4)) {
+            stateItem->setText(QString());
+            stateItem->setForeground(theme::pendingColor());
         }
     }
 }

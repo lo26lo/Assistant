@@ -1,5 +1,13 @@
 # Recherche approfondie de bugs — 2026-07-18
 
+> **Mise à jour 2026-07-18 (même session)** : les 11 bugs B1-B11 sont **corrigés** (commit sur cette
+> branche), plus **2 bugs bonus découverts pendant la correction** : **B12** (les couleurs d'état du
+> BomPanel ne s'appliquaient jamais — `state == "placed"` comparé à la valeur réelle `"Placed"`) et
+> **B13** (`m_ibomHash` calculé **avant** `setIBomFilePath()` → le journal d'audit et la clé de scan
+> étaient estampillés avec le hash de la carte *précédente* après un changement d'iBOM). Détail des
+> correctifs en fin de document (§ « Corrections appliquées »). ⚠️ Rien n'a pu être compilé dans ce
+> conteneur (pas de Qt/OpenCV) — build + ctest à valider au prochain build Jetson.
+
 > **Méthode** : revue statique ciblée de ~12 000 lignes, priorisée sur le code jamais exécuté sur
 > Jetson (suites 145-149 : minimap V2, scan mosaïque, golden diff, depth check, reconnexion caméra,
 > RemoteView token, tour guidé, loupe, gates mm, Auto 1-fit) + les chemins critiques de threading
@@ -29,7 +37,10 @@
 | B9 | 🟡 Faible | Application (teardown) | Fermeture pendant Auto-Align/re-anchor : la lambda QtConcurrent peut survivre aux membres détruits |
 | B10 | 🟡 Faible | PickAndPlace / InspectionPanel | Fin de tour avec steps sautés : cul-de-sac silencieux |
 | B11 | 🟡 Faible | Application | Restauration de session échouée : lignes BOM restent marquées « Placed » |
+| B12 | 🟡 Faible (bonus) | BomPanel | Couleurs d'état jamais appliquées — `"placed"` comparé à `"Placed"` |
+| B13 | 🟡 Faible (bonus) | Application | `m_ibomHash` calculé avant `setIBomFilePath()` → journal d'audit estampillé avec le hash de la carte précédente |
 
+**Tous corrigés (B1-B13)** — voir § « Corrections appliquées » en fin de document.
 Sections « Notes & risques mineurs » et « Chemins vérifiés sains » en fin de document.
 
 ---
@@ -326,3 +337,38 @@ B2 — le nettoyage des surfaces n'est jamais fait nulle part).
   DepthInspector / ProjectDiff (purs, unit-testés)** : relus, RAS.
 - **Signatures signaux/slots cross-thread** (BoardScanner, DatasetCreator, TrackingWorker) :
   métatypes enregistrés, slots publics, arguments par valeur — RAS.
+
+---
+
+## Corrections appliquées (2026-07-18, même session)
+
+| Bug | Correctif |
+|-----|-----------|
+| B1 | `sortByPosition()` trie désormais réellement en ordre raster (y puis x) sur `position`, et renumérote `order` (l'ancien « tri par load order » était détruit par `sortByValueGroup()` au chargement). |
+| B2 | Nouveau `BomPanel::clearAllStates()` ; le handler Reset blanchit toutes les lignes BOM **et** pousse le set vide à la minimap (`setPlacedRefs`). |
+| B3 | `loadIBomFile()` stoppe un scan en vol et purge `m_lastScanMosaic/Mask/Geo` ; garde d'identité `m_scanIbomHash` : `onScanFinished()` rejette un résultat dont la carte n'est plus chargée (le `scanFinished` du worker arrive en différé après la purge). |
+| B4 | `loadIBomFile()` purge le `HeatmapRenderer` (+ `++m_heatmapRev` pour re-signer le cache overlay) et efface `m_selectedRef`. |
+| B5 | Les 3 lignes `findChild<QComboBox*>()->setCurrentIndex(newIdx)` remplacées par `refreshCameraDeviceList()` (re-sélection par `findData`, jamais par position). |
+| B6 | `switchCameraBackend()` invalide `m_lastDepthFrame` + `m_lastDepthDistanceMm` ; `runDepthInspection()` gate explicitement sur le backend RealSense. |
+| B7 | `TrackingWorker::processFrame()` : frame mono + CLAHE → `frame->clone()` avant l'apply in-place (le buffer FrameRef partagé n'est plus jamais écrit). |
+| B8 | Handler `anchorRequested` minimap : facteur miroir `vx` face Back (même convention que les autres chemins de similarité) + fallback `scale <= 0 → 20 px/mm`. |
+| B9 | Les `QFuture` d'Auto-Align / re-anchor sont conservés en membres et attendus (`isStarted()` + `waitForFinished()`) en tête de `~Application()`, avant la destruction du détecteur. |
+| B10 | `markPlaced()` et `skip()` bouclent sur le premier step non placé quand la fin de liste est atteinte avec des steps sautés restants (plus de cul-de-sac). |
+| B11 | `startInspection()` : restauration abandonnée → `clearAllStates()` + minimap vidée. |
+| B12 | `setComponentState()` : comparaison d'état **insensible à la casse** (`"Placed"` colorie enfin en vert). Limite connue : si des traductions sont un jour livrées, `tr("Placed")` ne matchera plus — passer alors par un enum. |
+| B13 | `m_ibomHash = ibomContentHash()` déplacé **après** `m_config->setIBomFilePath(path)` dans `loadIBomFile()`. |
+
+**Fichiers modifiés** : `src/app/Application.{h,cpp}`, `src/features/PickAndPlace.cpp`,
+`src/gui/BomPanel.{h,cpp}`, `src/overlay/TrackingWorker.cpp`.
+
+**Non compilé ici** (pas de Qt/OpenCV dans le conteneur). Points d'attention au prochain build :
+1. `Application.h` inclut désormais `overlay/BoardLocator.h` + `overlay/ComponentReanchor.h`
+   (membres `QFuture<T>`) — ce qui tire `<onnxruntime_cxx_api.h>` dans `main.cpp` ; sans risque car
+   `onnxruntime::onnxruntime` est linké sur toute la cible (includes propagés), et la CI fournit le
+   stub ONNX aux passes `-fsyntax-only`.
+2. `ctest` : `test_pickandplace` ne couvrait ni `sortByPosition` ni skip-en-fin-de-liste — les
+   asserts existants (route NN, unplace) restent valides ; ajouter idéalement un test raster + un
+   test wrap B10.
+3. Scénario terrain B3 : scanner la carte A, charger la carte B pendant le scan → statut
+   « Board scan discarded — a different iBOM was loaded during the scan », et `golden/<hashB>/`
+   ne doit **pas** être créé par « Save Last Scan as Golden » (message « No finished board scan »).

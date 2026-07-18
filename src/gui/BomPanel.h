@@ -30,6 +30,9 @@ public:
 
     void highlightComponent(const std::string& reference);
     void setComponentState(const std::string& reference, const QString& state);
+    /// Blank the inspection state of every row (inspection reset / abandoned
+    /// session restore — the counters alone can't represent that).
+    void clearAllStates();
     void setProgress(int placed, int total);
 
     /// Programmatically select the layer filter (0 = All, 1 = Front, 2 = Back).

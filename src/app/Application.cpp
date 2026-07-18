@@ -259,6 +259,16 @@ Application::~Application()
     if (m_config)
         m_config->save();
 
+    // In-flight QtConcurrent detections capture the raw detector pointer —
+    // they must finish before m_componentDetector/m_inferenceEngine die below
+    // (audit B9). isStarted() is false on a never-dispatched default future,
+    // so this never blocks on an idle app; a running detection is bounded to
+    // a few seconds.
+    if (m_autoAlignFuture.isStarted())
+        m_autoAlignFuture.waitForFinished();
+    if (m_reanchorFuture.isStarted())
+        m_reanchorFuture.waitForFinished();
+
     // The AI init thread owns no Qt objects; joining is safe and bounded by
     // the ONNX session creation (cannot be cancelled mid-flight anyway).
     if (m_aiInitThread.joinable())
@@ -865,6 +875,13 @@ void Application::switchCameraBackend(CameraBackend backend)
     m_camera.reset();
     createCamera();
     wireCameraSignals();
+
+    // The cached depth data belongs to the previous backend — a stale D405
+    // frame must not feed Depth-Check / Auto-Align once the microscope is
+    // active (audit B6; same family as ERREUR #25, which only blanked the
+    // displayed stats).
+    m_lastDepthFrame.reset();
+    m_lastDepthDistanceMm = 0.0;
 
     spdlog::info("Camera backend switched to {}",
                  backend == CameraBackend::RealSense ? "RealSense" : "V4L2");
@@ -1552,9 +1569,9 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
 
     ai::ComponentDetector* detector = componentDetector();
     const ibom::Layer activeLayer = m_activeLayer;  // snapshot for the worker
-    watcher->setFuture(QtConcurrent::run([colorCopy, depthCopy, project,
-                                          expectedPixelsPerMm, detector,
-                                          activeLayer]() {
+    m_autoAlignFuture = QtConcurrent::run([colorCopy, depthCopy, project,
+                                           expectedPixelsPerMm, detector,
+                                           activeLayer]() {
         // Detection-first (docs/AUTO_ALIGN_V2_PLAN.md): register the detected-
         // component constellation against the iBOM layout — needs no visible
         // board outline, so it works exactly where the geometric path
@@ -1686,7 +1703,8 @@ void Application::autoAlignBoard(bool silent, bool isRetry)
             }
         }
         return blr;
-    }));
+    });
+    watcher->setFuture(m_autoAlignFuture);
 }
 
 void Application::autoStartLiveTracking()
@@ -1912,7 +1930,7 @@ void Application::componentReanchor(bool silent)
     });
 
     const ibom::Layer activeLayer = m_activeLayer;  // snapshot for the worker
-    watcher->setFuture(QtConcurrent::run([detector, colorCopy, project, priorPose,
+    m_reanchorFuture = QtConcurrent::run([detector, colorCopy, project, priorPose,
                                           scalePrior, activeLayer]() {
         // Scan ONLY the board + margin, not the whole frame (field follow-up):
         // the periodic re-anchor always has a prior pose, so crop detection to
@@ -1992,7 +2010,8 @@ void Application::componentReanchor(bool silent)
         dumpReanchorDebug(colorCopy, detections, padDets, *project,
                           activeLayer, res);
         return res;
-    }));
+    });
+    watcher->setFuture(m_reanchorFuture);
 }
 
 void Application::updateReanchorTimer()
@@ -3112,10 +3131,14 @@ void Application::connectControlSignals()
                      newIdx, m_config->orbKeypoints(), m_config->trackingIntervalMs(),
                      m_config->ransacThreshold(), m_config->trackingDownscale());
         if (m_config->verboseLogging()) logFullState();  // full audit trail when debugging
-        // Sync ControlPanel combo to new camera index
-        auto* cp = m_mainWindow->controlPanel();
-        if (cp && newIdx >= 0)
-            cp->findChild<QComboBox*>()->setCurrentIndex(newIdx);
+        // Sync the ControlPanel device combo to the new camera index — via
+        // refreshCameraDeviceList(), which re-selects by item DATA (findData).
+        // The old `findChild<QComboBox*>()->setCurrentIndex(newIdx)` treated
+        // the real /dev/video index as a combo POSITION (ERREUR #22's exact
+        // confusion — with the microscope on video6 and a 2-item combo it
+        // blanked the selection) and grabbed whichever combo findChild hit
+        // first (audit B5).
+        refreshCameraDeviceList();
 
         // AI confidence may have changed in the dialog — sync the control
         // panel spinner and the live detector.
@@ -3786,6 +3809,11 @@ void Application::connectControlSignals()
         m_placedRefs.clear();
         m_placedOrder.clear();
         appendInspectionLog(QStringLiteral("reset"), "*");
+        // Reflect the reset on EVERY surface (audit B2): the BOM rows kept
+        // their "Placed"/"Skipped" labels and the PCB Map its green dots —
+        // only the counters and the camera overlay were actually reset.
+        if (auto* bp = m_mainWindow->bomPanel()) bp->clearAllStates();
+        m_mainWindow->boardMinimap()->setPlacedRefs(m_placedRefs);
         refreshInspectionStats();
         saveInspectionState();  // empty set removes the saved entry
     });
@@ -3937,9 +3965,16 @@ void Application::connectControlSignals()
 
         double scale = (m_currentPixelsPerMm > 0.0) ? m_currentPixelsPerMm
                        : m_config->microscopeAnchorPixelsPerMm();
+        if (scale <= 0.0) scale = 20.0;  // same fallback as the click-anchor path
         double rot  = m_config->microscopeAnchorRotationDeg() * CV_PI / 180.0;
         double cosR = std::cos(rot) * scale;
         double sinR = std::sin(rot) * scale;
+
+        // Back side: mirrored view frame (vx) — same convention as the anchor
+        // click handler / applyMultiAlignment. This path used to skip the
+        // mirror, so a minimap anchor on the back face posed the overlay
+        // un-mirrored (audit B8).
+        const double vx = (m_activeLayer == ibom::Layer::Back) ? -1.0 : 1.0;
 
         // Center of the camera image
         float iw = static_cast<float>(m_camera->resolution().width());
@@ -3947,9 +3982,9 @@ void Application::connectControlSignals()
         if (iw <= 0 || ih <= 0) { iw = 1920; ih = 1080; }
         cv::Point2f imgCenter(iw / 2.f, ih / 2.f);
 
-        // Image origin: imgCenter = H * pcbPt  ⟹ tx = cx - (cosR*px - sinR*py)
-        double tx = imgCenter.x - (cosR * pcbPt.x - sinR * pcbPt.y);
-        double ty = imgCenter.y - (sinR * pcbPt.x + cosR * pcbPt.y);
+        // Image origin: imgCenter = H * pcbPt  ⟹ tx = cx - (cosR*vx*px - sinR*py)
+        double tx = imgCenter.x - (cosR * vx * pcbPt.x - sinR * pcbPt.y);
+        double ty = imgCenter.y - (sinR * vx * pcbPt.x + cosR * pcbPt.y);
 
         auto& bb = m_ibomProject->boardInfo.boardBBox;
         std::vector<cv::Point2f> pcbCorners = {
@@ -3962,8 +3997,8 @@ void Application::connectControlSignals()
         imgCorners.reserve(pcbCorners.size());
         for (auto& pc : pcbCorners) {
             imgCorners.push_back({
-                static_cast<float>(cosR * pc.x - sinR * pc.y + tx),
-                static_cast<float>(sinR * pc.x + cosR * pc.y + ty)
+                static_cast<float>(cosR * vx * pc.x - sinR * pc.y + tx),
+                static_cast<float>(sinR * vx * pc.x + cosR * pc.y + ty)
             });
         }
         ++m_alignmentEpoch;
@@ -4118,9 +4153,24 @@ void Application::loadIBomFile(const QString& path)
     m_ibomProject = std::make_shared<IBomProject>(std::move(*result));
     spdlog::info("iBOM loaded: {} components, {} BOM groups",
                  m_ibomProject->components.size(), m_ibomProject->bomGroups.size());
-    // Cache the board hash (audit log key) and reset the session undo stack —
-    // it must never cross board boundaries.
-    m_ibomHash = ibomContentHash();
+    // Everything cached from the PREVIOUS board must die here, or it gets
+    // keyed/rendered against the new board (audit B3/B4). Stop a scan in
+    // flight (its canvas geometry belongs to the old board — onScanFinished
+    // discards its queued result via m_scanIbomHash), drop the cached mosaic
+    // (Save-as-Golden would store it under the NEW board's hash) and purge the
+    // defect heatmap (its cells are relative to the old board's bbox).
+    if (m_scanActive)
+        onBoardScanToggled(false);
+    m_lastScanMosaic.release();
+    m_lastScanMask.release();
+    m_lastScanGeo = {};
+    if (m_heatmapRenderer && m_heatmapRenderer->totalDefects() > 0) {
+        m_heatmapRenderer->clear();
+        ++m_heatmapRev;   // re-signature: the overlay cache re-renders without it
+    }
+    m_selectedRef.clear();  // the selection belonged to the old board
+
+    // Reset the session undo stack — it must never cross board boundaries.
     m_placedOrder.clear();
 
 
@@ -4150,6 +4200,11 @@ void Application::loadIBomFile(const QString& path)
     m_config->setIBomFilePath(path.toStdString());
     m_config->addRecentIbomFile(path.toStdString());
     refreshRecentFilesMenu();
+
+    // Cache the board hash (audit log / scan-result key). Must run AFTER
+    // setIBomFilePath: ibomContentHash() reads the configured path, so hashing
+    // earlier stamped every entry with the PREVIOUS board's hash (audit B13).
+    m_ibomHash = ibomContentHash();
 
     // Restore the placed state of a previous inspection of this board so the
     // overlay and BOM panel show progress immediately (full resume happens
@@ -4275,6 +4330,11 @@ void Application::startInspection()
             return;
         }
         m_placedRefs.clear();  // saved refs match nothing in this board
+        // The load-time restore may have marked BOM rows / minimap dots from
+        // that stale set — blank them so the fresh inspection starts clean
+        // on every surface (audit B11).
+        if (auto* bp = m_mainWindow->bomPanel()) bp->clearAllStates();
+        m_mainWindow->boardMinimap()->setPlacedRefs(m_placedRefs);
     }
     refreshInspectionStats();
 
@@ -4873,6 +4933,7 @@ void Application::onBoardScanToggled(bool on)
 
     m_scanActive        = true;
     m_lastScanForwardMs = 0;
+    m_scanIbomHash      = m_ibomHash;   // board identity guard, see onScanFinished
     QMetaObject::invokeMethod(m_boardScanner, "startScan", Qt::QueuedConnection,
         Q_ARG(double, pxPerMm),
         Q_ARG(double, bb.minX), Q_ARG(double, bb.minY),
@@ -4890,6 +4951,17 @@ void Application::onScanFinished(QString pngPath, cv::Mat mosaic, cv::Mat writte
 {
     m_scanActive = false;
     m_mainWindow->setBoardScanChecked(false);
+
+    // The worker's scanFinished is queued: when an iBOM load stopped this scan
+    // it arrives AFTER the caches were purged — caching it would resurrect the
+    // old board's mosaic and Save-as-Golden would key it under the NEW board's
+    // hash (audit B3). Discard results from a board that is no longer loaded.
+    if (m_scanIbomHash != m_ibomHash) {
+        m_mainWindow->updateStatusMessage(
+            tr("Board scan discarded — a different iBOM was loaded during the scan"));
+        spdlog::info("[scan] result discarded (board changed during the scan)");
+        return;
+    }
 
     if (mosaic.empty() || writtenMask.empty()) {
         m_mainWindow->updateStatusMessage(
@@ -5060,6 +5132,13 @@ void Application::runDepthInspection()
     }
     if (!m_homography || !m_homography->isValid()) {
         m_mainWindow->updateStatusMessage(tr("Depth check: align the overlay first"));
+        return;
+    }
+    // Explicit backend gate: the cached depth frame is cleared on backend
+    // switch (audit B6), but never cross a microscope pose with depth data.
+    if (m_activeBackend != CameraBackend::RealSense) {
+        m_mainWindow->updateStatusMessage(
+            tr("Depth check: switch to the RealSense backend first"));
         return;
     }
     if (!m_lastDepthFrame || m_lastDepthFrame->empty()) {

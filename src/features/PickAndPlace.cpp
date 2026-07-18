@@ -73,11 +73,19 @@ void PickAndPlace::sortByValueGroupCount()
 
 void PickAndPlace::sortByPosition()
 {
-    // Already loaded from iBOM data which has position info —
-    // we sort by order (original load order corresponds to spatial layout for many boards)
+    // Raster order over the real PCB coordinates: top→bottom, left→right.
+    // Sorting "by original load order" here was a no-op — loadComponents()
+    // runs sortByValueGroup() which renumbers `order`, so the load order is
+    // gone by the time a user sort is applied (audit B1, BUG_RESEARCH
+    // 2026-07-18).
     std::stable_sort(m_steps.begin(), m_steps.end(), [](const auto& a, const auto& b) {
-        return a.order < b.order;
+        if (a.position.y != b.position.y) return a.position.y < b.position.y;
+        return a.position.x < b.position.x;
     });
+
+    for (int i = 0; i < static_cast<int>(m_steps.size()); ++i) {
+        m_steps[i].order = i;
+    }
 }
 
 void PickAndPlace::sortByFootprintSize()
@@ -172,20 +180,40 @@ void PickAndPlace::markPlaced()
     emit stepPlaced(ref);
 
     m_currentIndex++;
+    // Placing the LAST step while earlier steps were skipped used to dead-end:
+    // no signal fired and P/N went inert (audit B10). Wrap to the first
+    // remaining unplaced step so the tour keeps cycling over the leftovers.
+    const int n = static_cast<int>(m_steps.size());
+    if (m_currentIndex >= n && !isComplete()) {
+        for (int i = 0; i < n; ++i) {
+            if (!m_steps[i].placed) { m_currentIndex = i; break; }
+        }
+    }
     emitProgress();
 
     if (isComplete()) {
         emit allPlaced();
-    } else if (m_currentIndex < static_cast<int>(m_steps.size())) {
+    } else if (m_currentIndex < n) {
         emit currentStepChanged(m_steps[m_currentIndex]);
     }
 }
 
 void PickAndPlace::skip()
 {
-    if (m_currentIndex < static_cast<int>(m_steps.size()) - 1) {
+    const int n = static_cast<int>(m_steps.size());
+    if (m_currentIndex < n - 1) {
         m_currentIndex++;
         emit currentStepChanged(m_steps[m_currentIndex]);
+        return;
+    }
+    // Skipping the last step: wrap to the first unplaced step, if any, so the
+    // remaining skipped work stays reachable with N alone (audit B10).
+    for (int i = 0; i < n; ++i) {
+        if (!m_steps[i].placed && i != m_currentIndex) {
+            m_currentIndex = i;
+            emit currentStepChanged(m_steps[i]);
+            return;
+        }
     }
 }
 

@@ -43,12 +43,36 @@
     c. **RemoteView overlay + token (§3.2)** : activer RemoteView, ouvrir le viewer depuis une **autre machine** → l'URL exige `&token=…` (log au démarrage du serveur donne le token, généré+persisté une fois) ; **sans token → accès refusé** (« Access denied ») ; **avec** → le flux distant montre bien l'image **+ overlay iBOM composité** (plus seulement la caméra brute), à ~10 fps.
     d. **Seuils re-anchor en mm (§1.3)** : re-anchor périodique — au **microscope** (fort px/mm) le gate ne doit plus être hyper-sensible (12 px = 0,05 mm) : vérifier au log que `pose within Npx` s'adapte (N plus grand au microscope, ~11 px à la D405). Purement interne ; ne doit pas changer le ressenti à la D405.
     e. **Auto-mode 1 fit/frame (§1.1)** : au log `[track]`, le chemin optical-flow ne fait plus **2** fits RANSAC/frame mais 1 (la famille similarité/homographie est mémorisée entre re-seeds ORB) — vérifier que le tracking reste stable sur carte plane et se ré-arbitre bien si on incline la carte (perspective réelle). Gain CPU à mesurer sur Orin.
+13. **Correctifs de l'audit de bugs (suite 151, B1-B13)** : build complet + `ctest` (test_pickandplace touché indirectement — sortByPosition/skip modifiés) puis scénarios ciblés :
+    a. **B3** : scanner la carte A → charger l'iBOM de la carte B **pendant** le scan → statut « Board scan discarded… » ; « Save Last Scan as Golden » doit répondre « No finished board scan » (aucun dossier `golden/<hashB>/` créé).
+    b. **B2** : placer quelques composants → Reset → les lignes BOM redeviennent vierges ET la PCB Map perd ses points verts.
+    c. **B1** : Settings → Component order → « Position » → l'ordre suit un balayage haut→bas / gauche→droite (plus l'ordre par valeur).
+    d. **B10** : sauter un composant, placer tous les autres → le tour reboucle sur le sauté (P/N restent vivants).
+    e. **B5** : Settings → Apply avec le microscope sur /dev/video6 → le combo Device reste correctement sélectionné (plus de combo vide).
+    f. **B6** : profil D405 → switch profil microscope → « Depth-Check Components » répond « switch to the RealSense backend first » (plus de verdicts sur profondeur périmée).
+    g. **B8** : face Back + clic minimap au microscope → overlay miroité correctement.
+    h. **B9** : lancer un Auto-Align et fermer l'app immédiatement → sortie propre (pas de segfault après « Application exiting »).
+    i. **B12** : les lignes « Placed » du BOM panel sont colorées en vert (elles ne l'ont jamais été).
+    j. **B13** : `inspection_log.csv` — après un changement de carte, les nouvelles lignes portent le hash de la carte courante.
 
 ---
 
 > **Note de fusion (2026-07-15)** : les suites 146-149 ci-dessous proviennent de deux branches parallèles ouvertes le même jour (« Fin de code » et « Tour guidé / Features A+D / Help / Propositions ») ; les entrées sont classées par date de rédaction réelle, pas par ordre de numéro de suite — la branche « Fin de code » a réutilisé le numéro 146 sans connaître la chaîne 146→149 de l'autre branche.
 
-## État actuel — au 2026-07-18 (Audit de bugs — revue statique approfondie, 11 bugs catalogués, aucun code modifié)
+## État actuel — au 2026-07-18 (suite 151 : correction des 13 bugs de l'audit — B1-B11 + 2 bonus B12/B13)
+
+> **2026-07-18 (suite 151)** : demande utilisateur « corrige » → correction des 11 bugs de l'audit (suite 150) + 2 bugs bonus découverts pendant la correction. Détail complet des correctifs : [BUG_RESEARCH_2026-07-18.md](BUG_RESEARCH_2026-07-18.md) § « Corrections appliquées ».
+> - **B1** : `sortByPosition()` trie réellement en raster (y, x) + renumérote `order`. **B10** : `markPlaced()`/`skip()` bouclent sur le premier step non placé en fin de liste (plus de cul-de-sac du tour guidé).
+> - **B2/B11** : nouveau `BomPanel::clearAllStates()` — le Reset d'inspection et la restauration abandonnée blanchissent désormais les lignes BOM ET la minimap (`setPlacedRefs({})`).
+> - **B3** : `loadIBomFile()` stoppe un scan en vol + purge la mosaïque cachée ; garde `m_scanIbomHash` dans `onScanFinished()` (le `scanFinished` différé d'une autre carte est rejeté — sinon « Save as Golden » écrivait le scan de A sous le hash de B). **B4** : purge du HeatmapRenderer + `++m_heatmapRev` + `m_selectedRef.clear()` au chargement.
+> - **B5** : `refreshCameraDeviceList()` remplace le `findChild<QComboBox*>()->setCurrentIndex(index /dev/video)` (confusion position/données, ERREUR #22). **B6** : `m_lastDepthFrame` invalidé au switch de backend + gate RealSense explicite dans `runDepthInspection()`.
+> - **B7** : frame mono + CLAHE → clone avant l'apply in-place (le buffer FrameRef zero-copy n'est plus écrit). **B8** : miroir `vx` face Back + fallback scale dans l'ancre minimap microscope.
+> - **B9** : les QFuture d'Auto-Align/re-anchor sont membres (`m_autoAlignFuture`/`m_reanchorFuture`) et attendus en tête de `~Application()` — plus de use-after-free du détecteur en quittant pendant une détection. ⚠️ `Application.h` inclut désormais `BoardLocator.h`/`ComponentReanchor.h` (donc ONNX transitif dans `main.cpp` — sans risque, includes propagés par la cible + stub CI).
+> - **B12 (bonus)** : couleurs d'état BomPanel jamais appliquées (`state == "placed"` vs valeur réelle `"Placed"`) → comparaison insensible à la casse. **B13 (bonus)** : `m_ibomHash` était calculé AVANT `setIBomFilePath()` → le journal d'audit était estampillé avec le hash de la carte précédente ; déplacé après.
+> - **Rien compilé ici** (pas de Qt/OpenCV dans le conteneur) — build + ctest + scénarios de l'item 13 du bloc « À valider » ci-dessus au prochain build Jetson.
+> - Fichiers : `src/app/Application.{h,cpp}`, `src/features/PickAndPlace.cpp`, `src/gui/BomPanel.{h,cpp}`, `src/overlay/TrackingWorker.cpp`, `docs/BUG_RESEARCH_2026-07-18.md`, ce journal.
+
+## État précédent — au 2026-07-18 (Audit de bugs — revue statique approfondie, 11 bugs catalogués, aucun code modifié)
 
 > **2026-07-18 (suite 150)** : demande utilisateur « fais une recherche approfondie des bugs » → revue statique ciblée (~12 000 lignes) priorisée sur le code jamais exécuté sur Jetson (suites 145-149) + chemins de threading critiques. Livrable : **[BUG_RESEARCH_2026-07-18.md](BUG_RESEARCH_2026-07-18.md)** — 11 bugs vérifiés fichier:ligne (aucune spéculation), 10 notes de risque mineur, et la liste des chemins relus sains (reconnexion caméra, reuseAutoChoice, token RemoteView, wrappers zero-copy…).
 > - **4 bugs moyens** : B1 tri « Position » sans effet (`order` écrasé par `sortByValueGroup` au chargement) ; B2 Reset d'inspection ne nettoie ni la minimap ni les états BOM ; B3 cache scan/golden non invalidé au chargement d'un nouvel iBOM → **golden de la carte A sauvé sous le hash de la carte B** (corruption du store golden) + scan actif non stoppé ; B4 heatmap de défauts non purgée au changement de carte.

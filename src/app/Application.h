@@ -7,6 +7,7 @@
 #include <QImage>
 #include <QSize>
 #include <QTransform>
+#include <QFuture>
 #include <QFutureWatcher>
 #include <opencv2/core.hpp>
 #include <cstddef>
@@ -21,6 +22,8 @@
 #include "ibom/IBomData.h"         // ibom::Layer (m_activeLayer — an enum
                                    // class can't be forward-declared here)
 #include "overlay/ReanchorGate.h"  // silent re-anchor decision logic (member)
+#include "overlay/BoardLocator.h"       // BoardLocateResult (QFuture member)
+#include "overlay/ComponentReanchor.h"  // ComponentReanchorResult (QFuture member)
 #include "features/BoardMosaic.h"  // MosaicGeometry (last-scan metadata member)
 
 namespace ibom {
@@ -368,6 +371,13 @@ private:
     // alignment already landed by the time it finishes.
     uint64_t m_alignmentEpoch = 0;
 
+    // In-flight QtConcurrent detections (Auto-Align / component re-anchor),
+    // waited on in ~Application: their lambdas capture the raw detector
+    // pointer, which must outlive them — without the wait, quitting during a
+    // detection is a use-after-free on m_componentDetector (audit B9).
+    QFuture<overlay::BoardLocateResult>       m_autoAlignFuture;
+    QFuture<overlay::ComponentReanchorResult> m_reanchorFuture;
+
     // Selected component ref for overlay highlight
     std::string m_selectedRef;
 
@@ -498,6 +508,12 @@ private:
     cv::Mat m_lastScanMosaic, m_lastScanMask;
     features::MosaicGeometry m_lastScanGeo;
     ibom::Layer m_lastScanLayer = ibom::Layer::Front;
+    // Board hash captured when the scan started: onScanFinished() discards a
+    // result whose board no longer matches (an iBOM load stops the scan, but
+    // the worker's scanFinished arrives queued AFTER the caches were purged —
+    // without this guard it would repopulate them with the old board's scan
+    // and Save-as-Golden would key it under the new board's hash, audit B3).
+    QString m_scanIbomHash;
 
     // Scene advisor (D1): streak counters so one bad frame never warns and
     // one good frame never clears (analysis is throttled in frameReady).
