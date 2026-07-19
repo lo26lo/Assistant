@@ -36,6 +36,7 @@
 #include "features/DatasetCreator.h"
 #include "features/RemoteView.h"
 #include "features/BoardScanner.h"
+#include "overlay/AlignmentMath.h"
 #include "features/GoldenDiff.h"
 #include "features/DepthInspector.h"
 #include "utils/SceneQuality.h"
@@ -73,6 +74,8 @@
 #include <QVBoxLayout>
 #include <QTableWidget>
 #include <QHeaderView>
+#include <QInputDialog>
+#include <QLabel>
 #include <QRandomGenerator>
 #include <QtConcurrent/QtConcurrent>
 #include <QFutureWatcher>
@@ -375,6 +378,9 @@ bool Application::initialize()
     // Remote browser view, if enabled in config.
     applyRemoteViewConfig();
 
+    // Board library (C2): the registry of every board opened so far.
+    m_boardLibrary.open(utils::dataDir() / "board_library.json");
+
     // Recent iBOM files menu + optional auto-reload of the last board.
     refreshRecentFilesMenu();
     if (m_config->autoReloadIbom() && !m_config->ibomFilePath().empty()) {
@@ -495,6 +501,10 @@ void Application::saveInspectionState()
         return;
     }
     ofs << root.dump(2);
+
+    // Keep the board library's progress column current (C2) — cheap, the
+    // registry is a small JSON.
+    updateBoardLibraryEntry();
 }
 
 std::unordered_set<std::string> Application::loadSavedPlacedRefs() const
@@ -1280,22 +1290,13 @@ void Application::applyMultiAlignment()
         }
     } else {  // n == 2 — similarity
         // Back side: the camera sees the layout mirrored, which a similarity
-        // cannot represent. Fit in the view frame (pcb x negated — vx) so the
-        // resulting 3×3, expressed against RAW pcb coords, carries the mirror
-        // (negative determinant). n ≥ 3 needs no special casing: affine and
-        // homography fits represent a mirror natively.
+        // cannot represent — alignmath fits in the view frame (pcb x negated,
+        // vx) so the resulting 3×3, expressed against RAW pcb coords, carries
+        // the mirror (negative determinant). n ≥ 3 needs no special casing:
+        // affine and homography fits represent a mirror natively.
         const double vx = (m_activeLayer == ibom::Layer::Back) ? -1.0 : 1.0;
-        const double dxp = vx * (pcb[1].x - pcb[0].x), dyp = pcb[1].y - pcb[0].y;
-        const double dxi = img[1].x - img[0].x, dyi = img[1].y - img[0].y;
-        const double dp = std::hypot(dxp, dyp), di = std::hypot(dxi, dyi);
-        if (dp >= 0.1 && di >= 1.0) {
-            const double s = di / dp;
-            const double rot = std::atan2(dyi, dxi) - std::atan2(dyp, dxp);
-            const double c = std::cos(rot) * s, sn = std::sin(rot) * s;
-            const double tx = img[0].x - (c * vx * pcb[0].x - sn * pcb[0].y);
-            const double ty = img[0].y - (sn * vx * pcb[0].x + c * pcb[0].y);
-            H = (cv::Mat_<double>(3, 3) << c * vx, -sn, tx, sn * vx, c, ty, 0, 0, 1);
-        }
+        H = overlay::alignmath::similarityFromTwoPoints(pcb[0], pcb[1],
+                                                        img[0], img[1], vx);
     }
     if (H.empty() || H.rows != 3 || H.cols != 3) {
         m_mainWindow->updateStatusMessage(
@@ -2583,7 +2584,8 @@ void Application::wireCameraSignals()
                 || m_ibomProject.get() != m_ovSigProject
                 || m_activeLayer != m_ovSigLayer
                 || m_showHeatmap != m_ovSigHeatmap
-                || m_heatmapRev != m_ovSigHeatRev;
+                || m_heatmapRev != m_ovSigHeatRev
+                || m_revDiffRev != m_ovSigDiffRev;
 
             if (needsRender) {
                 overlay::OverlayInputs in;
@@ -2602,6 +2604,10 @@ void Application::wireCameraSignals()
                 in.drawPads = drawPads;
                 in.drawSilk = drawSilk;
                 in.activeLayer = m_activeLayer;
+                // C1 V2 — rework coloring from the last revision compare.
+                in.diffMarks = m_revDiffMarks;
+                in.diffAdds  = (m_activeLayer == ibom::Layer::Front)
+                                   ? m_revDiffAddsFront : m_revDiffAddsBack;
 
                 const auto t0 = std::chrono::steady_clock::now();
                 overlay::BoardOverlay bo = overlay::OverlayRenderer::renderBoardSpace(in);
@@ -2643,6 +2649,7 @@ void Application::wireCameraSignals()
                 m_ovSigLayer         = m_activeLayer;
                 m_ovSigHeatmap       = m_showHeatmap;
                 m_ovSigHeatRev       = m_heatmapRev;
+                m_ovSigDiffRev       = m_revDiffRev;
             }
 
             // Per-frame: compose buffer→PCB with the freshest PCB→image pose.
@@ -3478,16 +3485,13 @@ void Application::connectControlSignals()
                 ? m_currentPixelsPerMm
                 : m_config->microscopeAnchorPixelsPerMm();
             if (scale <= 0.0) scale = 20.0;
-            double rot = m_config->microscopeAnchorRotationDeg() * CV_PI / 180.0;
+            const double rot = m_config->microscopeAnchorRotationDeg() * CV_PI / 180.0;
 
-            double cosR = std::cos(rot) * scale;
-            double sinR = std::sin(rot) * scale;
-
-            // Back side: mirrored view frame (vx) — see applyMultiAlignment().
+            // Back side: mirrored view frame (vx) — alignmath carries the
+            // mirror into the similarity (see applyMultiAlignment()).
             const double vx = (m_activeLayer == ibom::Layer::Back) ? -1.0 : 1.0;
-            // Translation so the target component maps to the clicked point.
-            double tx = imgPt.x - (cosR * vx * m_anchorPcb.x - sinR * m_anchorPcb.y);
-            double ty = imgPt.y - (sinR * vx * m_anchorPcb.x + cosR * m_anchorPcb.y);
+            const cv::Mat simH = overlay::alignmath::similarityFromAnchor(
+                scale, rot, vx, m_anchorPcb, imgPt);
 
             auto& bb = m_ibomProject->boardInfo.boardBBox;
             std::vector<cv::Point2f> pcbCorners = {
@@ -3497,11 +3501,7 @@ void Application::connectControlSignals()
                 {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
             };
             std::vector<cv::Point2f> imgCorners;
-            for (const auto& p : pcbCorners) {
-                imgCorners.push_back({
-                    static_cast<float>(cosR * vx * p.x - sinR * p.y + tx),
-                    static_cast<float>(sinR * vx * p.x + cosR * p.y + ty)});
-            }
+            cv::perspectiveTransform(pcbCorners, imgCorners, simH);
 
             ++m_alignmentEpoch;
             if (m_homography->compute(pcbCorners, imgCorners)) {
@@ -3546,41 +3546,21 @@ void Application::connectControlSignals()
                 m_alignOnComponents = false;
                 m_alignCompStep = 0;
 
-                // Compute similarity transform from 2 point pairs
-                // PCB coords → image coords
-                // A similarity has 4 DOF: scale, rotation, tx, ty
-                // From 2 points we get exactly 4 equations
+                // Similarity from the 2 correspondences (4 DOF = 4 equations).
                 // Back side: fit in the mirrored view frame (vx) — see
                 // applyMultiAlignment(); the mirror ends up inside the
                 // homography, which keeps mapping RAW pcb coords.
                 const double vx = (m_activeLayer == ibom::Layer::Back) ? -1.0 : 1.0;
-                double dx_pcb = vx * (m_alignPcb2.x - m_alignPcb1.x);
-                double dy_pcb = m_alignPcb2.y - m_alignPcb1.y;
-                double dx_img = m_alignImg2.x - m_alignImg1.x;
-                double dy_img = m_alignImg2.y - m_alignImg1.y;
-
-                double dist_pcb = std::sqrt(dx_pcb * dx_pcb + dy_pcb * dy_pcb);
-                double dist_img = std::sqrt(dx_img * dx_img + dy_img * dy_img);
-
-                if (dist_pcb < 0.1 || dist_img < 1.0) {
+                double scale = 0.0, rot = 0.0;
+                const cv::Mat simH = overlay::alignmath::similarityFromTwoPoints(
+                    m_alignPcb1, m_alignPcb2, m_alignImg1, m_alignImg2, vx,
+                    &scale, &rot);
+                if (simH.empty()) {
                     QMessageBox::warning(m_mainWindow.get(), tr("Alignment Failed"),
                         tr("The two components are too close together. Choose components that are far apart."));
                     m_mainWindow->updateStatusMessage(tr("Alignment failed — components too close"));
                     return;
                 }
-
-                // Similarity transform: scale, rotation
-                double scale = dist_img / dist_pcb;
-                double angle_pcb = std::atan2(dy_pcb, dx_pcb);
-                double angle_img = std::atan2(dy_img, dx_img);
-                double rot = angle_img - angle_pcb;
-
-                double cosR = std::cos(rot) * scale;
-                double sinR = std::sin(rot) * scale;
-
-                // Translation from point 1 (view-frame x)
-                double tx = m_alignImg1.x - (cosR * vx * m_alignPcb1.x - sinR * m_alignPcb1.y);
-                double ty = m_alignImg1.y - (sinR * vx * m_alignPcb1.x + cosR * m_alignPcb1.y);
 
                 // Build 4 virtual corners from the board bbox using the similarity
                 auto& bb = m_ibomProject->boardInfo.boardBBox;
@@ -3591,11 +3571,7 @@ void Application::connectControlSignals()
                     {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
                 };
                 std::vector<cv::Point2f> imgCorners;
-                for (const auto& p : pcbCorners) {
-                    float ix = static_cast<float>(cosR * vx * p.x - sinR * p.y + tx);
-                    float iy = static_cast<float>(sinR * vx * p.x + cosR * p.y + ty);
-                    imgCorners.push_back({ix, iy});
-                }
+                cv::perspectiveTransform(pcbCorners, imgCorners, simH);
 
                 ++m_alignmentEpoch;
                 if (m_homography->compute(pcbCorners, imgCorners)) {
@@ -3843,6 +3819,12 @@ void Application::connectControlSignals()
             this, &Application::undoLastPlacement);
     connect(m_mainWindow.get(), &gui::MainWindow::revisionCompareRequested,
             this, &Application::compareRevision);
+    connect(m_mainWindow.get(), &gui::MainWindow::revisionMarksClearRequested,
+            this, [this]() { clearRevisionMarks(/*notify=*/true); });
+    connect(m_mainWindow.get(), &gui::MainWindow::componentNoteRequested,
+            this, &Application::editComponentNote);
+    connect(m_mainWindow.get(), &gui::MainWindow::boardLibraryRequested,
+            this, &Application::showBoardLibrary);
     connect(inspPanel, &gui::InspectionPanel::resetClicked,
             m_pickAndPlace.get(), &features::PickAndPlace::reset);
 
@@ -3966,25 +3948,22 @@ void Application::connectControlSignals()
         double scale = (m_currentPixelsPerMm > 0.0) ? m_currentPixelsPerMm
                        : m_config->microscopeAnchorPixelsPerMm();
         if (scale <= 0.0) scale = 20.0;  // same fallback as the click-anchor path
-        double rot  = m_config->microscopeAnchorRotationDeg() * CV_PI / 180.0;
-        double cosR = std::cos(rot) * scale;
-        double sinR = std::sin(rot) * scale;
+        const double rot = m_config->microscopeAnchorRotationDeg() * CV_PI / 180.0;
 
         // Back side: mirrored view frame (vx) — same convention as the anchor
-        // click handler / applyMultiAlignment. This path used to skip the
-        // mirror, so a minimap anchor on the back face posed the overlay
-        // un-mirrored (audit B8).
+        // click handler / applyMultiAlignment (audit B8; the shared alignmath
+        // helper is what keeps the four similarity paths from drifting apart
+        // again).
         const double vx = (m_activeLayer == ibom::Layer::Back) ? -1.0 : 1.0;
 
         // Center of the camera image
         float iw = static_cast<float>(m_camera->resolution().width());
         float ih = static_cast<float>(m_camera->resolution().height());
         if (iw <= 0 || ih <= 0) { iw = 1920; ih = 1080; }
-        cv::Point2f imgCenter(iw / 2.f, ih / 2.f);
+        const cv::Point2f imgCenter(iw / 2.f, ih / 2.f);
 
-        // Image origin: imgCenter = H * pcbPt  ⟹ tx = cx - (cosR*vx*px - sinR*py)
-        double tx = imgCenter.x - (cosR * vx * pcbPt.x - sinR * pcbPt.y);
-        double ty = imgCenter.y - (sinR * vx * pcbPt.x + cosR * pcbPt.y);
+        const cv::Mat simH = overlay::alignmath::similarityFromAnchor(
+            scale, rot, vx, pcbPt, imgCenter);
 
         auto& bb = m_ibomProject->boardInfo.boardBBox;
         std::vector<cv::Point2f> pcbCorners = {
@@ -3994,13 +3973,7 @@ void Application::connectControlSignals()
             {static_cast<float>(bb.minX), static_cast<float>(bb.maxY)}
         };
         std::vector<cv::Point2f> imgCorners;
-        imgCorners.reserve(pcbCorners.size());
-        for (auto& pc : pcbCorners) {
-            imgCorners.push_back({
-                static_cast<float>(cosR * vx * pc.x - sinR * pc.y + tx),
-                static_cast<float>(sinR * vx * pc.x + cosR * pc.y + ty)
-            });
-        }
+        cv::perspectiveTransform(pcbCorners, imgCorners, simH);
         ++m_alignmentEpoch;
         if (m_homography->compute(pcbCorners, imgCorners)) {
             if (m_liveMode) m_baseHomography = m_homography->matrix().clone();
@@ -4169,6 +4142,10 @@ void Application::loadIBomFile(const QString& path)
         ++m_heatmapRev;   // re-signature: the overlay cache re-renders without it
     }
     m_selectedRef.clear();  // the selection belonged to the old board
+    clearRevisionMarks(/*notify=*/false);  // rework coloring too (C1 V2)
+    // The scanned-board minimap background belongs to the old board.
+    m_mainWindow->boardMinimap()->setBoardImage(QImage(), QRectF(),
+                                                ibom::Layer::Front);
 
     // Reset the session undo stack — it must never cross board boundaries.
     m_placedOrder.clear();
@@ -4205,6 +4182,15 @@ void Application::loadIBomFile(const QString& path)
     // setIBomFilePath: ibomContentHash() reads the configured path, so hashing
     // earlier stamped every entry with the PREVIOUS board's hash (audit B13).
     m_ibomHash = ibomContentHash();
+
+    // B2 — bind the per-board annotation store (hash-keyed like golden/) and
+    // surface the 📌 markers on the PCB Map.
+    if (!m_ibomHash.isEmpty())
+        m_annotations.open(utils::dataDir() / "annotations"
+                           / (m_ibomHash.toStdString() + ".json"));
+    else
+        m_annotations.clear();
+    m_mainWindow->boardMinimap()->setAnnotatedRefs(m_annotations.annotatedRefs());
 
     // Restore the placed state of a previous inspection of this board so the
     // overlay and BOM panel show progress immediately (full resume happens
@@ -4289,6 +4275,9 @@ void Application::loadIBomFile(const QString& path)
                   std::shared_ptr<const IBomProject>(m_ibomProject)),
             Q_ARG(ibom::Layer, m_activeLayer));
     }
+
+    // C2 — register/refresh this board in the library.
+    updateBoardLibraryEntry();
 
     emit ibomLoaded(static_cast<int>(m_ibomProject->components.size()));
 }
@@ -4469,6 +4458,10 @@ void Application::onExport(const QString& format)
             ir.value     = r.value;
             ir.footprint = r.footprint;
             ir.status    = r.status;
+            // B2 — pinned note injected into the report's Detail column
+            // (defectType feeds it; SolderInspector, its original producer,
+            // is not wired, so the column is free).
+            ir.defectType = m_annotations.noteText(r.reference);
             results.push_back(std::move(ir));
         }
         gen.setResults(results);
@@ -4806,11 +4799,33 @@ void Application::compareRevision()
 
     const RevisionDiff diff = diffProjects(*m_ibomProject, *other);
     if (diff.empty()) {
+        clearRevisionMarks(/*notify=*/false);   // stale coloring would lie
         m_mainWindow->updateStatusMessage(
             tr("Revision diff: identical BOMs (%1 components)")
                 .arg(diff.unchanged));
         return;
     }
+
+    // C1 V2 — rework coloring on the overlay: REMOVE red (with an X), CHANGE
+    // orange; ADD as green ring markers at the target revision's positions
+    // (those components don't exist in the current project). Split per side
+    // so the overlay only shows the active face's adds.
+    m_revDiffMarks.clear();
+    m_revDiffAddsFront.clear();
+    m_revDiffAddsBack.clear();
+    for (const auto& ref : diff.removed) m_revDiffMarks[ref] = 1;
+    for (const auto& ch : diff.changed)  m_revDiffMarks[ch.ref] = 2;
+    if (!diff.added.empty()) {
+        const std::unordered_set<std::string> added(diff.added.begin(),
+                                                    diff.added.end());
+        for (const auto& c : other->components) {
+            if (!added.count(c.reference)) continue;
+            auto& dst = (c.layer == Layer::Front) ? m_revDiffAddsFront
+                                                  : m_revDiffAddsBack;
+            dst.emplace_back(c.position, c.reference);
+        }
+    }
+    ++m_revDiffRev;   // re-signature: the overlay re-renders with the marks
 
     // Rework order: desolder first, then place, then exchanges.
     std::vector<QStringList> rows;
@@ -4848,9 +4863,153 @@ void Application::compareRevision()
                  diff.removed.size(), diff.added.size(), diff.changed.size(),
                  diff.unchanged);
     m_mainWindow->updateStatusMessage(
-        tr("Revision diff: %1 to remove, %2 to add, %3 to change (%4 unchanged)")
+        tr("Revision diff: %1 to remove (red), %2 to add (green), %3 to change "
+           "(orange) — coloring shown on the overlay (Inspection → Clear "
+           "Revision Marks to remove)")
             .arg(diff.removed.size()).arg(diff.added.size())
-            .arg(diff.changed.size()).arg(diff.unchanged));
+            .arg(diff.changed.size()));
+}
+
+void Application::clearRevisionMarks(bool notify)
+{
+    const bool had = !m_revDiffMarks.empty() || !m_revDiffAddsFront.empty()
+                     || !m_revDiffAddsBack.empty();
+    m_revDiffMarks.clear();
+    m_revDiffAddsFront.clear();
+    m_revDiffAddsBack.clear();
+    if (had) ++m_revDiffRev;   // re-signature: overlay re-renders clean
+    if (notify && m_mainWindow) {
+        m_mainWindow->updateStatusMessage(had
+            ? tr("Revision marks cleared")
+            : tr("No revision marks to clear"));
+    }
+}
+
+// ── Notes & board library (FEATURE_PROPOSALS B2 / C2) ─────────────────────
+
+void Application::editComponentNote()
+{
+    if (!m_ibomProject) {
+        m_mainWindow->updateStatusMessage(tr("Notes: load an iBOM first"));
+        return;
+    }
+    if (m_selectedRef.empty()) {
+        m_mainWindow->updateStatusMessage(
+            tr("Notes: select a component first (BOM panel or PCB Map)"));
+        return;
+    }
+    if (m_ibomHash.isEmpty()) {
+        m_mainWindow->updateStatusMessage(
+            tr("Notes: cannot hash the iBOM file — notes not available"));
+        return;
+    }
+
+    const QString ref = QString::fromStdString(m_selectedRef);
+    bool ok = false;
+    const QString text = QInputDialog::getMultiLineText(
+        m_mainWindow.get(), tr("Note — %1").arg(ref),
+        tr("Free-text note pinned to %1 (leave empty to remove):").arg(ref),
+        QString::fromStdString(m_annotations.noteText(m_selectedRef)), &ok);
+    if (!ok) return;   // cancelled — leave the note untouched
+
+    const QString trimmed = text.trimmed();
+    m_annotations.setNote(
+        m_selectedRef, trimmed.toStdString(),
+        QDateTime::currentDateTime().toString(Qt::ISODate).toStdString(),
+        m_activeLayer == Layer::Front ? "front" : "back");
+    appendInspectionLog(QStringLiteral("note"), m_selectedRef);
+    m_mainWindow->boardMinimap()->setAnnotatedRefs(m_annotations.annotatedRefs());
+    updateBoardLibraryEntry();
+    m_mainWindow->updateStatusMessage(trimmed.isEmpty()
+        ? tr("Note removed from %1").arg(ref)
+        : tr("Note saved on %1").arg(ref));
+}
+
+void Application::updateBoardLibraryEntry()
+{
+    if (!m_ibomProject || m_ibomHash.isEmpty()) return;
+    features::BoardLibraryEntry e;
+    e.hash  = m_ibomHash.toStdString();
+    e.path  = m_config->ibomFilePath();
+    e.title = m_ibomProject->boardInfo.title;
+    if (e.title.empty())
+        e.title = QFileInfo(QString::fromStdString(e.path))
+                      .fileName().toStdString();
+    e.lastOpened = QDateTime::currentDateTimeUtc()
+                       .toString(Qt::ISODate).toStdString();
+    e.components = static_cast<int>(m_ibomProject->components.size());
+    e.placed     = static_cast<int>(m_placedRefs.size());
+    std::error_code ec;
+    e.hasGolden  = std::filesystem::exists(
+        utils::dataDir() / "golden" / e.hash, ec);
+    e.hasNotes   = m_annotations.count() > 0;
+    m_boardLibrary.touch(e);
+}
+
+void Application::showBoardLibrary()
+{
+    const auto entries = m_boardLibrary.entries();
+
+    auto* dlg = new QDialog(m_mainWindow.get());
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setWindowTitle(tr("Board Library"));
+    dlg->resize(760, 420);
+    auto* lay = new QVBoxLayout(dlg);
+
+    auto* hint = new QLabel(
+        entries.empty()
+            ? tr("No board opened yet — boards are registered here "
+                 "automatically when you open an iBOM file.")
+            : tr("Double-click a board to open it. Its state (inspection "
+                 "progress, golden scan, notes) is keyed by file CONTENT, so "
+                 "it survives moving or renaming the HTML."),
+        dlg);
+    hint->setWordWrap(true);
+    lay->addWidget(hint);
+
+    auto* table = new QTableWidget(static_cast<int>(entries.size()), 6, dlg);
+    table->setHorizontalHeaderLabels({tr("Board"), tr("Components"),
+                                      tr("Placed"), tr("Golden"), tr("Notes"),
+                                      tr("Last opened")});
+    table->verticalHeader()->setVisible(false);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->horizontalHeader()->setStretchLastSection(true);
+    for (int r = 0; r < static_cast<int>(entries.size()); ++r) {
+        const auto& e = entries[r];
+        auto* title = new QTableWidgetItem(QString::fromStdString(e.title));
+        title->setToolTip(QString::fromStdString(e.path));
+        title->setData(Qt::UserRole, QString::fromStdString(e.path));
+        table->setItem(r, 0, title);
+        table->setItem(r, 1, new QTableWidgetItem(QString::number(e.components)));
+        table->setItem(r, 2, new QTableWidgetItem(QString::number(e.placed)));
+        table->setItem(r, 3, new QTableWidgetItem(e.hasGolden ? QStringLiteral("✓") : QString()));
+        table->setItem(r, 4, new QTableWidgetItem(e.hasNotes  ? QStringLiteral("📌") : QString()));
+        table->setItem(r, 5, new QTableWidgetItem(QString::fromStdString(e.lastOpened)));
+    }
+    table->resizeColumnsToContents();
+    lay->addWidget(table);
+
+    connect(table, &QTableWidget::cellDoubleClicked, dlg,
+            [this, dlg, table](int row, int) {
+        auto* item = table->item(row, 0);
+        if (!item) return;
+        const QString path = item->data(Qt::UserRole).toString();
+        dlg->close();
+        if (!QFileInfo::exists(path)) {
+            // The registry keeps the LAST known path — the file may have
+            // moved since. The stored state (hash-keyed) is intact; the user
+            // just needs to re-open the file from its new location.
+            m_mainWindow->updateStatusMessage(
+                tr("Board library: %1 no longer exists — use File → Open and "
+                   "its saved state will reattach (content-keyed)").arg(path));
+            return;
+        }
+        loadIBomFile(path);
+    });
+
+    dlg->show();
+    dlg->raise();
 }
 
 // ── Board scan / golden diff / depth check (FEATURE_PROPOSALS A1-A3) ──────
@@ -4979,6 +5138,16 @@ void Application::onScanFinished(QString pngPath, cv::Mat mosaic, cv::Mat writte
     m_lastScanGeo.heightPx = mosaic.rows;
     m_lastScanLayer = layerInt == 0 ? Layer::Front : Layer::Back;
 
+    // Show the orthorectified scan as the PCB Map's background (the mosaic is
+    // in raw PCB mm by construction — same frame as the minimap). Deep copy
+    // via matToQImage: once per finished scan, not per frame.
+    if (pxPerMm > 0.0) {
+        const QRectF pcbRect(minXmm, minYmm,
+                             mosaic.cols / pxPerMm, mosaic.rows / pxPerMm);
+        m_mainWindow->boardMinimap()->setBoardImage(
+            utils::ImageUtils::matToQImage(mosaic), pcbRect, m_lastScanLayer);
+    }
+
     if (pngPath.isEmpty()) {
         m_mainWindow->updateStatusMessage(
             tr("Board scan finished (%1% coverage) — PNG export failed, see log")
@@ -5027,6 +5196,7 @@ void Application::saveGolden()
     ofs << meta.dump(2);
 
     spdlog::info("[golden] saved {} face under {}", base, dir.string());
+    updateBoardLibraryEntry();   // the library's "Golden ✓" column (C2)
     m_mainWindow->updateStatusMessage(
         tr("Golden %1 face saved for this board")
             .arg(m_lastScanLayer == Layer::Front ? tr("front") : tr("back")));

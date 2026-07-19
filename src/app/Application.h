@@ -11,12 +11,15 @@
 #include <QFutureWatcher>
 #include <opencv2/core.hpp>
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <string>
 #include <atomic>
 #include <chrono>
 #include <thread>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include "camera/ICameraSource.h"  // for ibom::camera::FrameRef/DepthFrameRef
 #include "ibom/IBomData.h"         // ibom::Layer (m_activeLayer — an enum
@@ -25,6 +28,8 @@
 #include "overlay/BoardLocator.h"       // BoardLocateResult (QFuture member)
 #include "overlay/ComponentReanchor.h"  // ComponentReanchorResult (QFuture member)
 #include "features/BoardMosaic.h"  // MosaicGeometry (last-scan metadata member)
+#include "features/Annotations.h"   // per-board component notes (member, B2)
+#include "features/BoardLibrary.h"  // board registry (member, C2)
 
 namespace ibom {
 
@@ -259,8 +264,22 @@ private:
     /// Append one line to the per-board inspection audit trail
     /// (dataDir()/inspection_log.csv — timestamp, board hash, face, action, ref).
     void appendInspectionLog(const QString& action, const std::string& ref);
-    /// Diff the loaded iBOM against another revision file (dialog + table).
+    /// Diff the loaded iBOM against another revision file (dialog + table +
+    /// rework coloring on the overlay — C1 V2).
     void compareRevision();
+    /// Drop the rework coloring left by compareRevision (menu entry, iBOM
+    /// load, identical-BOMs compare). notify=true posts a status message.
+    void clearRevisionMarks(bool notify);
+
+    // ── Notes & board library (FEATURE_PROPOSALS B2 / C2) ──
+    /// Edit (create/replace/remove) the note pinned on the selected component.
+    void editComponentNote();
+    /// Insert/refresh the loaded board in the library registry (called on
+    /// load, on note edits, on golden save and with every progress save).
+    void updateBoardLibraryEntry();
+    /// Non-modal "Board Library" dialog — every board opened so far, with its
+    /// stored state; double-click reopens.
+    void showBoardLibrary();
 
     QApplication&                               m_qapp;
     std::unique_ptr<Config>                    m_config;
@@ -398,6 +417,20 @@ private:
     // Content hash of the loaded iBOM, cached at load (the audit log appends
     // on every placement — re-hashing the HTML each click would be wasteful).
     QString m_ibomHash;
+
+    // B2 — per-board component notes, bound to annotations/<hash>.json at
+    // load. C2 — registry of every board opened, board_library.json.
+    features::AnnotationStore m_annotations;
+    features::BoardLibrary    m_boardLibrary;
+
+    // C1 V2 — revision-diff rework marks fed to the overlay renderer:
+    // ref → 1 (REMOVE, red) / 2 (CHANGE, orange), plus the target revision's
+    // ADD positions split per side. m_revDiffRev is part of the overlay cache
+    // signature; cleared on iBOM load / identical compare / menu entry.
+    std::map<std::string, int> m_revDiffMarks;
+    std::vector<std::pair<Point2D, std::string>> m_revDiffAddsFront;
+    std::vector<std::pair<Point2D, std::string>> m_revDiffAddsBack;
+    int m_revDiffRev = 0;
 
     // Heatmap visibility
     bool m_showHeatmap = false;
@@ -543,6 +576,8 @@ private:
     bool        m_ovSigHeatmap = false;
     int         m_ovSigHeatRev = -1;
     int         m_heatmapRev   = 0;   // bumped whenever the heatmap content changes
+    // Revision-diff marks revision (C1 V2) — same pattern as the heatmap.
+    int         m_ovSigDiffRev = -1;
     // buffer→PCB mapping of the current board buffer (inverse of the renderer's
     // pcbToBuffer), composed with the live homography into the per-frame warp.
     QTransform  m_boardBufferToPcb;

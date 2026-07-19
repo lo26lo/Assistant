@@ -6,6 +6,7 @@
 #include <QPixmap>
 #include <QColor>
 #include <QPolygonF>
+#include <QRectF>
 #include <QElapsedTimer>
 #include <opencv2/core.hpp>
 #include <memory>
@@ -66,6 +67,18 @@ public:
 
     /// Components already placed (drawn faded).
     void setPlacedRefs(const std::unordered_set<std::string>& refs);
+
+    /// Components carrying a pinned note (B2) — drawn with a small amber
+    /// marker at their top-right corner.
+    void setAnnotatedRefs(const std::unordered_set<std::string>& refs);
+
+    /// Orthorectified board image (last finished scan, A1) drawn under the
+    /// components as the map background. `pcbRect` is the image's extent in
+    /// raw PCB mm; only drawn while `layer` is the active side. Pass a null
+    /// image to clear. Toggleable from the context menu.
+    void setBoardImage(const QImage& img, const QRectF& pcbRect,
+                       ibom::Layer layer);
+    void setBoardImageVisible(bool on);
 
     /// Highlight the exact PCB points the user must click in the camera image
     /// to calibrate (multi-component alignment) — e.g. the two farthest-apart
@@ -154,8 +167,15 @@ private:
     ibom::Layer                         m_activeLayer = ibom::Layer::Front;
     std::string                         m_selectedRef;
     std::unordered_set<std::string>     m_placedRefs;
+    std::unordered_set<std::string>     m_annotatedRefs;  // 📌 note markers (B2)
     std::vector<cv::Point2f>            m_clickTargets;  // PCB points to click (multi-align)
     QColor                              m_clickTargetColor{50, 230, 90};  // ring colour
+
+    // Scanned-board background (A1 mosaic, raw PCB mm extent, per face)
+    QImage      m_boardImage;
+    QRectF      m_boardImageRect;
+    ibom::Layer m_boardImageLayer = ibom::Layer::Front;
+    bool        m_boardImageVisible = true;
 
     // Board bbox (PCB units)
     double  m_pcbMinX  = 0, m_pcbMinY  = 0;

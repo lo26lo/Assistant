@@ -109,11 +109,24 @@ BoardOverlay OverlayRenderer::renderBoardSpace(const OverlayInputs& in)
 
         QColor padColor, silkColor, labelColor;
         qreal silkWidth = 1.0;
+        // Revision-diff rework mark for this ref (C1 V2), if any.
+        int diffMark = 0;
+        if (!in.diffMarks.empty()) {
+            const auto dm = in.diffMarks.find(comp.reference);
+            if (dm != in.diffMarks.end()) diffMark = dm->second;
+        }
         if (isSelected) {
             padColor   = withAlpha(in.cSelected, 220);
             silkColor  = withAlpha(in.cSelected, 240);
             labelColor = withAlpha(in.cSelected, 255);
             silkWidth  = in.selectedSilkW;
+        } else if (diffMark != 0) {
+            // Rework recolor: REMOVE = red (desolder), CHANGE = orange.
+            const QColor dc = (diffMark == 1) ? QColor(240, 60, 60)
+                                              : QColor(255, 165, 0);
+            padColor   = withAlpha(dc, 210);
+            silkColor  = withAlpha(dc, 230);
+            labelColor = withAlpha(dc, 255);
         } else if (isPlaced) {
             int a = static_cast<int>(180 * in.placedAlphaMul);
             padColor   = withAlpha(in.cPlaced, a);
@@ -125,21 +138,31 @@ BoardOverlay OverlayRenderer::renderBoardSpace(const OverlayInputs& in)
             labelColor = in.labelNormal;
         }
 
-        // ── Pads ── axis-aligned in PCB space (pad rotation was already
-        // ignored by the previous renderer — sizeX/sizeY only), so a plain
-        // rect/ellipse in buffer coords is the exact same geometry.
+        // ── Pads ── drawn with their own rotation (INVESTIGATION_360 §1.4 —
+        // they used to be axis-aligned, wrong for parts placed at e.g. 45°):
+        // local axis-aligned shape around the origin, painter rotated. Under
+        // the back-view mirror a rotation flips sign (M∘R(θ) = R(−θ)∘M; the
+        // local rect is mirror-symmetric). Angle convention matches iBOM's
+        // render.js drawPad (canvas rotate(+angle), y-down — same as Qt).
         if (in.drawPads) {
             painter.setPen(Qt::NoPen);
             painter.setBrush(padColor);
             for (const auto& pad : comp.pads) {
-                const QRectF r = rectPcb(pad.position.x - pad.sizeX / 2.0,
-                                         pad.position.y - pad.sizeY / 2.0,
-                                         pad.position.x + pad.sizeX / 2.0,
-                                         pad.position.y + pad.sizeY / 2.0);
+                const double hw = pad.sizeX * 0.5 * s;
+                const double hh = pad.sizeY * 0.5 * s;
+                const QRectF local(-hw, -hh, 2.0 * hw, 2.0 * hh);
+                painter.save();
+                painter.translate(mapX(pad.position.x), mapY(pad.position.y));
+                if (pad.angle != 0.0)
+                    painter.rotate(back ? -pad.angle : pad.angle);
                 if (pad.shape == Pad::Shape::Circle || pad.shape == Pad::Shape::Oval)
-                    painter.drawEllipse(r);
+                    painter.drawEllipse(local);
+                else if (pad.shape == Pad::Shape::RoundRect)
+                    painter.drawRoundedRect(local, std::min(hw, hh) * 0.5,
+                                            std::min(hw, hh) * 0.5);
                 else
-                    painter.drawRect(r);
+                    painter.drawRect(local);
+                painter.restore();
             }
         }
 
@@ -167,6 +190,18 @@ BoardOverlay OverlayRenderer::renderBoardSpace(const OverlayInputs& in)
             }
         }
 
+        // ── Rework X (REMOVE) ── across the body so "to desolder" reads at a
+        // glance even with pads/silk toggled off.
+        if (diffMark == 1) {
+            painter.setPen(QPen(withAlpha(QColor(240, 60, 60), 230),
+                                std::max(1.0, 0.12 * s)));
+            painter.drawLine(QPointF(mapX(comp.bbox.minX), mapY(comp.bbox.minY)),
+                             QPointF(mapX(comp.bbox.maxX), mapY(comp.bbox.maxY)));
+            painter.drawLine(QPointF(mapX(comp.bbox.minX), mapY(comp.bbox.maxY)),
+                             QPointF(mapX(comp.bbox.maxX), mapY(comp.bbox.minY)));
+            painter.setBrush(Qt::NoBrush);
+        }
+
         // ── Reference label ──
         if (in.drawSilk || isSelected) {
             const double cx = (comp.bbox.minX + comp.bbox.maxX) / 2.0;
@@ -175,6 +210,25 @@ BoardOverlay OverlayRenderer::renderBoardSpace(const OverlayInputs& in)
             painter.setFont(isSelected ? selectedLabelFont : normalLabelFont);
             painter.drawText(QPointF(mapX(cx), mapY(cy) - 0.15 * s),
                              QString::fromStdString(comp.reference));
+        }
+    }
+
+    // ── Components to ADD (C1 V2) ── exist only in the target revision:
+    // green ring + cross + ref at the position where they must be placed.
+    if (!in.diffAdds.empty()) {
+        const QColor add(80, 220, 90);
+        painter.setFont(normalLabelFont);
+        for (const auto& [pos, ref] : in.diffAdds) {
+            const QPointF c(mapX(pos.x), mapY(pos.y));
+            const double r = 1.2 * s;   // ~1.2 mm ring
+            painter.setPen(QPen(withAlpha(add, 240), std::max(1.0, 0.12 * s)));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(c, r, r);
+            painter.drawLine(c + QPointF(-r, 0), c + QPointF(r, 0));
+            painter.drawLine(c + QPointF(0, -r), c + QPointF(0, r));
+            painter.setPen(withAlpha(add, 255));
+            painter.drawText(c + QPointF(r + 0.2 * s, 0),
+                             QString::fromStdString(ref));
         }
     }
     painter.end();

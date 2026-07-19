@@ -584,6 +584,11 @@ void IBomParser::parseBoardOutline(const nlohmann::json& pcbdata, IBomProject& p
             seg.type = DrawingSegment::Type::Arc;
             seg.radius = edge.value("radius", 0.0);
             seg.angle  = edge.value("angle", 0.0);
+            // iBOM arcs: centre in `start`, angles in degrees. Without these
+            // the renderers can't draw the arc (rounded board corners were
+            // skipped on the minimap for exactly this reason).
+            seg.startAngle = edge.value("startangle", 0.0);
+            seg.endAngle   = edge.value("endangle", 0.0);
         } else if (type == "circle") {
             seg.type = DrawingSegment::Type::Circle;
             seg.radius = edge.value("radius", 0.0);
@@ -777,6 +782,8 @@ std::vector<DrawingSegment> IBomParser::parseDrawings(const nlohmann::json& draw
             seg.type = DrawingSegment::Type::Arc;
             seg.radius = d.value("radius", 0.0);
             seg.angle  = d.value("angle", 0.0);
+            seg.startAngle = d.value("startangle", 0.0);
+            seg.endAngle   = d.value("endangle", 0.0);
         } else if (type == "circle") {
             seg.type = DrawingSegment::Type::Circle;
             seg.radius = d.value("radius", 0.0);

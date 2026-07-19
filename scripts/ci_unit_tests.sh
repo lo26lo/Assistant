@@ -95,6 +95,18 @@ build_and_run test_project_diff \
     "$T/test_project_diff.cpp" "$S/ibom/ProjectDiff.cpp" \
     $CATCH_LIBS
 
+build_and_run test_alignment_math \
+    "$T/test_alignment_math.cpp" "$S/overlay/AlignmentMath.cpp" \
+    $OPENCV_LIBS $CATCH_LIBS
+
+build_and_run test_annotations \
+    "$T/test_annotations.cpp" "$S/features/Annotations.cpp" \
+    $LOG_LIBS $CATCH_LIBS
+
+build_and_run test_board_library \
+    "$T/test_board_library.cpp" "$S/features/BoardLibrary.cpp" \
+    $LOG_LIBS $CATCH_LIBS
+
 build_and_run test_board_mosaic \
     "$T/test_board_mosaic.cpp" "$S/features/BoardMosaic.cpp" \
     $OPENCV_LIBS $CATCH_LIBS

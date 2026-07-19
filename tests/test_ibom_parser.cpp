@@ -223,3 +223,38 @@ TEST_CASE("IBomData — BBox operations", "[ibom][data]")
                     outside.y >= box.minY && outside.y <= box.maxY;
     REQUIRE_FALSE(isInside);
 }
+
+TEST_CASE("IBomParser — board-outline arcs carry startangle/endangle",
+          "[ibom][parser]")
+{
+    // iBOM encodes an arc as centre (`start`), radius and start/end angles in
+    // degrees. Before these were parsed, the minimap had to skip rounded board
+    // corners entirely (a guessed sweep would draw phantom edges).
+    const std::string html = R"HTML(<script>
+      var config = {};
+      var pcbdata = {"edges_bbox":{"minx":0,"miny":0,"maxx":100,"maxy":80},
+        "edges":[
+          {"type":"segment","start":[0,0],"end":[100,0],"width":0.1},
+          {"type":"arc","start":[95,5],"radius":5,
+           "startangle":-90,"endangle":0,"width":0.1}
+        ],
+        "footprints":[],"bom":{"both":[]},"nets":{}};
+    </script>)HTML";
+
+    IBomParser parser;
+    auto r = parser.parseString(html);
+    REQUIRE(r.has_value());
+    REQUIRE(r->boardOutline.size() == 2);
+
+    const auto& arc = r->boardOutline[1];
+    CHECK(arc.type == DrawingSegment::Type::Arc);
+    CHECK(arc.start.x == Catch::Approx(95.0));
+    CHECK(arc.start.y == Catch::Approx(5.0));
+    CHECK(arc.radius == Catch::Approx(5.0));
+    CHECK(arc.startAngle == Catch::Approx(-90.0));
+    CHECK(arc.endAngle == Catch::Approx(0.0));
+
+    // Line segments keep the default sentinel (both 0 → "no arc data").
+    CHECK(r->boardOutline[0].startAngle == Catch::Approx(0.0));
+    CHECK(r->boardOutline[0].endAngle == Catch::Approx(0.0));
+}

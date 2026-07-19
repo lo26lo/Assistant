@@ -127,6 +127,28 @@ add_ibom_test(test_component_matching
     LIBS    nlohmann_json::nlohmann_json
 )
 
+# Alignment similarity math — the helper shared by the 4 similarity alignment
+# paths (anchor click, minimap anchor, 2-comp, multi n=2). Pure OpenCV.
+add_ibom_test(test_alignment_math
+    SOURCES test_alignment_math.cpp
+            ${CMAKE_SOURCE_DIR}/src/overlay/AlignmentMath.cpp
+    LIBS    opencv_core opencv_calib3d
+)
+
+# Component annotation store (B2) — pure std + nlohmann.
+add_ibom_test(test_annotations
+    SOURCES test_annotations.cpp
+            ${CMAKE_SOURCE_DIR}/src/features/Annotations.cpp
+    LIBS    nlohmann_json::nlohmann_json spdlog::spdlog
+)
+
+# Board library registry (C2) — pure std + nlohmann.
+add_ibom_test(test_board_library
+    SOURCES test_board_library.cpp
+            ${CMAKE_SOURCE_DIR}/src/features/BoardLibrary.cpp
+    LIBS    nlohmann_json::nlohmann_json spdlog::spdlog
+)
+
 # Unified allocator test — needs UnifiedAllocator.cpp (depends on opencv core,
 # spdlog, and CUDA when IBOM_USE_UMA_ALLOCATOR is propagated from the parent).
 add_ibom_test(test_unified_allocator

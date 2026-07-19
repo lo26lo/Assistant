@@ -4,9 +4,12 @@
 #include <QImage>
 #include <QTransform>
 #include <opencv2/core.hpp>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include "ibom/IBomData.h"   // ibom::Layer
 
@@ -39,6 +42,15 @@ struct OverlayInputs {
     /// determinant is negative for a back view) remains orientation-
     /// preserving on screen.
     ibom::Layer activeLayer = ibom::Layer::Front;
+
+    /// Revision-diff rework marks (C1 V2). Refs present here are recolored
+    /// over their normal/placed colors (selection still wins): 1 = REMOVE
+    /// (desolder — red, with an X across the body), 2 = CHANGE (orange).
+    std::map<std::string, int> diffMarks;
+    /// Components to ADD in the target revision: they don't exist in the
+    /// current project, so they're drawn as green ring markers at their
+    /// target positions (already filtered to the active layer by the caller).
+    std::vector<std::pair<Point2D, std::string>> diffAdds;
 };
 
 /// A board-space overlay buffer plus the PCB→buffer mapping it was drawn with.

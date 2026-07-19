@@ -569,6 +569,14 @@ bool TrackingWorker::runOpticalFlow(const cv::Mat& fullGray)
     std::vector<cv::Point2f> next, back;
     std::vector<uchar> status, statusB;
     std::vector<float> err, errB;
+    // FB-check every 2nd frame only (INVESTIGATION_360 §1.2): the backward
+    // pass doubles the LK cost at camera rate, while the failure mode it
+    // catches — a landmark sliding onto a neighboring feature — develops over
+    // many frames, and the RANSAC inlier pruning below still runs on EVERY
+    // frame. A drifted landmark is therefore caught at most one frame later.
+    // When statusB stays empty, the keep-loop below skips the FB test.
+    constexpr int kFbCheckEveryN = 2;
+    const bool fbCheck = (m_flowFramesSinceDetect % kFbCheckEveryN) == 0;
     try {
         cv::calcOpticalFlowPyrLK(m_prevGray, fullGray, m_flowImg, next,
                                  status, err, lkWin, 3, lkCrit);
@@ -576,8 +584,9 @@ bool TrackingWorker::runOpticalFlow(const cv::Mat& fullGray)
         // points back into the previous frame. A landmark that silently slid
         // onto a neighboring feature — LK's classic failure mode, invisible to
         // the status/err outputs — won't land back on its start point.
-        cv::calcOpticalFlowPyrLK(fullGray, m_prevGray, next, back,
-                                 statusB, errB, lkWin, 3, lkCrit);
+        if (fbCheck)
+            cv::calcOpticalFlowPyrLK(fullGray, m_prevGray, next, back,
+                                     statusB, errB, lkWin, 3, lkCrit);
     } catch (const cv::Exception&) {
         m_flowHealthy = false;
         return false;

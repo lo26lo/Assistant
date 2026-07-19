@@ -164,6 +164,7 @@ set(SOURCES
     src/overlay/ComponentReanchor.cpp
     src/overlay/BlobComponentDetector.cpp
     src/overlay/ReanchorGate.cpp
+    src/overlay/AlignmentMath.cpp
 
     # GUI
     src/gui/MainWindow.cpp
@@ -198,6 +199,8 @@ set(SOURCES
     src/features/BoardScanner.cpp
     src/features/GoldenDiff.cpp
     src/features/DepthInspector.cpp
+    src/features/Annotations.cpp
+    src/features/BoardLibrary.cpp
 
     # Export
     src/export/ReportGenerator.cpp

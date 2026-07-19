@@ -125,6 +125,34 @@ void BoardMinimap::setPlacedRefs(const std::unordered_set<std::string>& refs)
     if (m_peer) m_peer->setPlacedRefs(refs);
 }
 
+void BoardMinimap::setAnnotatedRefs(const std::unordered_set<std::string>& refs)
+{
+    m_annotatedRefs = refs;
+    update();
+    if (m_peer) m_peer->setAnnotatedRefs(refs);
+}
+
+void BoardMinimap::setBoardImage(const QImage& img, const QRectF& pcbRect,
+                                 ibom::Layer layer)
+{
+    m_boardImage      = img;
+    m_boardImageRect  = pcbRect;
+    m_boardImageLayer = layer;
+    markStaticDirty();
+    update();
+    if (m_peer) m_peer->setBoardImage(img, pcbRect, layer);
+}
+
+void BoardMinimap::setBoardImageVisible(bool on)
+{
+    if (m_boardImageVisible != on) {
+        m_boardImageVisible = on;
+        markStaticDirty();
+        update();
+    }
+    if (m_peer) m_peer->setBoardImageVisible(on);
+}
+
 void BoardMinimap::setClickTargets(const std::vector<cv::Point2f>& pcbPts,
                                    const QColor& color)
 {
@@ -163,6 +191,9 @@ void BoardMinimap::attachPeer(BoardMinimap* peer)
     peer->setPlacedRefs(m_placedRefs);
     peer->setSelectedRef(m_selectedRef);
     peer->setClickTargets(m_clickTargets, m_clickTargetColor);
+    peer->setAnnotatedRefs(m_annotatedRefs);
+    peer->setBoardImage(m_boardImage, m_boardImageRect, m_boardImageLayer);
+    peer->setBoardImageVisible(m_boardImageVisible);
     peer->setTrackingQuality(m_inliers, m_reprojErr);
     peer->setTrackingLost(m_trackingLost);
     peer->m_coverage = m_coverage;          // share the trail accumulated so far
@@ -428,6 +459,19 @@ void BoardMinimap::ensureStaticCache()
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(35, 40, 50));
     p.drawRect(boardRect);
+
+    // Scanned-board background (A1 mosaic): the real board photo under the
+    // component layer. The mosaic canvas is in raw PCB mm by construction —
+    // the same frame as this map — so a plain rect draw registers it.
+    if (m_boardImageVisible && !m_boardImage.isNull()
+        && m_boardImageLayer == m_activeLayer && m_boardImageRect.isValid()) {
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        const QRectF target(
+            pcbToWidget(m_boardImageRect.left(),  m_boardImageRect.top()),
+            pcbToWidget(m_boardImageRect.right(), m_boardImageRect.bottom()));
+        p.drawImage(target, m_boardImage);
+    }
+
     p.setBrush(Qt::NoBrush);
     p.setPen(QPen(theme::boardOutlineColor(), 1));
     if (!m_project.boardOutline.empty()) {
@@ -444,9 +488,25 @@ void BoardMinimap::ensureStaticCache()
                 p.drawEllipse(pcbToWidget(seg.start.x, seg.start.y), r, r);
                 break;
             }
+            case T::Arc: {
+                // Rounded corners at last: pcbdata arcs carry centre
+                // (`start`), radius and startangle/endangle in degrees,
+                // y-down screen-clockwise (canvas convention). Qt's drawArc
+                // counts 1/16° counter-clockwise on screen → negate both.
+                if (seg.radius <= 0.0 ||
+                    (seg.startAngle == 0.0 && seg.endAngle == 0.0))
+                    break;   // no angle data (old file) — don't guess
+                const double r = seg.radius * s;
+                const QPointF c = pcbToWidget(seg.start.x, seg.start.y);
+                const QRectF rect(c.x() - r, c.y() - r, 2.0 * r, 2.0 * r);
+                double sweep = std::fmod(seg.endAngle - seg.startAngle, 360.0);
+                if (sweep < 0.0) sweep += 360.0;
+                p.drawArc(rect,
+                          static_cast<int>(std::lround(-seg.startAngle * 16.0)),
+                          static_cast<int>(std::lround(-sweep * 16.0)));
+                break;
+            }
             default:
-                // Arcs carry centre+radius only (no angles parsed) — a wrong
-                // guess draws phantom edges, so rounded corners are skipped.
                 break;
             }
         }
@@ -637,6 +697,21 @@ void BoardMinimap::paintEvent(QPaintEvent*)
                 }
             }
             break;
+        }
+    }
+
+    // 📌 note markers (B2): a small amber dot with a dark rim at the
+    // top-right corner of every annotated component of the active side —
+    // always visible regardless of LOD (few notes expected, O(n) scan with
+    // set lookups is cheap at paint time).
+    if (!m_annotatedRefs.empty()) {
+        p.setPen(QPen(QColor(40, 30, 0), 1.0));
+        p.setBrush(QColor(255, 200, 40, 235));
+        for (const auto& comp : m_project.components) {
+            if (comp.layer != m_activeLayer) continue;
+            if (!m_annotatedRefs.count(comp.reference)) continue;
+            const QPointF c = pcbToWidget(comp.bbox.maxX, comp.bbox.minY);
+            p.drawEllipse(c, 3.0, 3.0);
         }
     }
 
@@ -931,6 +1006,14 @@ void BoardMinimap::contextMenuEvent(QContextMenuEvent* ev)
         connect(actExpand, &QAction::triggered, this, [this]() { emit expandRequested(); });
         auto* actFloat = menu.addAction(tr("Detach / re-attach panel"));
         connect(actFloat, &QAction::triggered, this, [this]() { emit floatRequested(); });
+    }
+
+    if (!m_boardImage.isNull()) {
+        auto* actImg = menu.addAction(tr("Show scanned board image"));
+        actImg->setCheckable(true);
+        actImg->setChecked(m_boardImageVisible);
+        connect(actImg, &QAction::toggled,
+                this, [this](bool on) { setBoardImageVisible(on); });
     }
 
     menu.addSeparator();

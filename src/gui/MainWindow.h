@@ -130,6 +130,12 @@ signals:
     void tourUndo();
     /// Inspection menu: diff the loaded iBOM against another revision file.
     void revisionCompareRequested();
+    /// Clear the rework coloring left on the overlay by a revision compare.
+    void revisionMarksClearRequested();
+    /// Pin/edit a free-text note on the selected component (B2).
+    void componentNoteRequested();
+    /// Open the board library dialog (C2).
+    void boardLibraryRequested();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

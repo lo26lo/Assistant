@@ -303,6 +303,12 @@ void MainWindow::createMenuBar()
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
     fileMenu->addAction(m_actOpenIBom);
     m_recentMenu = fileMenu->addMenu(tr("Open &Recent"));
+    auto* actLibrary = fileMenu->addAction(tr("Board &Library…"));
+    actLibrary->setToolTip(tr(
+        "Every board opened so far, with its saved state (inspection "
+        "progress, golden scan, notes) — double-click to reopen."));
+    connect(actLibrary, &QAction::triggered,
+            this, &MainWindow::boardLibraryRequested);
     m_recentMenu->setEnabled(false);
     fileMenu->addSeparator();
     fileMenu->addAction(m_actScreenshot);
@@ -386,6 +392,20 @@ void MainWindow::createMenuBar()
         "components to remove, add, or exchange for an update rework."));
     connect(actRevDiff, &QAction::triggered,
             this, &MainWindow::revisionCompareRequested);
+
+    auto* actNote = inspectMenu->addAction(tr("Add/Edit Note for Selected Component…"));
+    actNote->setToolTip(tr(
+        "Pin a free-text note to the selected component (persisted per board, "
+        "shown on the PCB Map and injected into exported reports)."));
+    connect(actNote, &QAction::triggered,
+            this, &MainWindow::componentNoteRequested);
+
+    auto* actRevClear = inspectMenu->addAction(tr("Clear Revision Marks"));
+    actRevClear->setToolTip(tr(
+        "Remove the red/orange/green rework coloring left by the last "
+        "revision compare from the overlay."));
+    connect(actRevClear, &QAction::triggered,
+            this, &MainWindow::revisionMarksClearRequested);
 
     // Depth/3D view switching is done via the in-image ViewModeBar overlay;
     // keep the actions alive for keyboard shortcuts (D / 3) but don't add them

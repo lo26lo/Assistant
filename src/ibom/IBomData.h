@@ -40,6 +40,13 @@ struct DrawingSegment {
     double  angle  = 0.0;
     double  width  = 0.0;
 
+    // Arc only — iBOM pcbdata encodes an arc as centre (`start`), radius and
+    // startangle/endangle in DEGREES, drawn from start to end in the
+    // increasing-angle direction (canvas convention: y-down, so screen-
+    // clockwise). Both 0 ⇒ not provided (renderers skip the arc).
+    double startAngle = 0.0;
+    double endAngle   = 0.0;
+
     std::vector<Point2D> points; // For polygons
 };
 
